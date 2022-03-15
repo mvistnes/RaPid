@@ -2,7 +2,7 @@
 module LinearProgramming
 
 using LinearAlgebra
-using Formatting
+using Printf
 
 function simplexmethod(A::Matrix, b::Vector, c::Vector, max::Bool=true)
     T = maketableau(A, b, c, max)
@@ -149,7 +149,7 @@ function interiorpointmethod(alpha::Float64, err::Float64, A::Matrix{Float64}, b
     
     for i in 1:size(A0,1)
         for j in 1:size(A0,2)
-            printfmt("{:7.1f} ", A0[i,j])
+            @printf("%7.1f ", A0[i,j])
         end
         println(' ')
     end
@@ -180,7 +180,7 @@ function interiorpointmethod(alpha::Float64, err::Float64, A::Matrix{Float64}, b
         end
 
         for i in x1
-            printfmt("{:6.1f} ", i)
+            @printf("%6.1f ", i)
         end
         println(transpose(c1)*x1)
     end

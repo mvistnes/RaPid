@@ -1,16 +1,17 @@
 # CC BY-NC-SA 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2022
-module 4area
+module Test4area
 
 using DataFrames
 import CSV
 
 include("dc_power_flow.jl")
 import .DCPowerFlow
-include("linear_programming.jl")
-import .LinearProgramming
+# include("linear_programming.jl")
+# import .LinearProgramming
 
 buses = DataFrame(CSV.File(
     joinpath("\\\\home.ansatt.ntnu.no","matiaskv","Documents","03_Programming","4-area_test_network","4area_network_bus.csv")))
+rename!(buses, Dict(:bus_i => :ibus))
 branches = DataFrame(CSV.File(
     joinpath("\\\\home.ansatt.ntnu.no","matiaskv","Documents","03_Programming","4-area_test_network","4area_network_branch.csv"))) 
 gendata = DataFrame(CSV.File(

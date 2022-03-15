@@ -2,9 +2,21 @@
 module DCPowerFlow
 using LinearAlgebra
 using DataFrames
-using Formatting
+using Printf
 
-"""DC power flow calculation of a power system"""
+"""
+DC power flow calculation of a power system
+
+Input: 
+ - buses: a table with columns of ibus (bus number), type (PV=1, PQ=2, ref=3), and P.
+ ! currently ref=0, change this!
+ - branches: a table with columns of fbus (from bus number), tbus (to bus number), 
+   and x (series reactance).
+
+Output:
+ - P: vector of real power into each bus (and with reactive power assemed 0 pu).
+ - theta: vector of voltage angle at each bus (and with voltage magnutude assumed 1.0 pu).
+"""
 function dcopf(buses, branches)
     if buses.type[end] != 0 # Need the slack bus as the last bus
         for row in eachrow(buses)
@@ -24,7 +36,14 @@ function dcopf(buses, branches)
     return P, theta
 end
 
-"""Builds a matrix with the reactance of the lines"""
+
+"""
+Builds a matrix with the reactance of the lines
+
+Input: as dcopf().
+
+Output: an admittance matrix based on the line series reactances.
+"""
 function buildH(buses, branches)
     H = zeros(size(buses,1)-1, size(buses,1)-1)
     for branch in eachrow(branches)
@@ -44,13 +63,31 @@ function buildH(buses, branches)
     return H
 end
 
-"""Calculate voltage angles"""
+
+"""
+Calculate voltage angles
+
+Input:
+ - P: vector of real power into each bus.
+ - H: an admittance matrix based on the line series reactances.
+
+Output: vector of voltage angle at each bus.
+"""
 function calcangles(P, H)
     luP = lu(H)
     return luP \ P
 end
 
-"""Calculate active power"""
+
+"""
+Calculate active power
+
+Input:
+ - theta: vector of voltage angle at each bus.
+ - branches: as in dcopf().
+
+Output: vector of real power into each bus.
+"""
 function calcP(theta, branches)
     push!(theta, 0)
     P = zeros(size(theta,1))
@@ -64,7 +101,14 @@ function calcP(theta, branches)
     return P
 end
 
-"""Calculate the distribution factors of the branches"""
+
+"""
+Calculate and print the distribution factors of the branches
+
+Input: as dcopf().
+
+Output: a matrix of the distribution factors.
+"""
 function distr_factors(buses, branches)
     H = lu(buildH(buses, branches))
     a = zeros(size(branches,1), size(buses,1)-1) # Container for the distribution factors
@@ -87,27 +131,36 @@ function distr_factors(buses, branches)
     print("Distribution factors\nBus  ")
     for e in eachrow(buses)
         if e.type != 0
-            printfmt("{:12d}", e.ibus)
+            @printf("%12d", e.ibus)
         end
     end
     for branch in eachrow(branches)
         if branch.x != 0
             (f, t) = (branch.fbus, branch.tbus) 
-            printfmt("\nLine {:d}-{:d}: ", f, t)
+            @printf("\nLine %d-%d: ", f, t)
             for e in a[rownumber(branch),:]
-                printfmt("{:10.6f}  ", e)
+                @printf("%10.6f  ", e)
             end
         end
     end
     print("\n")
+    return a
 end
 
-"""Prints all buses with voltage magnitude and angle"""
+
+"""
+Prints all buses with voltage magnitude and angle
+
+Input: 
+ - buses: as dcopf().
+ - P: vector of real power into each bus.
+ - theta: vector of voltage angle at each bus.
+"""
 function printsystem(buses, P, theta)
     println("\n Bus \tVoltage ang \tActive power")
     println("-------------------------------------")
     for i in 1:length(P)
-        printfmt("{:4d} \t{:8.4f} \t{:8.4f}\n", buses.ibus[i], theta[i], P[i])
+        @printf("%4d \t%8.4f \t%8.4f\n", buses.ibus[i], theta[i], P[i])
     end
     println("")
 end
