@@ -4,59 +4,100 @@ using LinearAlgebra
 using DataFrames
 using Printf
 
+@enum Type PV=1 PQ=2 ref=3
+struct Bus
+    type::Type # (PV=1, PQ=2, ref=3)
+    Pd::Float64 # Active power inserted
+end
+struct Branch
+    fbus::Int64
+    tbus::Int64
+    x::Float64
+end
+
+
 """
-DC power flow calculation of a power system
+DC power flow calculation of a power system.
+No losses are accounted for.
 
 Input: 
- - buses: a table with columns of ibus (bus number), type (PV=1, PQ=2, ref=3), and P.
+ - buses: a table with columns of ibus (bus number), type (PV=1, PQ=2, ref=3), and Pd.
  ! currently ref=0, change this!
  - branches: a table with columns of fbus (from bus number), tbus (to bus number), 
    and x (series reactance).
 
-Output:
- - P: vector of real power into each bus (and with reactive power assemed 0 pu).
- - theta: vector of voltage angle at each bus (and with voltage magnutude assumed 1.0 pu).
+Output: 
+ - buses: extended with
+    - Pd: vector of real power into each bus (and with reactive power assemed 0 pu).
+    - theta: vector of voltage angle at each bus (and with voltage magnutude assumed 1.0 pu).
 """
-function dcopf(buses, branches)
-    if buses.type[end] != 0 # Need the slack bus as the last bus
-        for row in eachrow(buses)
-            if row.type == 0
-                push!(buses, row)
-                deleteat!(buses, row.ibus)
-                display(buses)
+function dcopf!(buses, branches)
+    buses_vec, branches_vec, convert_bus = vectorize(buses, branches)
+    H = buildH(buses_vec, branches_vec)
+    P = [buses_vec[i].Pd for i in range(1,length(buses_vec)-1)]
+    theta = calcangles(P, H)
+    P = calcP(theta, branches_vec)
+    buses[!, :P] = zeros(size(buses,1))
+    buses[!, :theta] = zeros(size(buses,1))
+    for bus in eachrow(buses)
+        bus.P = P[convert_bus[bus.ibus]]
+        bus.theta = theta[convert_bus[bus.ibus]]
+    end
+    return buses
+end
+
+
+"""
+Vectorize tables
+
+Input: as dcopf!()
+
+Output: 
+ - buses_vec, branches_vec: vectors of the input
+ - convert_bus: conversion between the bus number and place in the vectors
+"""
+function vectorize(buses, branches)
+    buses_vec = [Bus(Type(bus.type), bus.Pd) for (i,bus) in enumerate(eachrow(buses))]
+    slack = 0
+    if buses.type[end] != Int(ref::Type) # Need the slack bus as the last bus
+        for (i, row) in enumerate(eachrow(buses))
+            if row.type == Int(ref::Type)
+                slack = i
+                buses_vec[i], buses_vec[end] = buses_vec[end], buses_vec[i]
                 break
             end
         end
     end
-
-    H = buildH(buses, branches)
-    P = copy.(buses.P[1:(end-1)])
-    theta = calcangles(P, H)
-    P = calcP(theta, branches)
-    return P, theta
+    convert_bus = Dict()
+    for (i,bus) in enumerate(eachrow(buses))
+        convert_bus[bus.ibus] = bus.type == Int(ref::Type) ? slack : i
+    end
+    branches_vec = [Branch(convert_bus[branch.fbus], convert_bus[branch.tbus], branch.x) 
+        for (i,branch) in enumerate(eachrow(branches))]
+    return buses_vec, branches_vec, convert_bus
 end
 
 
 """
 Builds a matrix with the reactance of the lines
 
-Input: as dcopf().
+Input: as dcopf!().
 
 Output: an admittance matrix based on the line series reactances.
 """
-function buildH(buses, branches)
-    H = zeros(size(buses,1)-1, size(buses,1)-1)
-    for branch in eachrow(branches)
+function buildH(buses::Vector{Bus}, branches::Vector{Branch})
+    H = zeros(Float64, size(buses,1)-1, size(buses,1)-1)
+    for branch in branches
         (f, t) = (branch.fbus, branch.tbus)
         y = 1 / branch.x
-        if buses.type[f] != 0 # If the from bus is NOT a slack bus
+        if buses[f].type != ref::Type # If the from bus is NOT a slack bus
             H[f,f] += y
-            if buses.type[t] != 0 # If the to bus is NOT a slack bus
+            if buses[t].type != ref::Type # If the to bus is NOT a slack bus
                 H[t,t] += y
                 H[f,t] = -y
                 H[t,f] = -y
             end
-        elseif buses.type[t] != 0
+        elseif buses[t].type != ref::Type
             H[t,t] += y
         end
     end
@@ -68,12 +109,12 @@ end
 Calculate voltage angles
 
 Input:
- - P: vector of real power into each bus.
+ - Pd: vector of real power into each bus.
  - H: an admittance matrix based on the line series reactances.
 
 Output: vector of voltage angle at each bus.
 """
-function calcangles(P, H)
+function calcangles(P::Vector{Float64}, H::Matrix{Float64})
     luP = lu(H)
     return luP \ P
 end
@@ -84,14 +125,14 @@ Calculate active power
 
 Input:
  - theta: vector of voltage angle at each bus.
- - branches: as in dcopf().
+ - branches: as in dcopf!().
 
 Output: vector of real power into each bus.
 """
-function calcP(theta, branches)
-    push!(theta, 0)
+function calcP(theta::Vector{Float64}, branches::Vector{Branch})
+    push!(theta, 0.0)
     P = zeros(size(theta,1))
-    for branch in eachrow(branches)
+    for branch in branches
         (f, t) = (branch.fbus, branch.tbus)
         p = (theta[f] - theta[t]) / branch.x
         # add/subtract the power to from/to bus
@@ -105,40 +146,40 @@ end
 """
 Calculate and print the distribution factors of the branches
 
-Input: as dcopf().
+Input: as dcopf!().
 
 Output: a matrix of the distribution factors.
 """
 function distr_factors(buses, branches)
-    H = lu(buildH(buses, branches))
-    a = zeros(size(branches,1), size(buses,1)-1) # Container for the distribution factors
-    for branch in eachrow(branches)
-        if branch.x != 0
-            deltaP = zeros(size(buses,1)-1) # Container for the right side
+    buses_vec, branches_vec, convert_bus = vectorize(buses, branches)
+    H = lu(buildH(buses_vec, branches_vec))
+    a = zeros(Float64, size(branches_vec,1), size(buses_vec,1)-1) # Container for the distribution factors
+    for (i, branch) in enumerate(branches_vec)
+        if branch.x != ref::Type
+            deltaPd = zeros(Float64, size(buses,1)-1) # Container for the right side
             (f, t) = (branch.fbus, branch.tbus) 
             # (f)rom and (t)o bus at this branch
-            if buses.type[f] != 0 # If the bus is NOT a slack bus
-                deltaP[f] = 1 / branch.x
+            if buses[f].type != ref::Type # If the bus is NOT a slack bus
+                deltaPd[f] = 1 / branch.x
             end
-            if buses.type[t] != 0 # If the bus is NOT a slack bus
-                deltaP[t] = -1 / branch.x
+            if buses[t].type != ref::Type # If the bus is NOT a slack bus
+                deltaPd[t] = -1 / branch.x
             end
-            a[rownumber(branch), :] = H \ deltaP # append factors to matrix
+            a[i, :] = H \ deltaPd # append factors to matrix
         end
     end
 
     # Nicely printed distribution factors
     print("Distribution factors\nBus  ")
-    for e in eachrow(buses)
-        if e.type != 0
+    for e in buses
+        if e.type != ref::Type
             @printf("%12d", e.ibus)
         end
     end
-    for branch in eachrow(branches)
-        if branch.x != 0
-            (f, t) = (branch.fbus, branch.tbus) 
-            @printf("\nLine %d-%d: ", f, t)
-            for e in a[rownumber(branch),:]
+    for (i, branch) in enumerate(branches)
+        if branch.x != ref::Type
+            @printf("\nLine %d-%d: ", branch.fbus, branch.tbus)
+            for e in a[i,:]
                 @printf("%10.6f  ", e)
             end
         end
@@ -152,14 +193,14 @@ end
 Prints all buses with voltage magnitude and angle
 
 Input: 
- - buses: as dcopf().
- - P: vector of real power into each bus.
+ - buses: as dcopf!().
+ - Pd: vector of real power into each bus.
  - theta: vector of voltage angle at each bus.
 """
-function printsystem(buses, P, theta)
+function printsystem(buses, Pd::Vector{Float64}, theta::Vector{Float64})
     println("\n Bus \tVoltage ang \tActive power")
     println("-------------------------------------")
-    for i in 1:length(P)
+    for i in 1:length(Pd)
         @printf("%4d \t%8.4f \t%8.4f\n", buses.ibus[i], theta[i], P[i])
     end
     println("")

@@ -39,6 +39,6 @@ for load in eachrow(loaddata)
     end
 end
 
-DCPowerFlow.dcopf(buses, branches)
-
+buses = DCPowerFlow.dcopf!(buses, branches)
+display(buses)
 end
