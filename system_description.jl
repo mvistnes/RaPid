@@ -1,4 +1,5 @@
 # CC BY-NC-SA 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2022
+
 module SystemDescription
 import XLSX
 using DataFrames
@@ -57,7 +58,7 @@ Import a Power System description to two DataFrames
 """
 function importXLSX(filename)
     buses = DataFrame(XLSX.readtable(filename, "BusData")...)
-    rename!(buses, [:ibus, :type, :vmag, :vang, :P, :Q, :Pmax, :Qmax])
+    rename!(buses, [:ibus, :type, :vmag, :vang, :Pd, :Qd, :Pmax, :Qmax])
     branches = DataFrame(XLSX.readtable(filename, "BranchData")...)
     rename!(branches, [:fbus, :tbus, :r, :x, :b])
     return buses, branches
@@ -68,6 +69,6 @@ end
 # display(Ybus)
 
 # using BenchmarkTools
-# @benchmark DCPowerFlow.dcopf(buses, branches) setup=(buses, branches = SystemDescription.importXLSX("System_data_69bus.xlsx"))
+# @benchmark DCPowerFlow.dcopf!(buses, branches) setup=(buses, branches = SystemDescription.importXLSX("System_data_69bus.xlsx"))
     
 end

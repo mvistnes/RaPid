@@ -1,27 +1,44 @@
 # CC BY-NC-SA 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2022
+
 module LinearProgramming
 
 using LinearAlgebra
 using Printf
 
-function simplexmethod(A::Matrix, b::Vector, c::Vector, max::Bool=true)
+lim = 1*10^-10
+
+"""
+Optimize the objective function c with regards to the 
+constraints of lhs. A and rhs. b using the Simplex 
+primal method.
+
+Input:
+ - A: a matrix of coefficients for the constraints.
+ - b: a vector of the value of the rhs. of the constraints.
+ - c: a vector with the objective coefficients.
+ - max: true if the objective should be maximized, false if
+   it should be minimized.
+
+Output:
+ - x: a vector of the control variable values.
+ - z: the optimal value of the objective function.
+"""
+function simplexmethod(A::Matrix{Float64}, b::Vector{Float64}, c::Vector{Float64}, max::Bool=true)
     T = maketableau(A, b, c, max)
     println("-------- Begin --------")
     iterations = 0
     while true
+        # print the tableau
+        display(T)
+        println(" ")
+
         val, row, col = getpivot(T)
         # Condition for convergance
-        if val >= 0
-            break
-        end
+        (val >= lim || iterations > 10) && break
 
         iterations += 1
         println("Iteration ",iterations)
         T = pivotstep(T, row, col)
-
-        # print the tableau
-        display(T)
-        println(" ")
     end
     
     # Calculate the values of the control variables
@@ -34,27 +51,18 @@ function simplexmethod(A::Matrix, b::Vector, c::Vector, max::Bool=true)
             end
         end
     end
-    if max
-        println("--------  End  --------")
-        return x, T[1,end]
-    else
-        println("--------  End  --------")
-        return x, -T[1,end]
-    end
+    println("--------  End  --------")
+    return x, ifelse(max, T[1,end], -T[1,end])
 end
 
-function maketableau(A::Matrix, b::Vector, c::Vector, max::Bool)
+function maketableau(A::Matrix{Float64}, b::Vector{Float64}, c::Vector{Float64}, max::Bool)
     NUM_X::Int = length(c)
     NUM_C::Int = length(b)
     T = zeros(Float64, 1+NUM_C, 2+NUM_X+NUM_C)
 
     T[1,1] = 1
-    if max
-        T[1, 2:(NUM_X+1)] = c
-    else
-        T[1, 2:(NUM_X+1)] = -c
-    end
-    T[2:(NUM_C+1),2:(NUM_X+1)] = A
+    T[1, 2:(NUM_X+1)] = ifelse(max, c, -c)
+    T[2:(size(A,1)+1),2:(size(A,2)+1)] = A
     for i in 2:(NUM_C+1)
         T[i,i+NUM_X] = 1
     end
@@ -62,16 +70,18 @@ function maketableau(A::Matrix, b::Vector, c::Vector, max::Bool)
     return T
 end
 
-function getpivot(T::Matrix)
+function getpivot(T::Matrix{Float64})
     # find first negative f value (or could find min f value)
-    # col = 1 
-    # for (i, val) in enumerate(T[1,2:(end-1)])
-    #     if val < 0
-    #         col = i+1
-    #         break
-    #     end
-    # end
-    val, col = findmin(T[1,1:(end-1)])
+    val = -1
+    col = 1 
+    for (i, v) in enumerate(T[1,2:(end-1)]) # this starts at col 2
+        if v < -lim
+            val = v
+            col = i+1 # ... thus 1 must be added here.
+            break
+        end
+    end
+    # val, col = findmin(T[1,1:(end-1)])
 
     # Find smallest quotient
     row = 0
@@ -86,13 +96,15 @@ function getpivot(T::Matrix)
     return (val, row, col)
 end
 
-function pivotstep(T::Matrix{Float64}, row::Int, col::Int)
+function pivotstep(T::Matrix{Float64}, row::Int64, col::Int64)
     # Row elimination
     for i in 1:size(T,1)
         if i != row
             ratio = T[i,col]/T[row,col]
-            for j in 1:size(T,2)
-                T[i,j] -= ratio * T[row,j]
+            if abs(ratio) != Inf && abs(ratio) != NaN
+                for j in 1:size(T,2)
+                    T[i,j] -= ratio * T[row,j]
+                end
             end
         end
     end

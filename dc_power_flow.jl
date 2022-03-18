@@ -1,4 +1,5 @@
 # CC BY-NC-SA 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2022
+
 module DCPowerFlow
 using LinearAlgebra
 using DataFrames
@@ -36,14 +37,14 @@ function dcopf!(buses, branches)
     H = buildH(buses_vec, branches_vec)
     P = [buses_vec[i].Pd for i in range(1,length(buses_vec)-1)]
     theta = calcangles(P, H)
-    P = calcP(theta, branches_vec)
+    P_bus, branches[!, :P] = calcP(theta, branches_vec)
     buses[!, :P] = zeros(size(buses,1))
     buses[!, :theta] = zeros(size(buses,1))
     for bus in eachrow(buses)
-        bus.P = P[convert_bus[bus.ibus]]
+        bus.P = P_bus[convert_bus[bus.ibus]]
         bus.theta = theta[convert_bus[bus.ibus]]
     end
-    return buses
+    return buses, branches
 end
 
 
@@ -58,7 +59,7 @@ Output:
 """
 function vectorize(buses, branches)
     buses_vec = [Bus(Type(bus.type), bus.Pd) for (i,bus) in enumerate(eachrow(buses))]
-    slack = 0
+    slack = size(buses_vec,1)
     if buses.type[end] != Int(ref::Type) # Need the slack bus as the last bus
         for (i, row) in enumerate(eachrow(buses))
             if row.type == Int(ref::Type)
@@ -70,7 +71,7 @@ function vectorize(buses, branches)
     end
     convert_bus = Dict()
     for (i,bus) in enumerate(eachrow(buses))
-        convert_bus[bus.ibus] = bus.type == Int(ref::Type) ? slack : i
+        convert_bus[bus.ibus] = ifelse(bus.type == Int(ref::Type), slack, i)
     end
     branches_vec = [Branch(convert_bus[branch.fbus], convert_bus[branch.tbus], branch.x) 
         for (i,branch) in enumerate(eachrow(branches))]
@@ -127,19 +128,22 @@ Input:
  - theta: vector of voltage angle at each bus.
  - branches: as in dcopf!().
 
-Output: vector of real power into each bus.
+Output: 
+ - P_bus: vector of real power into each bus.
+ - P_branch: vector of real power in a line.
 """
 function calcP(theta::Vector{Float64}, branches::Vector{Branch})
     push!(theta, 0.0)
-    P = zeros(size(theta,1))
-    for branch in branches
+    P_bus = zeros(size(theta,1))
+    P_branch = zeros(size(branches,1))
+    for (i, branch) in enumerate(branches)
         (f, t) = (branch.fbus, branch.tbus)
-        p = (theta[f] - theta[t]) / branch.x
+        P_branch[i] = (theta[f] - theta[t]) / branch.x
         # add/subtract the power to from/to bus
-        P[f] += p
-        P[t] -= p
+        P_bus[f] += P_branch[i]
+        P_bus[t] -= P_branch[i]
     end
-    return P
+    return P_bus, P_branch
 end
 
 
@@ -156,19 +160,21 @@ function distr_factors(buses, branches)
     a = zeros(Float64, size(branches_vec,1), size(buses_vec,1)-1) # Container for the distribution factors
     for (i, branch) in enumerate(branches_vec)
         if branch.x != ref::Type
-            deltaPd = zeros(Float64, size(buses,1)-1) # Container for the right side
-            (f, t) = (branch.fbus, branch.tbus) 
-            # (f)rom and (t)o bus at this branch
-            if buses[f].type != ref::Type # If the bus is NOT a slack bus
+            deltaPd = zeros(Float64, size(buses_vec,1)-1) # Container for the right side
+            (f, t) = (branch.fbus, branch.tbus) # (f)rom and (t)o bus at this branch
+            if buses_vec[f].type != ref::Type # If the bus is NOT a slack bus
                 deltaPd[f] = 1 / branch.x
             end
-            if buses[t].type != ref::Type # If the bus is NOT a slack bus
+            if buses_vec[t].type != ref::Type # If the bus is NOT a slack bus
                 deltaPd[t] = -1 / branch.x
             end
             a[i, :] = H \ deltaPd # append factors to matrix
         end
     end
+    return a
+end
 
+function print_distr_factors(buses, branches, a)
     # Nicely printed distribution factors
     print("Distribution factors\nBus  ")
     for e in buses
@@ -185,7 +191,6 @@ function distr_factors(buses, branches)
         end
     end
     print("\n")
-    return a
 end
 
 
@@ -194,7 +199,7 @@ Prints all buses with voltage magnitude and angle
 
 Input: 
  - buses: as dcopf!().
- - Pd: vector of real power into each bus.
+ - P: vector of real power into each bus.
  - theta: vector of voltage angle at each bus.
 """
 function printsystem(buses, Pd::Vector{Float64}, theta::Vector{Float64})
