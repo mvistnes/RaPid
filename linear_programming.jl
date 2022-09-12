@@ -1,11 +1,12 @@
-# CC BY-NC-SA 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2022
+# CC BY 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2022
 
 module LinearProgramming
 
 using LinearAlgebra
 using Printf
 
-lim = 1*10^-10
+LIM = 1*10^-10
+IT_LIM = 20
 
 """
 Optimize the objective function c with regards to the 
@@ -34,7 +35,8 @@ function simplexmethod(A::Matrix{Float64}, b::Vector{Float64}, c::Vector{Float64
 
         val, row, col = getpivot(T)
         # Condition for convergance
-        (val >= lim || iterations > 10) && break
+        val >= -LIM && break
+        iterations >= IT_LIM && break
 
         iterations += 1
         println("Iteration ",iterations)
@@ -56,39 +58,30 @@ function simplexmethod(A::Matrix{Float64}, b::Vector{Float64}, c::Vector{Float64
 end
 
 function maketableau(A::Matrix{Float64}, b::Vector{Float64}, c::Vector{Float64}, max::Bool)
-    NUM_X::Int = length(c)
-    NUM_C::Int = length(b)
-    T = zeros(Float64, 1+NUM_C, 2+NUM_X+NUM_C)
+    M, N = size(A)
+    @assert rank(A) == M
+    T = zeros(Float64, 1+N, 1+M+N)
 
     T[1,1] = 1
-    T[1, 2:(NUM_X+1)] = ifelse(max, c, -c)
-    T[2:(size(A,1)+1),2:(size(A,2)+1)] = A
-    for i in 2:(NUM_C+1)
-        T[i,i+NUM_X] = 1
+    T[1, 1:(M+1)] = ifelse(max, c, -c)
+    T[1:(size(A,1)+1),1:(size(A,2)+1)] = A
+    for i in 1:(N+1)
+        T[i,i+M] = 1
     end
-    T[2:end,end] = b
+    T[1:end,end] = b
     return T
 end
 
 function getpivot(T::Matrix{Float64})
-    # find first negative f value (or could find min f value)
-    val = -1
-    col = 1 
-    for (i, v) in enumerate(T[1,2:(end-1)]) # this starts at col 2
-        if v < -lim
-            val = v
-            col = i+1 # ... thus 1 must be added here.
-            break
-        end
-    end
-    # val, col = findmin(T[1,1:(end-1)])
+    # find min f value
+    val, col = findmin(T[1,1:(end-1)])
 
     # Find smallest quotient
-    row = 0
-    x = Inf
-    for i in 2:size(T,1)
+    row = 1
+    x = T[1,end]/T[1,col]
+    for i in 3:size(T,1)
         q = T[i,end]/T[i,col]
-        if q < x
+        if abs(q) < x
             x = q
             row = i
         end
@@ -101,10 +94,8 @@ function pivotstep(T::Matrix{Float64}, row::Int64, col::Int64)
     for i in 1:size(T,1)
         if i != row
             ratio = T[i,col]/T[row,col]
-            if abs(ratio) != Inf && abs(ratio) != NaN
-                for j in 1:size(T,2)
-                    T[i,j] -= ratio * T[row,j]
-                end
+            for j in 1:size(T,2)
+                T[i,j] -= ratio * T[row,j]
             end
         end
     end
@@ -126,10 +117,10 @@ end
 # c = [-40, -88]
 # println(simplexmethod(A,b,c,true))
 
-# A = [3 2 1;
+# A = Float64[3 2 1;
 #      2 5 3]
-# b = [10, 15]
-# c = [-2, -3, -4]
+# b = Float64[10, 15]
+# c = Float64[2, 3, 4]
 # println(simplexmethod(A,b,c,false))
 
 function interiorpointmethod(alpha::Float64, err::Float64, A::Matrix{Float64}, b::Vector{Float64}, b1::Vector{Float64}, c::Vector{Float64})

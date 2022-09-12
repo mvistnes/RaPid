@@ -1,4 +1,4 @@
-# CC BY-NC-SA 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2022
+# CC BY 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2022
 
 using DataFrames
 import CSV

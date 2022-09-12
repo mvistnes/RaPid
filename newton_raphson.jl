@@ -102,8 +102,7 @@ Uij(Gij, Bij, thetai, thetaj) = return Gij*sin(thetai-thetaj) - Bij*cos(thetai-t
 
 
 """Power equation at the bus"""
-function power(system, bus)
-    sb = system.buses
+function power(buses, bus)
     p = 0
     q = 0
     for i in range(num_bus)
@@ -114,11 +113,11 @@ function power(system, bus)
         b = imag(y)
         if g != 0 # If there is a line
             if i == bus.id
-                p += sb[i].vmag * g
-                q -= sb[i].vmag * b
+                p += buses[i].vmag * g
+                q -= buses[i].vmag * b
             else
-                p += sb[i].vmag * Tij(g, b, bus.vang, sb[i].vang)
-                q += sb[i].vmag * Uij(g, b, bus.vang, sb[i].vang)
+                p += buses[i].vmag * Tij(g, b, bus.vang, buses[i].vang)
+                q += buses[i].vmag * Uij(g, b, bus.vang, buses[i].vang)
             end
         end
     end
@@ -170,7 +169,8 @@ function build_jacobi(system)
             jac[i,j] = ifelse(I == J, 
                 -sb[I].Q - np.imag(system.yij(I,I)) * sb[I].vmag^2, 
                 sb[I].vmag * sb[J].vmag * Uij(np.real(system.yij(I,J)), 
-                    np.imag(system.yij(I,J)), sb[I].vang, sb[J].vang))
+                    np.imag(system.yij(I,J)), sb[I].vang, sb[J].vang)
+            )
         end
     end
     
@@ -182,7 +182,8 @@ function build_jacobi(system)
             jac[i,j] = ifelse(I == J, 
                 sb[I].P / sb[I].vmag + np.real(system.yij(I,I)) * sb[I].vmag,
                 sb[I].vmag * Tij(np.real(system.yij(I,J)), np.imag(system.yij(I,J)), 
-                    sb[I].vang, sb[J].vang))
+                    sb[I].vang, sb[J].vang)
+            )
         end
     end
 
@@ -194,7 +195,8 @@ function build_jacobi(system)
             jac[i,j] = ifelse(I == J, 
                 sb[I].P - np.real(system.yij(I,I)) * sb[I].vmag^2,
                 -sb[I].vmag * sb[J].vmag * Tij(np.real(system.yij(I,J)), 
-                    np.imag(system.yij(I,J)), sb[I].vang, sb[J].vang))
+                    np.imag(system.yij(I,J)), sb[I].vang, sb[J].vang)
+            )
         end
     end
 
@@ -206,7 +208,8 @@ function build_jacobi(system)
             jac[i,j] = ifelse(I == J, 
                 sb[I].Q / sb[I].vmag - np.imag(system.yij(I,I)) * sb[I].vmag,
                 sb[I].vmag * Uij(np.real(system.yij(I,J)), np.imag(system.yij(I,J)), 
-                    sb[I].vang, sb[J].vang))
+                    sb[I].vang, sb[J].vang)
+            )
         end
     end
 end

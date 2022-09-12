@@ -1,4 +1,4 @@
-# CC BY-NC-SA 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2022
+# CC BY 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2022
 
 module SystemDescription
 import XLSX
@@ -11,11 +11,9 @@ function makeYbus(buses, branches)
 
     
     # Calculating the diagonal elements
-    for i in 1:size(buses,1)
-        for branch in eachrow(branches)
-            if i == branch.fbus || i == branch.tbus
-                Ybus[i,i] += 1/(branch.r + branch.x*im) + branch.b*im / 2
-            end
+    for i in 1:size(buses,1),  branch in eachrow(branches)
+        if i == branch.fbus || i == branch.tbus
+            Ybus[i,i] += 1/(branch.r + branch.x*im) + branch.b*im / 2
         end
     end
 

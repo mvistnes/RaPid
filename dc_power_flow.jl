@@ -1,4 +1,4 @@
-# CC BY-NC-SA 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2022
+# CC BY 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2022
 
 module DCPowerFlow
 using LinearAlgebra
@@ -11,9 +11,9 @@ struct Bus
     Pd::Float64 # Active power inserted
 end
 struct Branch
-    fbus::Int64
-    tbus::Int64
-    x::Float64
+    fbus::Int64 # From bus number
+    tbus::Int64 # To bus  number
+    x::Float64 # Line series reactance
 end
 
 
@@ -32,12 +32,9 @@ Output:
     - Pd: vector of real power into each bus (and with reactive power assemed 0 pu).
     - theta: vector of voltage angle at each bus (and with voltage magnutude assumed 1.0 pu).
 """
-function dcopf!(buses, branches)
+function dcopf!(buses::DataFrame, branches::DataFrame)
     buses_vec, branches_vec, convert_bus = vectorize(buses, branches)
-    H = buildH(buses_vec, branches_vec)
-    P = [buses_vec[i].Pd for i in range(1,length(buses_vec)-1)]
-    theta = calcangles(P, H)
-    P_bus, branches[!, :P] = calcP(theta, branches_vec)
+    P_bus, theta, branches[!, :P] = dcopf!(buses_vec, branches_vec)
     buses[!, :P] = zeros(size(buses,1))
     buses[!, :theta] = zeros(size(buses,1))
     for bus in eachrow(buses)
@@ -45,6 +42,13 @@ function dcopf!(buses, branches)
         bus.theta = theta[convert_bus[bus.ibus]]
     end
     return buses, branches
+end
+function dcopf!(buses::Vector, branches::Vector)
+    H = buildH(buses, branches)
+    P = [buses[i].Pd for i in range(1,length(buses)-1)]
+    theta = calcangles(P, H)
+    P_bus, P_branch = calcP(theta, branches)
+    return P_bus, theta, P_branch
 end
 
 
@@ -57,7 +61,7 @@ Output:
  - buses_vec, branches_vec: vectors of the input
  - convert_bus: conversion between the bus number and place in the vectors
 """
-function vectorize(buses, branches)
+function vectorize(buses::DataFrame, branches::DataFrame)
     buses_vec = [Bus(Type(bus.type), bus.Pd) for (i,bus) in enumerate(eachrow(buses))]
     slack = size(buses_vec,1)
     if buses.type[end] != Int(ref::Type) # Need the slack bus as the last bus
@@ -74,7 +78,7 @@ function vectorize(buses, branches)
         convert_bus[bus.ibus] = ifelse(bus.type == Int(ref::Type), slack, i)
     end
     branches_vec = [Branch(convert_bus[branch.fbus], convert_bus[branch.tbus], branch.x) 
-        for (i,branch) in enumerate(eachrow(branches))]
+                    for (i,branch) in enumerate(eachrow(branches))]
     return buses_vec, branches_vec, convert_bus
 end
 
