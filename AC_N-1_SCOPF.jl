@@ -19,39 +19,37 @@ function add_system_data_to_json(;
     to_json(system_data, file_name, force=true)
 end
 
-function p_scopf(system::System, optimizer; pen = 10000, time_limit_sec = 60)
+function p_scopf(system::System, optimizer; pen = 10000, time_limit_sec = 120)
     opf_m = Model(optimizer)
     set_time_limit_sec(opf_m, time_limit_sec)
     vm0_limit::NamedTuple{(:min, :max), Tuple{Float64, Float64}} = (0.90, 1.05)
     vmc_limit::NamedTuple{(:min, :max), Tuple{Float64, Float64}} = (0.90, 1.10) # 0.85 for continental Europe, 0.9 for Nordic and UK
 
-    gen_names = get_name.(get_components(ThermalStandard, system))
-    line_names = get_name.(get_components(Line, system))
-    bus_names = get_name.(get_components(Bus, system))
-    demand_names = get_name.(get_components(StaticLoad, system))
-    contingencies = line_names
+    gen_names       = get_name.(get_components(Generator, system))
+    line_names      = get_name.(get_components(Branch, system))
+    bus_names       = get_name.(get_components(Bus, system))
+    demand_names    = get_name.(get_components(StaticLoad, system))
+    contingencies   = line_names
 
-    # active and reactive power variables for the generators
-    @variable(opf_m, pg0[g in gen_names] >= 0) 
-    @variable(opf_m, qg0[g in gen_names]) 
-    # active and reactive power flow on lines in base case and contingencies
-    @variable(opf_m, pf0[l in line_names])
-    @variable(opf_m, pfc[l in line_names, c in contingencies])
-    @variable(opf_m, qf0[l in line_names])
-    @variable(opf_m, qfc[l in line_names, c in contingencies])
-    # voltage magnitude at a node in base case and contingencies
-    @variable(opf_m, vm0[b in bus_names] >= 0)
-    @variable(opf_m, vmc[b in bus_names, c in contingencies] >= 0)
-    # voltage angle at a node in base case and contingencies
-    @variable(opf_m, va0[b in bus_names])
-    @variable(opf_m, vac[b in bus_names, c in contingencies])
-    # load curtailment variables
-    @variable(opf_m, ls0[b in demand_names] >= 0)
+    
+    @variables(opf_m, begin
+        pg0[g in gen_names] >= 0                    # active power variables for the generators
+        qg0[g in gen_names]                             # and reactive
+        pf0[l in line_names]                        # active power flow on lines in base case 
+        pfc[l in line_names, c in contingencies]        # and contingencies
+        qf0[l in line_names]                            # and reactive 
+        qfc[l in line_names, c in contingencies]        # and contingencies
+        vm0[b in bus_names] >= 0                    # voltage magnitude at a node in base case 
+        vmc[b in bus_names, c in contingencies] >= 0    # and contingencies
+        va0[b in bus_names]                         # voltage angle at a node in base case 
+        vac[b in bus_names, c in contingencies]         # and contingencies
+        ls0[b in demand_names] >= 0                 # load curtailment variables
+    end)
 
     # find value of beta, beta = 1 if from bus is the bus, beta = -1 if to bus is the bus, 0 else
     beta = JuMP.Containers.DenseAxisArray{Int8}(undef, bus_names, line_names)
     for bus in bus_names
-        for line in get_components(Line, system)
+        for line in get_components(Branch, system)
             beta[bus, get_name(line)] = bus == get_name(get_arc(line).from) ? 1 : bus == get_name(get_arc(line).to) ? -1 : 0
         end
     end
@@ -59,40 +57,34 @@ function p_scopf(system::System, optimizer; pen = 10000, time_limit_sec = 60)
     register(opf_m, :sum, 1, sum; autodiff = true)
 
     # minimize cost of generation
-    @NLobjective(opf_m, Min, sum(
-        pg0[get_name(g)] * get_cost(get_variable(get_operation_cost(g)))[1] +
+    @NLobjective(opf_m, Min, 
+        sum(pg0[get_name(g)] * get_cost(get_variable(get_operation_cost(g)))[1] +
         pg0[get_name(g)]^2 * get_cost(get_variable(get_operation_cost(g)))[2]
         for g in get_components(ThermalGen, system)
-        ) + pen * sum(ls0[d] for d in demand_names)
+        ) +  
+        sum(pg0[get_name(g)] * 0.5 + pg0[get_name(g)]^2 * 5 for g in get_components(HydroDispatch, system)) + 
+        pen * sum(ls0[d] for d in demand_names)
     )
 
     # incerted power at each bus for the base case and contingencies
+    @expressions(opf_m,begin
+        generators_p[b = bus_names], sum(get_name(get_bus(g)) == b ? pg0[get_name(g)] : 0 for g in get_components(Generator, system))
+        generators_q[b = bus_names], sum(get_name(get_bus(g)) == b ? qg0[get_name(g)] : 0 for g in get_components(Generator, system))
+    end)
     for b in bus_names
-        @constraint(opf_m, sum(get_name(get_bus(g)) == b ? pg0[get_name(g)] : 0 for g in get_components(ThermalStandard, system)) - 
-                           sum(beta[b,l] * pf0[l] for l in line_names) ==
-                           sum(get_active_power(d) - ls0[get_name(d)] for d in get_components(StaticLoad, system))
-        )
-        @constraint(opf_m, sum(get_name(get_bus(g)) == b ? qg0[get_name(g)] : 0 for g in get_components(ThermalStandard, system)) - 
-                           sum(beta[b,l] * qf0[l] for l in line_names) == 0
-                           sum((1 - ls0[get_name(d)]/get_active_power(d))*get_reactive_power(d) 
-                           for d in get_components(StaticLoad, system))
-        )
+        demand_p = sum(get_name(get_bus(d)) == b ? get_active_power(d) - ls0[get_name(d)] : 0 for d in get_components(StaticLoad, system))
+        demand_q = sum((1 - ls0[get_name(d)]/get_active_power(d))*get_reactive_power(d) for d in get_components(StaticLoad, system))
+        @constraint(opf_m, generators_p[b] - sum(beta[b,l] * pf0[l] for l in line_names) == demand_p)
+        @constraint(opf_m, generators_q[b] - sum(beta[b,l] * qf0[l] for l in line_names) == demand_q)
         for c in contingencies
-            @constraint(opf_m, sum(get_name(get_bus(g)) == b ? pg0[get_name(g)] : 0 for g in get_components(ThermalStandard, system)) -
-                                sum(beta[b,l] * pfc[l,c] for l in line_names) ==
-                                sum(get_active_power(d) - ls0[get_name(d)] for d in get_components(StaticLoad, system))
-            )
-            @constraint(opf_m, sum(get_name(get_bus(g)) == b ? qg0[get_name(g)] : 0 for g in get_components(ThermalStandard, system)) -
-                                sum(beta[b,l] * qfc[l,c] for l in line_names) == 
-                                sum((1 - ls0[get_name(d)]/get_active_power(d))*get_reactive_power(d) 
-                                for d in get_components(StaticLoad, system))
-            )
+            @constraint(opf_m, generators_p[b] - sum(beta[b,l] * pfc[l,c] for l in line_names) == demand_p)
+            @constraint(opf_m, generators_q[b] - sum(beta[b,l] * qfc[l,c] for l in line_names) == demand_q)
         end
     end
 
     # register(opf_m, :real, 1, real; autodiff = true)
     # power flow on line and line limits for the base case and contingencies
-    for l in get_components(Line, system)
+    for l in get_components(Branch, system)
         y = 1/(get_r(l) + get_x(l)*im)
         (g,b) = (real(y), imag(y))
         l_rate = get_rate(l)
@@ -121,7 +113,7 @@ function p_scopf(system::System, optimizer; pen = 10000, time_limit_sec = 60)
     end
 
     # restrict active and reactive power generation to min and max values
-    for g in get_components(ThermalStandard, system)
+    for g in get_components(Generator, system)
         set_lower_bound(qg0[get_name(g)], get_reactive_power_limits(g).min) 
         set_upper_bound(pg0[get_name(g)], get_active_power_limits(g).max)
         set_upper_bound(qg0[get_name(g)], get_reactive_power_limits(g).max)
@@ -156,8 +148,8 @@ function pc_scopf(system::System, optimizer; pen = 10000, time_limit_sec = 100)
     ramp_minutes = 10
     short_term_limit_multi = 1.5
 
-    gen_names = get_name.(get_components(ThermalStandard, system))
-    line_names = get_name.(get_components(Line, system))
+    gen_names = get_name.(get_components(Generator, system))
+    line_names = get_name.(get_components(Branch, system))
     bus_names = get_name.(get_components(Bus, system))
     demand_names = get_name.(get_components(StaticLoad, system))
     contingencies = line_names # [bus_names; line_names]
@@ -199,7 +191,7 @@ function pc_scopf(system::System, optimizer; pen = 10000, time_limit_sec = 100)
     # find value of beta, beta = 1 if from bus is the bus, beta = -1 if to bus is the bus, 0 else
     beta = JuMP.Containers.DenseAxisArray{Int8}(undef, bus_names, line_names)
     for bus in bus_names
-        for line in get_components(Line, system)
+        for line in get_components(Branch, system)
             beta[bus, get_name(line)] = bus == get_name(get_arc(line).from) ? 1 : bus == get_name(get_arc(line).to) ? -1 : 0
         end
     end
@@ -220,33 +212,33 @@ function pc_scopf(system::System, optimizer; pen = 10000, time_limit_sec = 100)
     # incerted power at each bus for the base case and contingencies
     for b in get_components(Bus, system)
         b_name = get_name(b)
-        @constraint(opf_m, sum(get_bus(g) == b ? pg0[get_name(g)] : 0 for g in get_components(ThermalStandard, system)) - 
+        @constraint(opf_m, sum(get_bus(g) == b ? pg0[get_name(g)] : 0 for g in get_components(Generator, system)) - 
                            sum(beta[b_name,l] * pf0[l] for l in line_names) ==
                            sum(get_active_power(d) - ls0[get_name(d)] for d in get_components(StaticLoad, system))
         )
-        @constraint(opf_m, sum(get_bus(g) == b ? qg0[get_name(g)] : 0 for g in get_components(ThermalStandard, system)) - 
+        @constraint(opf_m, sum(get_bus(g) == b ? qg0[get_name(g)] : 0 for g in get_components(Generator, system)) - 
                            sum(beta[b_name,l] * qf0[l] for l in line_names) == 
                            sum((1 - ls0[get_name(d)]/get_active_power(d))*get_reactive_power(d) 
                            for d in get_components(StaticLoad, system))
         )
         for c in contingencies
-            @constraint(opf_m, sum(get_bus(g) == b ? pg0[get_name(g)] : 0 for g in get_components(ThermalStandard, system)) -
+            @constraint(opf_m, sum(get_bus(g) == b ? pg0[get_name(g)] : 0 for g in get_components(Generator, system)) -
                                 sum(beta[b_name,l] * pfc[l,c] for l in line_names) ==
                                 sum(get_active_power(d) - ls0[get_name(d)] for d in get_components(StaticLoad, system))
             )
-            @constraint(opf_m, sum(get_bus(g) == b ? qg0[get_name(g)] : 0 for g in get_components(ThermalStandard, system)) -
+            @constraint(opf_m, sum(get_bus(g) == b ? qg0[get_name(g)] : 0 for g in get_components(Generator, system)) -
                                 sum(beta[b_name,l] * qfc[l,c] for l in line_names) == 
                                 sum((1 - ls0[get_name(d)]/get_active_power(d))*get_reactive_power(d) 
                                 for d in get_components(StaticLoad, system))
             )
             @constraint(opf_m, sum(get_bus(g) == b ? pg0[get_name(g)] + pgu[get_name(g),c] - pgd[get_name(g),c] : 0 
-                                    for g in get_components(ThermalStandard, system)) -
+                                    for g in get_components(Generator, system)) -
                                 sum(beta[b_name,l] * pfcc[l,c] for l in line_names) ==
                                 sum(get_active_power(d) - ls0[get_name(d)] - lsc[get_name(d),c] 
                                     for d in get_components(StaticLoad, system))
             )
             @constraint(opf_m, sum(get_bus(g) == b ? qg0[get_name(g)] + qgc[get_name(g),c] : 0 
-                                    for g in get_components(ThermalStandard, system)) -
+                                    for g in get_components(Generator, system)) -
                                 sum(beta[b_name,l] * qfcc[l,c] for l in line_names) == 
                                 sum((1 - ls0[get_name(d)]/get_active_power(d) - lsc[get_name(d),c]/get_active_power(d)) * 
                                 get_reactive_power(d) for d in get_components(StaticLoad, system))
@@ -255,7 +247,7 @@ function pc_scopf(system::System, optimizer; pen = 10000, time_limit_sec = 100)
     end
 
     # power flow on line and line limits for the base case and contingencies
-    for l in get_components(Line, system)
+    for l in get_components(Branch, system)
         y = 1/(get_r(l) + get_x(l)*im)
         (g,b) = (real(y), imag(y))
         l_rate = get_rate(l)
@@ -294,7 +286,7 @@ function pc_scopf(system::System, optimizer; pen = 10000, time_limit_sec = 100)
     end
 
     # restrict active power generation to min and max values
-    for g in get_components(ThermalStandard, system)
+    for g in get_components(Generator, system)
         g_name = get_name(g)
         set_lower_bound(qg0[g_name], get_reactive_power_limits(g).min) 
         set_upper_bound(pg0[g_name], get_active_power_limits(g).max)
@@ -334,8 +326,8 @@ function e_opf(system::System, optimizer, outage, pg0, ls0; time_limit_sec = 60)
     opf_m = Model(optimizer)
     set_time_limit_sec(opf_m, time_limit_sec)
 
-    gen_names = get_name.(get_components(ThermalStandard, system))
-    line_names = get_name.(get_components(Line, system))
+    gen_names = get_name.(get_components(Generator, system))
+    line_names = get_name.(get_components(Branch, system))
     bus_names = get_name.(get_components(Bus, system))
     demand_names = get_name.(get_components(StaticLoad, system))
 
@@ -359,13 +351,13 @@ function e_opf(system::System, optimizer, outage, pg0, ls0; time_limit_sec = 60)
     # incerted power at each bus for the base case
     for b in get_components(Bus, system)
         @constraint(opf_m, sum(get_bus(g) == b ? pg0[get_name(g)] - e[g] * sum(lse) : 0 for g in get_components(ThermalStandard, system)) - 
-                           sum(beta[b,l] * pf0[get_name(l)] for l in get_components(Line, system)) ==
+                           sum(beta[b,l] * pf0[get_name(l)] for l in get_components(Branch, system)) ==
                            sum(get_active_power(l) - ls0[get_name(l)] - lse[get_name(l)] for l in get_components(StaticLoad, system))
         )
     end
 
     # power flow on line and line limits for the base case
-    for l in get_components(Line, system)
+    for l in get_components(Branch, system)
         l_name = get_name(l)
         @constraint(opf_m, fe[l_name] - outage[l_name] * sum(beta[b,l] * anglee[get_name(b)] for b in get_components(Bus, system)) / get_x(l) == 0)
         @constraint(opf_m, -get_rate(l) <= fe[l_name] <= get_rate(l))
@@ -375,7 +367,7 @@ function e_opf(system::System, optimizer, outage, pg0, ls0; time_limit_sec = 60)
     for d in demand_names
         value(lse[d]) > 0.00001 ? @printf("%s = %.4f \n", d,value(lse[d])) : print()
     end
-    for l in get_components(Line, system)
+    for l in get_components(Branch, system)
         @printf("%s = %.4f <= %.2f \n", get_name(l), value(pf0[get_name(l)]), get_rate(l))
     end
 
@@ -395,7 +387,7 @@ end
 # @expression(opf_m, severity, sum(voll[d] * lse[d] for d in demand_names))
 
 
-# for l in get_name.(get_components(Line, ieee_rts))
+# for l in get_name.(get_components(Branch, ieee_rts))
 #     for g in get_name.(get_components(ThermalStandard, ieee_rts))
 #         if value.(results[:pgu])[g,l] > 0.00001 
 #             @printf("%s: \t%s \t= %.5f \n", l, g, value.(results[:pgu])[g,l])

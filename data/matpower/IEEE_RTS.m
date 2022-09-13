@@ -183,36 +183,6 @@ mpc.gencost = [                                %    bus    Pmin    Pmax    Qmin 
     2    1500    0    3    0.004895    11.8495    665.1094;    %    23    140    350    -25    150    U350
 ];
 
-% bus names
-%column_names%	name
-mpc.bus_name = {
-	'ABEL';
-	'ADAMS';
-	'ADLER';
-	'AGRICOLA';
-	'AIKEN';
-	'ALBER';
-	'ALDER';
-	'ALGER';
-	'ALI';
-	'ALLEN';
-	'ANNA';
-	'ARCHER';
-	'ARNE';
-	'ARNOLD';
-	'ARTHUR';
-	'ASSER';
-	'ASTON';
-	'ASTOR';
-	'ATTAR';
-	'ATTILA';
-	'ATTLEE';
-	'AUBREY';
-	'AUSTEN';
-	'AVERY';
-};
-
-
 % generator names types and fuels
 %column_names%	name    type    fuel
 mpc.gen_name = {
