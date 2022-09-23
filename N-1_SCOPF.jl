@@ -38,6 +38,7 @@ function scopf(system::System, optimizer; preventive = false, corrective = false
         [rand(1000:3000, length(demands)); rand(1:30, length(renewables))], 
         [get_name.(demands); get_name.(renewables)]
     )
+    println("VOLL\n", voll.data)
     
     @variables(opf_m, begin
         pg0[g in [get_name.(gens_t); get_name.(gens_h)]] >= 0     # active power variables for the generators
@@ -87,7 +88,7 @@ function scopf(system::System, optimizer; preventive = false, corrective = false
         )
     end
 
-    contingencies = get_name.(branches) # [get_name.(buses);get_name.(branches)]
+    contingencies = get_name.(branches)[1:10] # [get_name.(buses);get_name.(branches)]
     if preventive == true
         opf_m = p_scopf(system, opf_m, branches, buses, demands, renewables, contingencies)
     end
@@ -121,10 +122,10 @@ function p_scopf(system::System, opf_m, branches, buses, demands, renewables, co
     # incerted power at each bus for the base case and contingencies
     for b in buses
         demand = sum(get_bus(d) == b ? get_active_power(d) - opf_m[:ls0][get_name(d)] : 0 for d in demands)
-        renewable = sum(get_bus(d) == b ? -get_active_power(d) + ls0[get_name(d)] : 0 for d in renewables)
+        renewable = sum((get_bus(d) == b ? -get_active_power(d) + opf_m[:ls0][get_name(d)] : 0 for d in renewables), init = 0.0)
         for c in contingencies
-            c = @constraint(opf_m, opf_m[:generators][b] - sum(beta(b,l) * pfc[get_name(l),c] for l in branches) == demand + renewable)
-            set_name(c, @sprintf("inj_pc[%s,%s]", get_name(b), c))
+            cc = @constraint(opf_m, opf_m[:generators][b] - sum(beta(b,l) * pfc[get_name(l),c] for l in branches) == demand + renewable)
+            set_name(cc, @sprintf("inj_pc[%s,%s]", get_name(b), c))
         end
     end
 
@@ -148,6 +149,7 @@ function pc_scopf(system::System, opf_m, gens_t, gens_h, branches, buses, demand
     short_term_limit_multi = 1.5
     
     @variables(opf_m, begin
+        # pgc[g in [get_name.(gens_t); get_name.(gens_h)], c in contingencies] >= 0    # active power variables for the generators in contingencies 
         pgu[g in [get_name.(gens_t); get_name.(gens_h)], c in contingencies] >= 0    # active power variables for the generators in contingencies ramp up 
         pgd[g in [get_name.(gens_t); get_name.(gens_h)], c in contingencies] >= 0       # and ramp down
         pfc[l in get_name.(branches), c in contingencies]      # power flow on branches in in contingencies before 
@@ -155,9 +157,12 @@ function pc_scopf(system::System, opf_m, gens_t, gens_h, branches, buses, demand
         vac[b in get_name.(buses), c in contingencies]         # voltage angle at a node in in contingencies before 
         vacc[b in get_name.(buses), c in contingencies]            # and after corrective actions
         lsc[d in [get_name.(demands); get_name.(renewables)], c in contingencies] >= 0 # load curtailment variables in in contingencies
+        cbc[l in get_name.(branches), c in contingencies], Bin      # circuit breakers on branches in in contingencies before 
+        # cbcc[l in get_name.(branches), c in contingencies], Bin         # and after corrective actions
     end)
 
     prob = JuMP.Containers.DenseAxisArray((rand(length(contingencies)).*(0.5-0.02).+0.02)./8760, contingencies)
+    println("Prob\n", prob.data)
     # prob = [ # spesified for the RTS-96
     #         0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01,
     #         0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, # generators
@@ -173,9 +178,11 @@ function pc_scopf(system::System, opf_m, gens_t, gens_h, branches, buses, demand
     # minimize socio-economic cost
     @objective(opf_m, Min, 
         sum(get_cost(get_variable(get_operation_cost(g)))[2] * (opf_m[:pg0][get_name(g)] + 
+            # sum(prob[c] * (pgc[get_name(g),c] - opf_m[:pg0][get_name(g)]) for c in contingencies))
             sum(prob[c] * (pgu[get_name(g),c] #=+ pgd[get_name(g),c]*0.1=#) for c in contingencies))
             for g in gens_t
         ) + 
+        # sum(5 * (opf_m[:pg0][get_name(g)] + sum(prob[c] * (pgc[get_name(g),c] - opf_m[:pg0][get_name(g)])
         sum(5 * (opf_m[:pg0][get_name(g)] + sum(prob[c] * (pgu[get_name(g),c] #=+ pgd[get_name(g),c]*0.1=#)
             for c in contingencies)) for g in gens_h
         ) +
@@ -188,9 +195,10 @@ function pc_scopf(system::System, opf_m, gens_t, gens_h, branches, buses, demand
         demand = sum(get_bus(d) == b ? get_active_power(d) - opf_m[:ls0][get_name(d)] : 0 for d in demands)
         renewable = sum((get_bus(d) == b ? -get_active_power(d) + opf_m[:ls0][get_name(d)] : 0 for d in renewables), init = 0.0)
         for c in contingencies
-            cc = @constraint(opf_m, opf_m[:generators][b] - sum(beta(b,l) * pfc[get_name(l),c] for l in branches) == demand)
+            cc = @constraint(opf_m, opf_m[:generators][b] - sum(beta(b,l) * pfc[get_name(l),c] for l in branches) == demand + renewable)
             set_name(cc, @sprintf("inj_pc[%s,%s]", get_name(b), c))
             ccc = @constraint(opf_m, 
+                # sum(get_bus(g) == b ? pgc[get_name(g),c] : 0 for g in Iterators.flatten((gens_t, gens_h))) -
                 sum(get_bus(g) == b ? opf_m[:pg0][get_name(g)] + pgu[get_name(g),c] - pgd[get_name(g),c] : 0 for g in Iterators.flatten((gens_t, gens_h))) -
                 sum(beta(b,l) * pfcc[get_name(l),c] for l in branches) == 
                 sum(get_bus(d) == b ? get_active_power(d) - opf_m[:ls0][get_name(d)] - lsc[get_name(d),c] : 0 for d in demands) +
@@ -204,13 +212,14 @@ function pc_scopf(system::System, opf_m, gens_t, gens_h, branches, buses, demand
     for l in branches
         l_name = get_name(l)
         for c in contingencies
-            l_name = get_name(l)
             a = l_name != c # zero value if l is unavailable under contingency c
             @constraints(opf_m, begin
-                pfc[l_name,c] - a * sum(beta(b,l) * vac[get_name(b),c] for b in buses) / get_x(l) == 0
-                -get_rate(l)*short_term_limit_multi <= a * pfc[l_name,c] <= get_rate(l)*short_term_limit_multi
+                pfc[l_name,c] - cbc[l_name,c] * a * sum(beta(b,l) * vac[get_name(b),c] for b in buses) / get_x(l) == 0
+                -get_rate(l)*short_term_limit_multi <= cbc[l_name,c] * a * pfc[l_name,c] <= get_rate(l)*short_term_limit_multi
                 pfcc[l_name,c] - a * sum(beta(b,l) * vacc[get_name(b),c] for b in buses) / get_x(l) == 0
                 -get_rate(l) <= a * pfcc[l_name,c] <= get_rate(l)
+                # pfcc[l_name,c] - cbcc[l_name,c] * a * sum(beta(b,l) * vacc[get_name(b),c] for b in buses) / get_x(l) == 0
+                # -get_rate(l) <= cbcc[l_name,c] * a * pfcc[l_name,c] <= get_rate(l)
             end)
         end
     end
@@ -219,6 +228,11 @@ function pc_scopf(system::System, opf_m, gens_t, gens_h, branches, buses, demand
     for g in Iterators.flatten((gens_t, gens_h))
         g_name = get_name(g)
         for c in contingencies
+            # @constraint(opf_m, 0 <= opf_m[:pg0][g_name] <= get_active_power_limits(g).max)
+            # @constraint(opf_m, 0 <= pgc[g_name,c] <= get_active_power_limits(g).max)
+            # @constraint(opf_m, -get_ramp_limits(g).down * ramp_minutes <= 
+            #     pgc[g_name,c] - opf_m[:pg0][g_name] <= get_ramp_limits(g).up * ramp_minutes
+            # )
             @constraint(opf_m, 0 <= opf_m[:pg0][g_name] + (pgu[g_name,c] - pgd[g_name,c]) <= get_active_power_limits(g).max)
             set_upper_bound(pgu[g_name,c], get_ramp_limits(g).up * ramp_minutes)
             set_upper_bound(pgd[g_name,c], get_ramp_limits(g).down * ramp_minutes)

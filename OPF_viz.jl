@@ -23,10 +23,10 @@ scatterplot(model, system, name, type) =
 
 function scatter_all(model, system; sys_name = "")
     names = [
-        (:pg0, Generator), (:pgu, Generator), (:pgd, Generator), (:pf0, Branch), 
+        (:pg0, Generator), (:pgu, Generator), (:pgd, Generator), (:pgc, Generator), (:pf0, Branch), 
         (:pfc, Branch), (:pfcc, Branch), (:ls0, StaticLoad), (:lsc, StaticLoad), (:qg0, Generator), 
         (:qgu, Generator), (:qgd, Generator), (:qf0, Branch), (:qfc, Branch), (:qfcc, Branch), 
-        (:va0, Bus), (:vac, Bus), (:vacc, Bus)
+        (:va0, Bus), (:vac, Bus), (:vacc, Bus), (:cbc, Bus), (:cbcc, Bus)
     ]
     for name in names
         try
@@ -56,6 +56,23 @@ get_active_power.(get_components(StaticLoad, ieee_rts)) - value.(pc_scopf_m[:lsd
 
 for d in get_components(StaticLoad, ieee_rts)
     set_active_power!(d, get_active_power(d)*1.5) 
+end
+
+function print_cb()
+    print("\t\t")
+    for l in get_name.(get_components(Branch, ieee_rts))
+        print(l[1:5], " ")
+    end
+    for c in get_name.(get_components(Branch, ieee_rts))[1:10]
+        print("\n", c, "\t")
+        for l in get_name.(get_components(Branch, ieee_rts))
+            if c == l
+                print("x     ")
+            else
+                print(value(scopf_m[:cbc][l,c]) > 0.5 ? 1 : 0, "     ")
+            end
+        end
+    end
 end
 
 plt = scatter(
