@@ -157,7 +157,7 @@ function pc_scopf(system::System, opf_m, gens_t, gens_h, branches, buses, demand
         vac[b in get_name.(buses), c in contingencies]         # voltage angle at a node in in contingencies before 
         vacc[b in get_name.(buses), c in contingencies]            # and after corrective actions
         lsc[d in [get_name.(demands); get_name.(renewables)], c in contingencies] >= 0 # load curtailment variables in in contingencies
-        cbc[l in get_name.(branches), c in contingencies], Bin      # circuit breakers on branches in in contingencies before 
+        # cbc[l in get_name.(branches), c in contingencies], Bin      # circuit breakers on branches in in contingencies before 
         # cbcc[l in get_name.(branches), c in contingencies], Bin         # and after corrective actions
     end)
 
@@ -201,8 +201,8 @@ function pc_scopf(system::System, opf_m, gens_t, gens_h, branches, buses, demand
                 # sum(get_bus(g) == b ? pgc[get_name(g),c] : 0 for g in Iterators.flatten((gens_t, gens_h))) -
                 sum(get_bus(g) == b ? opf_m[:pg0][get_name(g)] + pgu[get_name(g),c] - pgd[get_name(g),c] : 0 for g in Iterators.flatten((gens_t, gens_h))) -
                 sum(beta(b,l) * pfcc[get_name(l),c] for l in branches) == 
-                sum(get_bus(d) == b ? get_active_power(d) - opf_m[:ls0][get_name(d)] - lsc[get_name(d),c] : 0 for d in demands) +
-                sum(get_bus(d) == b ? -get_active_power(d) + opf_m[:ls0][get_name(d)] + lsc[get_name(d),c] : 0 for d in renewables)
+                sum(get_bus(d) == b ? get_active_power(d) - lsc[get_name(d),c] : 0 for d in demands) +
+                sum(get_bus(d) == b ? -get_active_power(d) + lsc[get_name(d),c] : 0 for d in renewables)
             )
             set_name(ccc, @sprintf("inj_pcc[%s,%s]", get_name(b), c))
         end
@@ -214,10 +214,12 @@ function pc_scopf(system::System, opf_m, gens_t, gens_h, branches, buses, demand
         for c in contingencies
             a = l_name != c # zero value if l is unavailable under contingency c
             @constraints(opf_m, begin
-                pfc[l_name,c] - cbc[l_name,c] * a * sum(beta(b,l) * vac[get_name(b),c] for b in buses) / get_x(l) == 0
-                -get_rate(l)*short_term_limit_multi <= cbc[l_name,c] * a * pfc[l_name,c] <= get_rate(l)*short_term_limit_multi
+                pfc[l_name,c] - a * sum(beta(b,l) * vac[get_name(b),c] for b in buses) / get_x(l) == 0
+                -get_rate(l)*short_term_limit_multi <= a * pfc[l_name,c] <= get_rate(l)*short_term_limit_multi
                 pfcc[l_name,c] - a * sum(beta(b,l) * vacc[get_name(b),c] for b in buses) / get_x(l) == 0
                 -get_rate(l) <= a * pfcc[l_name,c] <= get_rate(l)
+                # pfc[l_name,c] - cbc[l_name,c] * a * sum(beta(b,l) * vac[get_name(b),c] for b in buses) / get_x(l) == 0
+                # -get_rate(l)*short_term_limit_multi <= cbc[l_name,c] * a * pfc[l_name,c] <= get_rate(l)*short_term_limit_multi
                 # pfcc[l_name,c] - cbcc[l_name,c] * a * sum(beta(b,l) * vacc[get_name(b),c] for b in buses) / get_x(l) == 0
                 # -get_rate(l) <= cbcc[l_name,c] * a * pfcc[l_name,c] <= get_rate(l)
             end)
