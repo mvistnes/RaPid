@@ -2,6 +2,7 @@ using PowerSystems
 const PSY = PowerSystems
 using JuMP
 using Ipopt
+using Printf
 
 function sl_scopf(system::System, optimizer)
     ramp_minutes = 10
@@ -20,8 +21,10 @@ function sl_scopf(system::System, optimizer)
     
     p_opf_m = p_scopf(system, optimizer, gens_t, gens_h, branches, buses, demands, renewables, voll, contingencies, short_term_limit_multi)
     optimize!(p_opf_m)
+    @assert termination_status(p_opf_m) == LOCALLY_SOLVED
     pc_opf_m = pc_scopf(system, optimizer, p_opf_m, gens_t, gens_h, branches, buses, demands, renewables, voll, contingencies, ramp_minutes)
     optimize!(pc_opf_m)
+    @assert termination_status(pc_opf_m) == LOCALLY_SOLVED
     return p_opf_m, pc_opf_m
 end
 
@@ -65,7 +68,7 @@ function p_scopf(system, optimizer, gens_t, gens_h, branches, buses, demands, re
         for c in contingencies
             a = l_name != c # zero value if l is unavailable under contingency c
             @constraint(opf_m, pfc[l_name,c] - a * sum(beta(b,l) * vac[get_name(b),c] for b in buses) / get_x(l) == 0)
-            @constraint(opf_m, -get_rate(l) <= a * pfc[l_name,c] <= get_rate(l))
+            @constraint(opf_m, -get_rate(l) * short_term_limit_multi <= a * pfc[l_name,c] <= get_rate(l) * short_term_limit_multi)
         end
     end
 

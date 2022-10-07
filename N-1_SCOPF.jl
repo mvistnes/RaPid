@@ -90,13 +90,14 @@ function scopf(system::System, optimizer; preventive = false, corrective = false
 
     contingencies = get_name.(branches)[1:10] # [get_name.(buses);get_name.(branches)]
     if preventive == true
-        opf_m = p_scopf(system, opf_m, branches, buses, demands, renewables, contingencies)
+        opf_m = p_scopf(opf_m, branches, buses, demands, renewables, contingencies)
     end
     if corrective == true
-        opf_m = pc_scopf(system, opf_m, gens_t, gens_h, branches, buses, demands, renewables, voll, contingencies)
+        opf_m = pc_scopf(opf_m, gens_t, gens_h, branches, buses, demands, renewables, voll, contingencies)
     end
     
     optimize!(opf_m)
+    @assert termination_status(opf_m) == LOCALLY_SOLVED
     # for g in gens
     #     @printf("%s = %.4f <= %.2f \n", get_name(g), value(pg0[get_name(g)]), get_active_power_limits(g).max)
     # end
@@ -110,7 +111,7 @@ function scopf(system::System, optimizer; preventive = false, corrective = false
     return opf_m
 end
 
-function p_scopf(system::System, opf_m, branches, buses, demands, renewables, contingencies)
+function p_scopf(opf_m, branches, buses, demands, renewables, contingencies)
     # power flow on branches in contingencies
     @variable(opf_m, pfc[l in get_name.(branches), c in contingencies])
     # voltage angle at a node in contingencies
@@ -144,7 +145,7 @@ end
 
 
 
-function pc_scopf(system::System, opf_m, gens_t, gens_h, branches, buses, demands, renewables, voll, contingencies)
+function pc_scopf(opf_m, gens_t, gens_h, branches, buses, demands, renewables, voll, contingencies)
     ramp_minutes = 10
     short_term_limit_multi = 1.5
     
@@ -177,14 +178,14 @@ function pc_scopf(system::System, opf_m, gens_t, gens_h, branches, buses, demand
 
     # minimize socio-economic cost
     @objective(opf_m, Min, 
-        sum(get_cost(get_variable(get_operation_cost(g)))[2] * (opf_m[:pg0][get_name(g)] + 
+        sum(get_cost(get_variable(get_operation_cost(g)))[2] * (opf_m[:pg0][get_name(g)] #=+ 
             # sum(prob[c] * (pgc[get_name(g),c] - opf_m[:pg0][get_name(g)]) for c in contingencies))
-            sum(prob[c] * (pgu[get_name(g),c] #=+ pgd[get_name(g),c]*0.1=#) for c in contingencies))
+            sum(prob[c] * (pgu[get_name(g),c] #=+ pgd[get_name(g),c]*0.1=#) for c in contingencies)=#)
             for g in gens_t
         ) + 
         # sum(5 * (opf_m[:pg0][get_name(g)] + sum(prob[c] * (pgc[get_name(g),c] - opf_m[:pg0][get_name(g)])
-        sum(5 * (opf_m[:pg0][get_name(g)] + sum(prob[c] * (pgu[get_name(g),c] #=+ pgd[get_name(g),c]*0.1=#)
-            for c in contingencies)) for g in gens_h
+        sum(5 * (opf_m[:pg0][get_name(g)] #=+ sum(prob[c] * (pgu[get_name(g),c] #=+ pgd[get_name(g),c]*0.1=#)
+            for c in contingencies) =#) for g in gens_h
         ) +
         sum(voll[d] * (opf_m[:ls0][d] + sum(prob[c] * lsc[d,c] for c in contingencies)) 
             for d in [get_name.(demands); get_name.(renewables)])
