@@ -14,7 +14,6 @@ No losses are accounted for.
 
 Input: 
     - buses: a table with columns of ibus (bus number), type (PV=1, PQ=2, ref=3), and Pd.
-    ! currently ref=0, change this!
     - branches: a table with columns of fbus (from bus number), tbus (to bus number), 
     and x (series reactance).
 
@@ -79,7 +78,7 @@ Input:
 
 Output: vector of voltage angle at each bus.
 """
-function calcangles(P::Vector{Float64}, H::Matrix{Float64})
+function calcangles(P::Vector{AbstractFloat}, H::Matrix{AbstractFloat})
     luP = lu(H)
     return luP \ P
 end
@@ -96,7 +95,7 @@ Output:
  - P_bus: vector of real power into each bus.
  - P_branch: vector of real power in a line.
 """
-function calcP(theta::Vector{Float64}, branches::Vector{Branch})
+function calcP(theta::Vector{AbstractFloat}, branches::Vector{Branch})
     push!(theta, 0.0)
     P_bus = zeros(size(theta,1))
     P_branch = zeros(size(branches,1))
@@ -166,7 +165,7 @@ Input:
  - P: vector of real power into each bus.
  - theta: vector of voltage angle at each bus.
 """
-function printsystem(buses, Pd::Vector{Float64}, theta::Vector{Float64})
+function printsystem(buses, Pd::Vector{AbstractFloat}, theta::Vector{AbstractFloat})
     println("\n Bus \tVoltage ang \tActive power")
     println("-------------------------------------")
     for i in 1:length(Pd)

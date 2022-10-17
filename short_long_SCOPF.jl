@@ -4,7 +4,10 @@ using JuMP
 using Ipopt
 using Printf
 
-function sl_scopf(system::System, optimizer)
+# REORGANIZE CODE INTO SMALLER FUNCTIONS!
+# MODULAR DESIGN, BOTH SL AND NORMAL IN ONE FUNCTION!
+
+function sl_scopf(system::System, optimizer; voll=[0], prob=[0])
     ramp_minutes = 10
     short_term_limit_multi = 1.5
     gens_t     = get_components(ThermalGen, system)
@@ -13,22 +16,24 @@ function sl_scopf(system::System, optimizer)
     buses      = get_components(Bus, system)
     demands    = get_components(StaticLoad, system)
     renewables = get_components(RenewableGen, system) # Renewable modelled as negative demand
-    voll = JuMP.Containers.DenseAxisArray(
-        [rand(1000:3000, length(demands)); rand(1:30, length(renewables))], 
-        [get_name.(demands); get_name.(renewables)]
-    )
-    contingencies = get_name.(branches)[1:10] # [get_name.(buses);get_name.(branches)]
+    if length(voll) > 1
+        voll = JuMP.Containers.DenseAxisArray(
+            [rand(1000:3000, length(demands)); rand(1:30, length(renewables))], 
+            [get_name.(demands); get_name.(renewables)]
+        )
+    end
+    contingencies = get_name.(branches) # [1:10] # [get_name.(buses);get_name.(branches)]
     
-    p_opf_m = p_scopf(system, optimizer, gens_t, gens_h, branches, buses, demands, renewables, voll, contingencies, short_term_limit_multi)
+    p_opf_m = p_scopf(system, optimizer, gens_t, gens_h, branches, buses, demands, renewables, contingencies, short_term_limit_multi, voll)
     optimize!(p_opf_m)
-    @assert termination_status(p_opf_m) == LOCALLY_SOLVED
-    pc_opf_m = pc_scopf(system, optimizer, p_opf_m, gens_t, gens_h, branches, buses, demands, renewables, voll, contingencies, ramp_minutes)
+    @assert termination_status(p_opf_m) == MOI.OPTIMAL
+    pc_opf_m = pc_scopf(system, optimizer, p_opf_m, gens_t, gens_h, branches, buses, demands, renewables, contingencies, ramp_minutes, voll, prob)
     optimize!(pc_opf_m)
-    @assert termination_status(pc_opf_m) == LOCALLY_SOLVED
+    @assert termination_status(pc_opf_m) == MOI.OPTIMAL
     return p_opf_m, pc_opf_m
 end
 
-function p_scopf(system, optimizer, gens_t, gens_h, branches, buses, demands, renewables, voll, contingencies, short_term_limit_multi)
+function p_scopf(system::System, optimizer, gens_t, gens_h, branches, buses, demands, renewables, contingencies, short_term_limit_multi, voll)
     opf_m = Model(optimizer)
     if GLPK.Optimizer == optimizer 
         set_optimizer_attribute(opf_m, "msg_lev", GLPK.GLP_MSG_ON)
@@ -54,9 +59,11 @@ function p_scopf(system, optimizer, gens_t, gens_h, branches, buses, demands, re
         renewable = sum((get_bus(d) == b ? -get_active_power(d) + ls0[get_name(d)] : 0 for d in renewables), init = 0.0)
         c = @constraint(opf_m, generators[b] - sum(beta(b,l) * pf0[get_name(l)] for l in branches) == demand + renewable)
         set_name(c, @sprintf("inj_p[%s]", get_name(b)))
+        @constraint(opf_m, -π/2 <= va0[get_name(b)] <= π/2)
         for c in contingencies
             cc = @constraint(opf_m, opf_m[:generators][b] - sum(beta(b,l) * pfc[get_name(l),c] for l in branches) == demand + renewable)
             set_name(cc, @sprintf("inj_pc[%s,%s]", get_name(b), c))
+            @constraint(opf_m, -π/2 <= vac[get_name(b),c] <= π/2)
         end
     end
 
@@ -95,7 +102,7 @@ function p_scopf(system, optimizer, gens_t, gens_h, branches, buses, demands, re
 end
 
 
-function pc_scopf(system::System, optimizer, p_opf_m, gens_t, gens_h, branches, buses, demands, renewables, voll, contingencies, ramp_minutes)
+function pc_scopf(system::System, optimizer, p_opf_m, gens_t, gens_h, branches, buses, demands, renewables, contingencies, ramp_minutes, voll, prob)
     opf_m = Model(optimizer)
     if GLPK.Optimizer == optimizer 
         set_optimizer_attribute(opf_m, "msg_lev", GLPK.GLP_MSG_ON)
@@ -109,15 +116,9 @@ function pc_scopf(system::System, optimizer, p_opf_m, gens_t, gens_h, branches, 
         lsc[d in [get_name.(demands); get_name.(renewables)], c in contingencies] >= 0 # load curtailment variables in in contingencies
     end)
 
-    prob = JuMP.Containers.DenseAxisArray((rand(length(contingencies)).*(0.5-0.02).+0.02)./8760, contingencies)
-    # prob = [ # spesified for the RTS-96
-    #         # 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01,
-    #         # 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, # generators
-    #         0.24, 0.51, 0.33, 0.39, 0.48, 0.38, 0.02, 0.36, 0.34, 0.33, 0.30, 0.44, 0.44, 0.44, 
-    #         0.02, 0.02, 0.02, 0.02, 0.40, 0.39, 0.40, 0.52, 0.49, 0.47, 0.38, 0.33, 0.41, 0.41, 
-    #         0.41, 0.35, 0.34, 0.32, 0.54, 0.35, 0.35, 0.38, 0.38, 0.34, 0.34, 0.45, 0.46 # branches
-    # ]
-    # prob /= 8760
+    if length(prob) > 1
+        prob = JuMP.Containers.DenseAxisArray((rand(length(contingencies)).*(0.5-0.02).+0.02)./8760, contingencies)
+    end
 
     # find value of beta, beta = 1 if from bus is the bus, beta = -1 if to bus is the bus, 0 else
     beta(bus, branch) = bus == get_arc(branch).from ? 1 : bus == get_arc(branch).to ? -1 : 0
@@ -145,6 +146,7 @@ function pc_scopf(system::System, optimizer, p_opf_m, gens_t, gens_h, branches, 
                 sum(get_bus(d) == b ? -get_active_power(d) + lsc[get_name(d),c] : 0 for d in renewables)
             )
             set_name(ccc, @sprintf("inj_pcc[%s,%s]", get_name(b), c))
+            @constraint(opf_m, -π/2 <= vacc[get_name(b),c] <= π/2)
         end
     end
     
@@ -176,17 +178,4 @@ function pc_scopf(system::System, optimizer, p_opf_m, gens_t, gens_h, branches, 
     end
 
     return opf_m
-end
-
-        
-# add_system_data_to_json()
-# system_data = System("system_data.json")
-# results = opf_model(system_data, Ipopt.Optimizer)
-# value.(results[:pl])
-
-function hot_start(model)
-    x = all_variables(model)
-    x_solution = value.(x)
-    set_start_value.(x, x_solution)
-    optimize!(model)
 end

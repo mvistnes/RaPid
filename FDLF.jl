@@ -17,7 +17,7 @@ Primal Fast Decoupled Power Flow = "pri" and
 Dual Fast Decoupled Power Flow = "dual"
 
 print_out = True -> state for each iteration"""
-function fdlf(buses::Vector{Bus}, branches::Vector{Branch}, it_max::Int, lim::Float64; method = "std", print_out = false)
+function fdlf(buses::Vector{Bus}, branches::Vector{Branch}, it_max::Int, lim::AbstractFloat; method = "std", print_out = false)
     numB = size(buses,1)
     sizeJ = sum(bus.type for bus in buses if bus.type != Int(ref::TypeB)) # size of jacobi matrix
 

@@ -15,7 +15,7 @@ lim is the convergance limit
 
 print_out = True -> state for each iteration
 """
-function nr_method!(buses::DataFrame, branches::DataFrame, it_max::Int64, lim::Float64; print_out::Bool = false)
+function nr_method!(buses::DataFrame, branches::DataFrame, it_max::Unsigned, lim::AbstractFloat; print_out::Bool = false)
     buses_vec, branches_vec, convert_bus = vectorize(buses, branches)
     it, buses, branches = nr_method!(buses_vec, branches_vec, it_max, lim, print_out)
     buses[!, :P] = zeros(size(buses,1))
@@ -30,7 +30,7 @@ function nr_method!(buses::DataFrame, branches::DataFrame, it_max::Int64, lim::F
     end
     return buses, branches
 end
-function nr_method!(buses::Vector{Bus}, branches::Vector{Branch}, it_max::Int64, lim::Float64; print_out::Bool = false)
+function nr_method!(buses::Vector{Bus}, branches::Vector{Branch}, it_max::Unsigned, lim::AbstractFloat; print_out::Bool = false)
     numB = length(buses) # number of buses
     sizeJ = sum(bus.type for bus in buses if bus.type != Int(ref::TypeB)) # size of jacobi matrix
     deltaPQ = zeros(Float64, sizeJ)
