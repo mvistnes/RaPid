@@ -1,279 +1,323 @@
 using PowerSystems
-const PSY = PowerSystems
 using JuMP
 using Ipopt
 using GLPK
 using Printf
-using PowerSystemCaseBuilder
 
-function add_system_data_to_json(;
-        file_name="system_data.json",
-        data_name=joinpath("matpower","IEEE_RTS.m"),
-        # time_series=joinpath("forecasts","5bus_ts","timeseries_pointers_da.json"),
-        DATA_DIR="data"
-    )
-    # if !isdir(DATA_DIR)
-    #     download(PowerSystems.UtilsData.TestData, folder = DATA_DIR)
-    # end
-    system_data = System(joinpath(DATA_DIR, data_name))
-    # add_time_series!(system_data, joinpath(DATA_DIR,time_series))
-    to_json(system_data, file_name, force=true)
+""" OPF model type """
+mutable struct OPFmodel
+    sys::System
+    mod::Model # JuMP model object
+    # beta::JuMP.Containers.SparseAxisArray
+    contingencies::Union{Nothing, Vector{String}}
+    voll::Union{Nothing, JuMP.Containers.DenseAxisArray}
+    prob::Union{Nothing, JuMP.Containers.DenseAxisArray}
 end
 
-function scopf(system::System, optimizer; preventive = false, corrective = false, time_limit_sec = 60)
-    @assert !preventive || !corrective
-    opf_m = Model(optimizer)
+""" Constructor for OPFmodel """
+function opfmodel(sys::System, optimizer, time_limit_sec)
+    mod = Model(optimizer)
     if GLPK.Optimizer == optimizer 
-        set_optimizer_attribute(opf_m, "msg_lev", GLPK.GLP_MSG_ON)
+        set_optimizer_attribute(mod, "msg_lev", GLPK.GLP_MSG_ON)
     end
-    set_time_limit_sec(opf_m, time_limit_sec)
+    set_time_limit_sec(mod, time_limit_sec)
+    
+    # β = Dict{Tuple{String,String},Int8}()
+    # for b in nodes(sys)
+    #     for l in branches(sys)
+    #         β[get_name(b), get_name(l)] = beta(b,l)
+    #     end
+    # end
+    # β = JuMP.Containers.SparseAxisArray(β)
 
-    gens_t     = get_components(ThermalGen, system)
-    gens_h     = get_components(HydroGen, system)
-    branches   = get_components(ACBranch, system)
-    buses      = get_components(Bus, system)
-    demands    = get_components(StaticLoad, system)
-    renewables = get_components(RenewableGen, system) # Renewable modelled as negative demand
-    voll = JuMP.Containers.DenseAxisArray(
-        [rand(1000:3000, length(demands)); rand(1:30, length(renewables))], 
-        [get_name.(demands); get_name.(renewables)]
+    return OPFmodel(sys, mod, nothing, nothing, nothing)
+end
+
+"""Find value of β, β = 1 if from-bus is the bus, β = -1 if to-bus is the bus, 0 else"""
+beta(bus::Bus, branch::Branch) = bus == branch.arc.from ? 1 : bus == branch.arc.to ? -1 : 0
+function beta(bus::String, sys::System) 
+    b = get_component(Bus, sys, bus)
+    return [beta(b, l) for l in branches(sys)]
+end
+function beta(sys::System, branch::String) 
+    l = get_component(ACBranch, sys, branch)
+    return [beta(b, l) for b in nodes(sys)]
+end
+
+""" An iterator to a type of power system component """
+gens_t(sys::System) = get_components(ThermalGen, sys)
+gens_h(sys::System) = get_components(HydroGen, sys)
+branches(sys::System) = get_components(ACBranch, sys)
+nodes(sys::System) = get_components(Bus, sys)
+demands(sys::System) = get_components(StaticLoad, sys)
+renewables(sys::System) = get_components(RenewableGen, sys) # Renewable modelled as negative demand
+get_ctrl_generation(sys::System) = Iterators.flatten((gens_t(sys), gens_h(sys))) # An iterator of all controllable generators
+get_nonctrl_generation(sys::System) = Iterators.flatten((demands(sys), renewables(sys))) # An iterator of all non-controllable load and generation
+
+# it_name(::Type{T}, mos::Model) where {T <: Component} = get_name.(get_components(T,mod))
+
+""" A Vector of the Value Of Lost Load for the demand and renewables """
+make_voll(OPFm::OPFmodel) = JuMP.Containers.DenseAxisArray(
+        [rand(1000:3000, length(demands(OPFm.sys))); rand(1:30, length(renewables(OPFm.sys)))], 
+        [get_name.(demands(OPFm.sys)); get_name.(renewables(OPFm.sys))]
     )
-    println("VOLL\n", voll.data)
-    
-    @variables(opf_m, begin
-        pg0[g in [get_name.(gens_t); get_name.(gens_h)]] >= 0     # active power variables for the generators
-        pf0[l in get_name.(branches)]      # power flow on branches in base case
-        va0[b in get_name.(buses)]         # voltage angle at a node in base case
-        ls0[b in [get_name.(demands); get_name.(renewables)]] >= 0    # demand curtailment variables
+
+make_prob(OPFm::OPFmodel) = JuMP.Containers.DenseAxisArray(
+        (rand(length(OPFm.contingencies)).*(0.5-0.02).+0.02)./8760, 
+        OPFm.contingencies
+    )
+
+""" Initialize variables for dc SCOPF """
+function init_var_dc_SCOPF!(OPFm::OPFmodel)
+    p_lim = JuMP.Containers.DenseAxisArray(
+        [get_active_power_limits(g).max for g in get_ctrl_generation(OPFm.sys)],
+        get_name.(get_ctrl_generation(OPFm.sys))
+    )
+    demand = JuMP.Containers.DenseAxisArray(
+        [get_active_power(d) for d in demands(OPFm.sys)],
+        get_name.(get_nonctrl_generation(OPFm.sys))
+    )
+    @variables(OPFm.mod, begin
+        0 <= pg0[g in get_name.(get_ctrl_generation(OPFm.sys))] <= p_lim[g]     # active power variables for the generators
+            # restricted to positive numbers (can be changed to minimum active power) and less than maximum active power
+        pf0[l in get_name.(branches(OPFm.sys))]      # power flow on branches in base case
+        va0[b in get_name.(nodes(OPFm.sys))]         # voltage angle at a node in base case
+        0 <= ls0[d in get_name.(get_nonctrl_generation(OPFm.sys))] <= demand[d]    # demand curtailment variables
+            # restrict load shedding to max load per node
     end)
-
-    # find value of beta, beta = 1 if from-bus is the bus, beta = -1 if to-bus is the bus, 0 else
-    beta(bus, branch) = bus == get_arc(branch).from ? 1 : bus == get_arc(branch).to ? -1 : 0
-
-    # incerted power at each bus for the base case
-    @expression(opf_m, generators[b = buses], 
-        sum(get_bus(g) == b ? pg0[get_name(g)] : 0 for g in Iterators.flatten((gens_t, gens_h))))
-    for b in buses
-        demand = sum(get_bus(d) == b ? get_active_power(d) - ls0[get_name(d)] : 0 for d in demands)
-        renewable = sum((get_bus(d) == b ? -get_active_power(d) + ls0[get_name(d)] : 0 for d in renewables), init = 0.0)
-        c = @constraint(opf_m, generators[b] - sum(beta(b,l) * pf0[get_name(l)] for l in branches) == demand + renewable)
-        set_name(c, @sprintf("inj_p[%s]", get_name(b)))
-    end
-
-    # power flow on branch and branch limits for the base case
-    for l in branches
-        l_name = get_name(l)
-        @constraint(opf_m, pf0[l_name] - sum(beta(b,l) * va0[get_name(b)] for b in buses) / get_x(l) == 0)
-        @constraint(opf_m, -get_rate(l) <= pf0[l_name] <= get_rate(l))
-    end
-
-    # restrict active power generation to min and max values
-    for g in Iterators.flatten((gens_t, gens_h))
-        # set_lower_bound(pg0[get_name(g)], get_active_power_limits(g).min) 
-        set_upper_bound(pg0[get_name(g)], get_active_power_limits(g).max)
-    end
-
-    # restrict load shedding to max load per node
-    for d in Iterators.flatten((demands, renewables))
-        set_upper_bound(ls0[get_name(d)], get_active_power(d))
-    end
-
-    if corrective == false
-        # minimize socio-economic cost
-        @objective(opf_m, Min, 
-            sum(pg0[get_name(g)] * get_cost(get_variable(get_operation_cost(g)))[2]
-            for g in gens_t) + 
-            sum(pg0[get_name(g)] * 5 for g in gens_h) + 
-            sum(voll[d] * ls0[d] for d in [get_name.(demands); get_name.(renewables)])
-        )
-    end
-
-    contingencies = get_name.(branches)[1:10] # [get_name.(buses);get_name.(branches)]
-    if preventive == true
-        opf_m = p_scopf(opf_m, branches, buses, demands, renewables, contingencies)
-    end
-    if corrective == true
-        opf_m = pc_scopf(opf_m, gens_t, gens_h, branches, buses, demands, renewables, voll, contingencies)
-    end
-    
-    optimize!(opf_m)
-    @assert termination_status(opf_m) == LOCALLY_SOLVED
-    # for g in gens
-    #     @printf("%s = %.4f <= %.2f \n", get_name(g), value(pg0[get_name(g)]), get_active_power_limits(g).max)
-    # end
-    # for l in get_name.(demands)
-    #     value(ls0[l]) > 0.00001 ? @printf("%s = %.4f \n", l,value(ls0[l])) : print()
-    # end
-    # for l in branches
-    #     @printf("%s = %.4f <= %.2f \n", get_name(l), value(pf0[get_name(l)]), get_rate(l))
-    # end
-
-    return opf_m
+    return OPFm
 end
-
-function p_scopf(opf_m, branches, buses, demands, renewables, contingencies)
+""" Initialize variables for dc P-SCOPF """
+function init_var_dc_P_SCOPF!(OPFm::OPFmodel)
+    OPFm = init_var_dc_SCOPF!(OPFm)
     # power flow on branches in contingencies
-    @variable(opf_m, pfc[l in get_name.(branches), c in contingencies])
+    @variable(OPFm.mod, pfc[l in get_name.(branches(OPFm.sys)), c in OPFm.contingencies])
     # voltage angle at a node in contingencies
-    @variable(opf_m, vac[b in get_name.(buses), c in contingencies])
+    @variable(OPFm.mod, vac[b in get_name.(nodes(OPFm.sys)), c in OPFm.contingencies])
+    return OPFm
+end
+""" Initialize variables for dc PC-SCOPF """
+function init_var_dc_PC_SCOPF!(OPFm::OPFmodel)
+    OPFm = init_var_dc_SCOPF!(OPFm)
+    @variables(OPFm.mod, begin
+        # pgc[g in get_name.(get_ctrl_generation(OPFm.sys)), c in OPFm.contingencies] >= 0    # active power variables for the generators in contingencies 
+        pgu[g in get_name.(get_ctrl_generation(OPFm.sys)), c in OPFm.contingencies] >= 0    # active power variables for the generators in contingencies ramp up 
+        pgd[g in get_name.(get_ctrl_generation(OPFm.sys)), c in OPFm.contingencies] >= 0       # and ramp down
+        pfc[l in get_name.(branches(OPFm.sys)), c in OPFm.contingencies]      # power flow on branches in in contingencies before 
+        pfcc[l in get_name.(branches(OPFm.sys)), c in OPFm.contingencies]         # and after corrective actions
+        vac[b in get_name.(nodes(OPFm.sys)), c in OPFm.contingencies]         # voltage angle at a node in in contingencies before 
+        vacc[b in get_name.(nodes(OPFm.sys)), c in OPFm.contingencies]            # and after corrective actions
+        lsc[d in get_name.(get_nonctrl_generation(OPFm.sys)), c in OPFm.contingencies] >= 0 # load curtailment variables in in contingencies
+        # cbc[l in get_name.(branches(OPFm.sys)), c in OPFm.contingencies], Bin      # circuit breakers on branches in in contingencies before 
+        # cbcc[l in get_name.(branches(OPFm.sys)), c in OPFm.contingencies], Bin         # and after corrective actions
+    end)
+    return OPFm
+end
 
-    # find value of beta, beta = 1 if from bus is the bus, beta = -1 if to bus is the bus, 0 else
-    beta(bus, branch) = bus == get_arc(branch).from ? 1 : bus == get_arc(branch).to ? -1 : 0
+function add_obj!(OPFm::OPFmodel)
+    @objective(OPFm.mod, Min, 
+        sum(OPFm.mod[:pg0][get_name(g)] * (get_cost ∘ get_variable ∘ get_operation_cost)(g)[2]
+        for g in gens_t(OPFm.sys)) + 
+        sum(OPFm.mod[:pg0][get_name(g)] * 5 for g in gens_h(OPFm.sys)) + 
+        sum(OPFm.voll[d] * OPFm.mod[:ls0][d] for d in get_name.(get_nonctrl_generation(OPFm.sys)))
+    )
+    return OPFm
+end
+function add_obj_corrective!(OPFm::OPFmodel)
+    @objective(OPFm.mod, Min, 
+        sum((OPFm.mod[:pg0][get_name(g)] * (get_cost ∘ get_variable ∘ get_operation_cost)(g)[2] + 
+            # sum(OPFm.prob[c] * (OPFm.mod[:pgc][get_name(g),c] - OPFm.mod[:pg0][get_name(g)]) for c in contingencies))
+            sum(OPFm.prob[c] * (OPFm.mod[:pgu][get_name(g),c] #=+ OPFm.mod[:pgd][get_name(g),c]*0.1=#) for c in OPFm.contingencies))
+            for g in gens_t(OPFm.sys)
+        ) + 
+        # sum(5 * (OPFm.mod[:pg0][get_name(g)] + sum(OPFm.prob[c] * (OPFm.mod[:pgc][get_name(g),c] - OPFm.mod[:pg0][get_name(g)])
+        sum(5 * (OPFm.mod[:pg0][get_name(g)] + sum(OPFm.prob[c] * (OPFm.mod[:pgu][get_name(g),c] #=+ OPFm.mod[:pgd][get_name(g),c]*0.1=#)
+            for c in OPFm.contingencies) ) for g in gens_h(OPFm.sys)
+        ) +
+        sum(OPFm.voll[d] * (OPFm.mod[:ls0][d] + sum(OPFm.prob[c] * OPFm.mod[:lsc][d,c] for c in OPFm.contingencies)) 
+            for d in get_name.(get_nonctrl_generation(OPFm.sys)))
+    )
+    return OPFm
+end
 
-    # incerted power at each bus for the base case and contingencies
-    for b in buses
-        demand = sum(get_bus(d) == b ? get_active_power(d) - opf_m[:ls0][get_name(d)] : 0 for d in demands)
-        renewable = sum((get_bus(d) == b ? -get_active_power(d) + opf_m[:ls0][get_name(d)] : 0 for d in renewables), init = 0.0)
-        for c in contingencies
-            cc = @constraint(opf_m, opf_m[:generators][b] - sum(beta(b,l) * pfc[get_name(l),c] for l in branches) == demand + renewable)
-            set_name(cc, @sprintf("inj_pc[%s,%s]", get_name(b), c))
+""" Set voltage angle at reference bus """
+function set_ref_angle!(OPFm::OPFmodel)
+    slack = find_slack(OPFm.sys)
+    @constraint(OPFm.mod, OPFm.mod[:va0][get_name(slack)] == 0)
+    return OPFm
+end
+
+""" Incerted power at each bus for the base case """
+function add_c_bus!(OPFm::OPFmodel)
+    @expression(OPFm.mod, ctrl[b = get_name.(nodes(OPFm.sys))], 
+        sum(g.bus.name == b ? OPFm.mod[:pg0][get_name(g)] : 0 for g in get_ctrl_generation(OPFm.sys)))
+    @expression(OPFm.mod, nonctrl[b = get_name.(nodes(OPFm.sys))], 
+        sum((d.bus.name == b ? get_active_power(d) .- OPFm.mod[:ls0][get_name(d)] : 0 for d in demands(OPFm.sys)), init = 0.0) + 
+        sum((d.bus.name == b ? -get_active_power(d) .+ OPFm.mod[:ls0][get_name(d)] : 0 for d in renewables(OPFm.sys)), init = 0.0))
+    
+    for n in nodes(OPFm.sys)
+        inj = @constraint(OPFm.mod, ctrl[get_name(n)] - sum(beta(n, l) * OPFm.mod[:pf0][get_name(l)] for l in branches(OPFm.sys)) == nonctrl[get_name(n)])
+        set_name(inj, @sprintf("inj[%s]", get_name(n)))
+    end
+    @constraint(OPFm.mod, va_lim, -π/2 .<= OPFm.mod[:va0] .<= π/2)
+    return OPFm
+end
+function add_c_bus_cont!(OPFm::OPFmodel)
+    OPFm = add_c_bus!(OPFm)
+    for n in nodes(OPFm.sys)
+        for c in OPFm.contingencies
+            inj = @constraint(OPFm.mod, OPFm.mod[:ctrl][get_name(n)] - sum(beta(n,l) * OPFm.mod[:pfc][get_name(l),c] for l in branches(OPFm.sys)) == OPFm.mod[:nonctrl][get_name(n)])
+            set_name(inj, @sprintf("inj_p[%s,%s]", get_name(n), c))
         end
     end
+    @constraint(OPFm.mod, vac_lim, -π/2 .<= OPFm.mod[:vac] .<= π/2)
+    return OPFm
+end
+function add_c_bus_ccont!(OPFm::OPFmodel)
+    OPFm = add_c_bus_cont!(OPFm)
+    for n in nodes(OPFm.sys)
+        for c in OPFm.contingencies
+            inj = @constraint(OPFm.mod, 
+            # sum(get_bus(g) == n ? pgc[get_name(g),c] : 0 for g in get_ctrl_generation(OPFm)) -
+            sum(get_bus(g) == n ? OPFm.mod[:pg0][get_name(g)] + OPFm.mod[:pgu][get_name(g),c] - OPFm.mod[:pgd][get_name(g),c] : 0 for g in get_ctrl_generation(OPFm.sys)) -
+            sum(beta(n,l) * OPFm.mod[:pfcc][get_name(l),c] for l in branches(OPFm.sys)) == 
+            sum(get_bus(d) == n ? get_active_power(d) - OPFm.mod[:lsc][get_name(d),c] : 0 for d in demands(OPFm.sys)) +
+            sum(get_bus(d) == n ? -get_active_power(d) + OPFm.mod[:lsc][get_name(d),c] : 0 for d in renewables(OPFm.sys))
+            )
+            set_name(inj, @sprintf("inj_pcc[%s,%s]", get_name(n), c))
+        end
+    end
+    @constraint(OPFm.mod, vacc_lim, -π/2 .<= OPFm.mod[:vacc] .<= π/2)
+    return OPFm
+end
 
-    # power flow on branch and branch limits for the base case and contingencies
-    for l in branches
+""" Power flow on branch and branch limits for the base case """
+function add_c_branch!(OPFm::OPFmodel)
+    for l in branches(OPFm.sys)
+        @constraint(OPFm.mod, OPFm.mod[:pf0][get_name(l)] - sum(beta(n, l) * OPFm.mod[:va0][get_name(n)] for n in nodes(OPFm.sys)) / get_x(l) == 0)
+        @constraint(OPFm.mod, -get_rate(l) <= OPFm.mod[:pf0][get_name(l)] <= get_rate(l))
+    end
+    return OPFm
+end
+function add_c_branch_cont!(OPFm::OPFmodel, short_term_limit_multi::Float64 = 1.0)
+    OPFm = add_c_branch!(OPFm)
+    for l in branches(OPFm.sys)
         l_name = get_name(l)
-        for c in contingencies
+        for c in OPFm.contingencies
             a = l_name != c # zero value if l is unavailable under contingency c
-            @constraint(opf_m, pfc[l_name,c] - a * sum(beta(b,l) * vac[get_name(b),c] for b in buses) / get_x(l) == 0)
-            @constraint(opf_m, -get_rate(l) <= a * pfc[l_name,c] <= get_rate(l))
+            @constraint(OPFm.mod, OPFm.mod[:pfc][l_name,c] - a * sum(beta(b,l) * OPFm.mod[:vac][get_name(b),c] for b in nodes(OPFm.sys)) / get_x(l) == 0)
+            @constraint(OPFm.mod, -get_rate(l) * short_term_limit_multi <= a * OPFm.mod[:pfc][l_name,c] <= get_rate(l) * short_term_limit_multi)
         end
     end
+    return OPFm
+end
+function add_c_branch_ccont!(OPFm::OPFmodel, short_term_limit_multi::Float64)
+    OPFm = add_c_branch_cont!(OPFm, short_term_limit_multi)
+    for l in branches(OPFm.sys)
+        l_name = get_name(l)
+        for c in OPFm.contingencies
+            a = l_name != c # zero value if l is unavailable under contingency c
+            @constraint(OPFm.mod, OPFm.mod[:pfcc][l_name,c] - a * sum(beta(b,l) * OPFm.mod[:vacc][get_name(b),c] for b in nodes(OPFm.sys)) / get_x(l) == 0)
+            @constraint(OPFm.mod, -get_rate(l) <= a * OPFm.mod[:pfcc][l_name,c] <= get_rate(l))
+        end
+    end
+    return OPFm
+end
 
-    return opf_m
+""" Restrict active power generation to a minimum level """
+function add_min_P_gen!(OPFm::OPFmodel)
+    for g in get_ctrl_generation(OPFm.sys)
+        set_lower_bound(OPFm.mod.pg0[get_name(g)], get_active_power_limits(g).min) 
+    end
+    return OPFm
+end
+
+""" Restrict active power generation ramp to min and max values """
+function add_lim_ramp_P_gen!(OPFm::OPFmodel, ramp_minutes)
+    for g in get_ctrl_generation(OPFm.sys)
+        g_name = get_name(g)
+        for c in OPFm.contingencies
+            # @constraint(OPFm.mod, 0 <= OPFm.mod[:pg0][g_name] <= get_active_power_limits(g).max)
+            # @constraint(OPFm.mod, 0 <= OPFm.mod[:pgc][g_name,c] <= get_active_power_limits(g).max)
+            # @constraint(OPFm.mod, -get_ramp_limits(g).down * ramp_minutes <= 
+            #     OPFm.mod[:pgc][g_name,c] - OPFm.mod[:pg0][g_name] <= get_ramp_limits(g).up * ramp_minutes
+            # )
+            @constraint(OPFm.mod, 0 <= OPFm.mod[:pg0][g_name] + (OPFm.mod[:pgu][g_name,c] - OPFm.mod[:pgd][g_name,c]) <= get_active_power_limits(g).max)
+            set_upper_bound(OPFm.mod[:pgu][g_name,c], get_ramp_limits(g).up * ramp_minutes)
+            set_upper_bound(OPFm.mod[:pgd][g_name,c], get_ramp_limits(g).down * ramp_minutes)
+        end
+    end
+    return OPFm
+end
+
+""" Restrict load shedding to load (or renewable production) per node """
+function add_lim_nonctrl_shed!(OPFm::OPFmodel)
+    for d in get_nonctrl_generation(OPFm.sys), c in OPFm.contingencies
+        @constraint(OPFm.mod, OPFm.mod[:ls0][get_name(d)] + OPFm.mod[:lsc][get_name(d),c] <= get_active_power(d))
+    end
+    return OPFm
+end
+
+""" Add unit commitment """
+function add_unit_commit!(OPFm::OPFmodel)
+    @variable(OPFm.mod, u[g in get_name.(get_ctrl_generation(OPFm.sys))], Bin)
+    delete_lower_bound.(OPFm.mod.pg0)
+    delete_upper_bound.(OPFm.mod.pg0)
+    p_lim = JuMP.Containers.DenseAxisArray(
+        [get_active_power_limits(g) for g in get_ctrl_generation(OPFm.sys)],
+        get_name.(get_ctrl_generation(OPFm.sys))
+    )
+    @constraint(uc, getindex.(p_lim,1) * u <= OPFm.mod[:pg0] <= getindex.(p_lim,2) * u) 
+    JuMP.add_to_expression!(OPFm.mod.obj, sum(u[get_name(g)] * (get_cost ∘ get_variable ∘ get_operation_cost)(g)[3] for g in get_ctrl_generation(OPFm.sys)))
+    return OPFm
+end
+
+""" Return the (first) slack bus in the system. """
+function find_slack(sys::System)
+    for x in nodes(sys)
+        if x.bustype == BusTypes.REF
+            return x
+        end
+    end
 end
 
 
+""" Run a SCOPF of a power system """
+function scopf(system::System, optimizer; time_limit_sec = 60, voll = [0])
+    opfm = opfmodel(system, optimizer, time_limit_sec)
+    opfm.voll = length(voll) > 1 ? voll : make_voll(opfm)
+    opfm = init_var_dc_SCOPF!(opfm) |> set_ref_angle! |> add_c_bus! |> add_c_branch! |> add_obj!
+    optimize!(opfm.mod)
+    @assert termination_status(opfm.mod) == MOI.OPTIMAL
+    return opfm.mod
+end
 
-function pc_scopf(opf_m, gens_t, gens_h, branches, buses, demands, renewables, voll, contingencies)
+""" Run a P-SCOPF of a power system """
+function p_scopf(system::System, optimizer; time_limit_sec = 60, voll = [0])
+    opfm = opfmodel(system, optimizer, time_limit_sec)
+    opfm.voll = length(voll) > 1 ? voll : make_voll(opfm)
+    opfm.contingencies = get_name.(branches(opfm.sys)) # [1:10] # [get_name.(nodes(opfm.sys));get_name.(branches(opfm.sys))]
+    opfm = init_var_dc_P_SCOPF!(opfm) |> set_ref_angle! |> add_c_bus_cont! |> add_c_branch_cont! |> add_obj!
+
+    optimize!(opfm.mod)
+    @assert termination_status(opfm.mod) == MOI.OPTIMAL
+    return opfm.mod
+end
+
+""" Run a PC-SCOPF of a power system """
+function pc_scopf(system::System, optimizer; time_limit_sec = 60, voll = [0], prob = [0])
     ramp_minutes = 10
     short_term_limit_multi = 1.5
-    
-    @variables(opf_m, begin
-        # pgc[g in [get_name.(gens_t); get_name.(gens_h)], c in contingencies] >= 0    # active power variables for the generators in contingencies 
-        pgu[g in [get_name.(gens_t); get_name.(gens_h)], c in contingencies] >= 0    # active power variables for the generators in contingencies ramp up 
-        pgd[g in [get_name.(gens_t); get_name.(gens_h)], c in contingencies] >= 0       # and ramp down
-        pfc[l in get_name.(branches), c in contingencies]      # power flow on branches in in contingencies before 
-        pfcc[l in get_name.(branches), c in contingencies]         # and after corrective actions
-        vac[b in get_name.(buses), c in contingencies]         # voltage angle at a node in in contingencies before 
-        vacc[b in get_name.(buses), c in contingencies]            # and after corrective actions
-        lsc[d in [get_name.(demands); get_name.(renewables)], c in contingencies] >= 0 # load curtailment variables in in contingencies
-        # cbc[l in get_name.(branches), c in contingencies], Bin      # circuit breakers on branches in in contingencies before 
-        # cbcc[l in get_name.(branches), c in contingencies], Bin         # and after corrective actions
-    end)
+    opfm = opfmodel(system, optimizer, time_limit_sec)
+    opfm.contingencies = get_name.(branches(opfm.sys)) # [1:10] # [get_name.(nodes(opfm.sys));get_name.(branches(opfm.sys))]
+    opfm.voll = length(voll) > 1 ? voll : make_voll(opfm)
+    opfm.prob = length(prob) > 1 ? prob : make_prob(opfm)
+    opfm = init_var_dc_PC_SCOPF!(opfm) |> set_ref_angle! |> add_c_bus_ccont! |> add_lim_nonctrl_shed! |> add_obj_corrective!
+    opfm = add_c_branch_ccont!(opfm, short_term_limit_multi) 
+    opfm = add_lim_ramp_P_gen!(opfm, ramp_minutes)
 
-    prob = JuMP.Containers.DenseAxisArray((rand(length(contingencies)).*(0.5-0.02).+0.02)./8760, contingencies)
-    println("Prob\n", prob.data)
-    # prob = [ # spesified for the RTS-96
-    #         0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01,
-    #         0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, # generators
-    #         0.24, 0.51, 0.33, 0.39, 0.48, 0.38, 0.02, 0.36, 0.34, 0.33, 0.30, 0.44, 0.44, 0.44, 
-    #         # 0.02, 0.02, 0.02, 0.02, 0.40, 0.39, 0.40, 0.52, 0.49, 0.47, 0.38, 0.33, 0.41, 0.41, 
-    #         # 0.41, 0.35, 0.34, 0.32, 0.54, 0.35, 0.35, 0.38, 0.38, 0.34, 0.34, 0.45, 0.46 # branches
-    # ]
-    # prob /= 8760
-
-    # find value of beta, beta = 1 if from bus is the bus, beta = -1 if to bus is the bus, 0 else
-    beta(bus, branch) = bus == get_arc(branch).from ? 1 : bus == get_arc(branch).to ? -1 : 0
-
-    # minimize socio-economic cost
-    @objective(opf_m, Min, 
-        sum(get_cost(get_variable(get_operation_cost(g)))[2] * (opf_m[:pg0][get_name(g)] #=+ 
-            # sum(prob[c] * (pgc[get_name(g),c] - opf_m[:pg0][get_name(g)]) for c in contingencies))
-            sum(prob[c] * (pgu[get_name(g),c] #=+ pgd[get_name(g),c]*0.1=#) for c in contingencies)=#)
-            for g in gens_t
-        ) + 
-        # sum(5 * (opf_m[:pg0][get_name(g)] + sum(prob[c] * (pgc[get_name(g),c] - opf_m[:pg0][get_name(g)])
-        sum(5 * (opf_m[:pg0][get_name(g)] #=+ sum(prob[c] * (pgu[get_name(g),c] #=+ pgd[get_name(g),c]*0.1=#)
-            for c in contingencies) =#) for g in gens_h
-        ) +
-        sum(voll[d] * (opf_m[:ls0][d] + sum(prob[c] * lsc[d,c] for c in contingencies)) 
-            for d in [get_name.(demands); get_name.(renewables)])
-    )
-
-    # incerted power at each bus for the contingencies
-    for b in buses
-        demand = sum(get_bus(d) == b ? get_active_power(d) - opf_m[:ls0][get_name(d)] : 0 for d in demands)
-        renewable = sum((get_bus(d) == b ? -get_active_power(d) + opf_m[:ls0][get_name(d)] : 0 for d in renewables), init = 0.0)
-        for c in contingencies
-            cc = @constraint(opf_m, opf_m[:generators][b] - sum(beta(b,l) * pfc[get_name(l),c] for l in branches) == demand + renewable)
-            set_name(cc, @sprintf("inj_pc[%s,%s]", get_name(b), c))
-            ccc = @constraint(opf_m, 
-                # sum(get_bus(g) == b ? pgc[get_name(g),c] : 0 for g in Iterators.flatten((gens_t, gens_h))) -
-                sum(get_bus(g) == b ? opf_m[:pg0][get_name(g)] + pgu[get_name(g),c] - pgd[get_name(g),c] : 0 for g in Iterators.flatten((gens_t, gens_h))) -
-                sum(beta(b,l) * pfcc[get_name(l),c] for l in branches) == 
-                sum(get_bus(d) == b ? get_active_power(d) - lsc[get_name(d),c] : 0 for d in demands) +
-                sum(get_bus(d) == b ? -get_active_power(d) + lsc[get_name(d),c] : 0 for d in renewables)
-            )
-            set_name(ccc, @sprintf("inj_pcc[%s,%s]", get_name(b), c))
-        end
-    end
-    
-    # power flow on branch and branch limits for the contingencies
-    for l in branches
-        l_name = get_name(l)
-        for c in contingencies
-            a = l_name != c # zero value if l is unavailable under contingency c
-            @constraints(opf_m, begin
-                pfc[l_name,c] - a * sum(beta(b,l) * vac[get_name(b),c] for b in buses) / get_x(l) == 0
-                -get_rate(l)*short_term_limit_multi <= a * pfc[l_name,c] <= get_rate(l)*short_term_limit_multi
-                pfcc[l_name,c] - a * sum(beta(b,l) * vacc[get_name(b),c] for b in buses) / get_x(l) == 0
-                -get_rate(l) <= a * pfcc[l_name,c] <= get_rate(l)
-                # pfc[l_name,c] - cbc[l_name,c] * a * sum(beta(b,l) * vac[get_name(b),c] for b in buses) / get_x(l) == 0
-                # -get_rate(l)*short_term_limit_multi <= cbc[l_name,c] * a * pfc[l_name,c] <= get_rate(l)*short_term_limit_multi
-                # pfcc[l_name,c] - cbcc[l_name,c] * a * sum(beta(b,l) * vacc[get_name(b),c] for b in buses) / get_x(l) == 0
-                # -get_rate(l) <= cbcc[l_name,c] * a * pfcc[l_name,c] <= get_rate(l)
-            end)
-        end
-    end
-
-    # restrict active power generation to min and max values
-    for g in Iterators.flatten((gens_t, gens_h))
-        g_name = get_name(g)
-        for c in contingencies
-            # @constraint(opf_m, 0 <= opf_m[:pg0][g_name] <= get_active_power_limits(g).max)
-            # @constraint(opf_m, 0 <= pgc[g_name,c] <= get_active_power_limits(g).max)
-            # @constraint(opf_m, -get_ramp_limits(g).down * ramp_minutes <= 
-            #     pgc[g_name,c] - opf_m[:pg0][g_name] <= get_ramp_limits(g).up * ramp_minutes
-            # )
-            @constraint(opf_m, 0 <= opf_m[:pg0][g_name] + (pgu[g_name,c] - pgd[g_name,c]) <= get_active_power_limits(g).max)
-            set_upper_bound(pgu[g_name,c], get_ramp_limits(g).up * ramp_minutes)
-            set_upper_bound(pgd[g_name,c], get_ramp_limits(g).down * ramp_minutes)
-        end
-    end
-
-    # restrict load shedding to load per node
-    for d in Iterators.flatten((demands, renewables)), c in contingencies
-        @constraint(opf_m, opf_m[:ls0][get_name(d)] + lsc[get_name(d),c] <= get_active_power(d))
-    end
-
-    return opf_m
+    optimize!(opfm.mod)
+    @assert termination_status(opfm.mod) == MOI.OPTIMAL
+    return opfm.mod
 end
 
-
-# # corrective control failure probability
-# phi(p, n) = sum((-1)^k * p^k * binomial(n,k) for k in 1:n)
-
-# # severity function
-# @expression(opf_m, severity, sum(voll[d] * lse[d] for d in get_name.(demands)))
-
-
-# for l in get_name.(get_components(ACBranch, ieee_rts))
-#     for g in get_name.(get_components(Generator, ieee_rts))
-#         if value.(results[:pgu])[g,l] > 0.00001 
-#             @printf("%s: \t%s \t= %.5f \n", l, g, value.(results[:pgu])[g,l])
-#         end
-#     end
-# end
-        
-# add_system_data_to_json()
-# system_data = System("system_data.json")
-# results = opf_model(system_data, Ipopt.Optimizer)
-# value.(results[:pl])
-
-function hot_start(model)
-    x = all_variables(model)
-    x_solution = value.(x)
-    set_start_value.(x, x_solution)
-    optimize!(model)
-end

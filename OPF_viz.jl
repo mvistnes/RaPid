@@ -1,5 +1,4 @@
 using PowerSystems
-const PSY = PowerSystems
 using JuMP
 using Ipopt # LP, SOCP, Nonconvex
 using Gurobi # LP, SOCP, Integer
@@ -9,6 +8,10 @@ using StatsPlots
 using Printf
 using PowerSystemCaseBuilder
 using Test
+include("utils.jl")
+include("N-1_SCOPF.jl")
+include("short_long_SCOPF.jl")
+
 
 scatterplot(model, system, name, type) = 
     scatter(
@@ -32,7 +35,8 @@ function scatter_all(model, system; sys_name = "")
         try
             plt = scatterplot(model, system, name[1], name[2])
             display(plt)
-            savefig(plt, @sprintf("%s%s.pdf", sys_name, name[1]))
+            path = mkpath(joinpath("results",sys_name))
+            savefig(plt, joinpath(path,@sprintf("%s.pdf",name[1])))
         catch e
             @printf("No %s. ", name[1])
         end
@@ -46,16 +50,32 @@ function print_variabel(model, system, name, type)
 end
 
 ieee_rts = System("ieee_rts.json")
-scopf_m = scopf(ieee_rts, Gurobi.Optimizer, corrective=true)
-scopf_m = sl_scopf(ieee_rts, Gurobi.Optimizer)
-scatterplot(scopf_m, ieee_rts, :pg0, Generator)
-print_variabel(scopf_m, ieee_rts, :pg0, Generator)
+voll = JuMP.Containers.DenseAxisArray(
+    [rand(1000:3000, length(get_components(StaticLoad, ieee_rts))); rand(1:30, length(get_components(RenewableGen, ieee_rts)))], 
+    [get_name.(get_components(StaticLoad, ieee_rts)); get_name.(get_components(RenewableGen, ieee_rts))]
+)
+prob = JuMP.Containers.DenseAxisArray(
+    [ # spesified for the RTS-96
+    # 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01,
+    # 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, # generators
+    0.24, 0.51, 0.33, 0.39, 0.48, 0.38, 0.02, 0.36, 0.34, 0.33, 0.30, 0.44, 0.44, 0.44, 
+    0.02, 0.02, 0.02, 0.02, 0.40, 0.39, 0.40, 0.52, 0.49, 0.47, 0.38, 0.33, 0.41, 0.41, 
+    0.41, 0.35, 0.34, 0.32, 0.54, 0.35, 0.35, 0.38, 0.38, 0.34, 0.34, 0.45, 0.46 # branches
+    ],
+    get_name.(get_components(ACBranch, ieee_rts))
+)
+prob /= 8760
+model = scopf(ieee_rts, Gurobi.Optimizer)
+model = pc_scopf(ieee_rts, Gurobi.Optimizer, voll=voll, prob=prob)
+sl_model = sl_scopf(ieee_rts, Gurobi.Optimizer, voll=voll, prob=prob)
+scatterplot(model, ieee_rts, :pg0, Generator)
+print_variabel(model, ieee_rts, :pg0, Generator)
 
-get_active_power.(get_components(StaticLoad, ieee_rts)) - value.(pc_scopf_m[:lsd0]).data
-[value.(scopf_m[:pgu]).data[1,:] , value.(scopf_m[:pgd]).data[1,:]]
+get_active_power.(get_components(StaticLoad, ieee_rts)) - value.(pc_model[:lsd0]).data
+[value.(model[:pgu]).data[1,:] , value.(model[:pgd]).data[1,:]]
 
 for d in get_components(StaticLoad, ieee_rts)
-    set_active_power!(d, get_active_power(d)*1.5) 
+    set_active_power!(d, get_active_power(d)/1.4*1.2)
 end
 
 function print_cb()
@@ -69,7 +89,7 @@ function print_cb()
             if c == l
                 print("x     ")
             else
-                print(value(scopf_m[:cbc][l,c]) > 0.5 ? 1 : 0, "     ")
+                print(value(model[:cbc][l,c]) > 0.5 ? 1 : 0, "     ")
             end
         end
     end
@@ -77,17 +97,25 @@ end
 
 plt = scatter(
     [get_name.(get_components(Branch, ieee_rts))], 
-    [value.(scopf_m[:pf0]).data ./ get_rate.(get_components(Branch, ieee_rts))], 
+    [value.(model[:pf0]).data ./ get_rate.(get_components(Branch, ieee_rts))], 
     dpi=100, 
     size=(600,600), 
     label = false, 
     rotation=90, 
     title = "pf0/rate"
 )
-savefig(plt, "pf0_rate_Ipopt.pdf")
+path = mkpath(joinpath("results","N-1_SCOPF_Gurobi"))
+savefig(plt, joinpath(path,"pf0_rate.pdf"))
 
-objective_value(p_opf_m) + objective_value(pc_opf_m)
-objective_value(scopf_m)
+objective_value(model)
+objective_value(sl_model[2])
 
-
-A = JuMP.Containers.DenseAxisArray((rand(length(gens_h)).*(0.5-0.02).+0.02)./8760, get_name.(gens_h))
+# for g in gens
+#     @printf("%s = %.4f <= %.2f \n", get_name(g), value(pg0[get_name(g)]), get_active_power_limits(g).max)
+# end
+# for l in get_name.(demands)
+#     value(ls0[l]) > 0.00001 ? @printf("%s = %.4f \n", l,value(ls0[l])) : print()
+# end
+# for l in branches
+#     @printf("%s = %.4f <= %.2f \n", get_name(l), value(pf0[get_name(l)]), get_rate(l))
+# end
