@@ -23,61 +23,61 @@ end
 Vectorize tables
 
 Input:
-    - buses: a table with columns of ibus (bus number), type (PV=1, PQ=2, ref=3), and Pd.
-    ! currently ref=0, change this!
+    - nodes: a table with columns of ibus (bus number), type (PV=1, PQ=2, ref=3), and Pd.
     - branches: a table with columns of fbus (from bus number), tbus (to bus number), 
     and x (series reactance).
 
 Output: 
-    - buses_vec, branches_vec: vectors of the input
+    - nodes_vec, branches_vec: vectors of the input
     - convert_bus: conversion between the bus number and place in the vectors
 """
-function vectorize(buses::DataFrame, branches::DataFrame)
-    buses_vec = [Bus(i, TypeB(bus.type), bus.Pd, bus.Qd) for (i,bus) in enumerate(eachrow(buses))]
-    slack = size(buses_vec,1)
-    if buses.type[end] != Int(ref::TypeB) # Need the slack bus as the last bus
-        for (i, row) in enumerate(eachrow(buses))
-            if row.type == Int(ref::TypeB)
+function vectorize(nodes::DataFrame, branches::DataFrame)
+    nodes_vec = [Bus(i, TypeB(bus.type), bus.Pd, bus.Qd) for (i,bus) in enumerate(eachrow(nodes))]
+    slack = size(nodes_vec,1)
+    if nodes_vec[end].type != ref::TypeB # Need the slack bus as the last bus
+        for (i, x) in enumerate(nodes_vec)
+            if x.type == ref::TypeB
                 slack = i
-                buses_vec[i], buses_vec[end] = buses_vec[end], buses_vec[i]
+                nodes_vec[i], nodes_vec[end] = nodes_vec[end], nodes_vec[i]
                 break
             end
         end
     end
     convert_bus = Dict()
-    for (i,bus) in enumerate(eachrow(buses))
+    for (i,bus) in enumerate(eachrow(nodes))
         convert_bus[bus.ibus] = ifelse(bus.type == Int(ref::TypeB), slack, i)
     end
     branches_vec = [Branch(convert_bus[branch.fbus], convert_bus[branch.tbus], branch.r, branch.x) 
-                    for (i,branch) in enumerate(eachrow(branches))]
-    return buses_vec, branches_vec, convert_bus
+                    for branch in eachrow(branches)]
+    return nodes_vec, branches_vec, convert_bus
 end
-function move_ref_last!(buses::Vector{Bus}, branches::Vector{Bus})
-    slack = size(buses,1)
-    if buses.type[end] != Int(ref::TypeB) # Need the slack bus as the last bus
-        for (i, row) in enumerate(eachrow(buses))
-            if row.type == Int(ref::TypeB)
+function move_ref_last!(nodes::Vector{Bus}, branches::Vector{Bus})
+    slack = size(nodes,1)
+    if nodes[end].type != ref::TypeB # Need the slack bus as the last bus
+        for (i, row) in enumerate(nodes)
+            if row.type == ref::TypeB
                 slack = i
-                buses[i], buses[end] = buses[end], buses[i]
+                nodes[i], nodes[end] = nodes[end], nodes[i]
                 break
             end
         end
     end
     convert_bus = Dict()
-    for (i,bus) in enumerate(eachrow(buses))
-        convert_bus[bus.ibus] = ifelse(bus.type == Int(ref::TypeB), slack, i)
+    for (i,bus) in enumerate(nodes)
+        convert_bus[bus.ibus] = ifelse(bus.type == ref::TypeB, slack, i)
     end
     branches = [Branch(convert_bus[branch.fbus], convert_bus[branch.tbus], branch.r, branch.x) 
-                    for (i,branch) in enumerate(branches)]
-    return buses, branches, convert_bus
+                    for branch in branches]
+    return nodes, branches, convert_bus
 end
 
 """Bus to position"""
-function makeB_id(buses)
-    B_id = zeros(Int64, size_J) # bus number to matrix position
+function makeB_id(nodes::Vector{Bus})
+    sizeJ = sum(bus.type for bus in nodes if bus.type != ref::TypeB) # size of jacobi matrix
+    B_id = zeros(Int64, sizeJ) # bus number to matrix position
     c1 = 0 # counts bus not slack
-    c2 = 0 # counts PQ buses
-    for (i,bus) in enumerate(buses)
+    c2 = 0 # counts PQ nodes
+    for (i,bus) in enumerate(nodes)
         if bus.type != ref::TypeB
             B_id[c1] = i
             c1 += 1
@@ -87,18 +87,18 @@ function makeB_id(buses)
             end
         end
     end
-    return B_id
+    return B_id, sizeJ
 end
 
 """Make the admittance bus matrix"""
-function makeYbus(buses::DataFrame, branches::DataFrame)
-    return makeYbus(collect(eachrow(buses)), collect(eachrow(branches)))
+function makeYbus(nodes::DataFrame, branches::DataFrame)
+    return makeYbus(collect(eachrow(nodes)), collect(eachrow(branches)))
 end
-function makeYbus(buses::Vector{Bus}, branches::Vector{Branch})
-    Ybus = spzeros(ComplexF32, size(buses,1), size(buses,1))
+function makeYbus(nodes::Vector{Bus}, branches::Vector{Branch})
+    Ybus = spzeros(ComplexF32, size(nodes,1), size(nodes,1))
     
     # Calculating the diagonal elements
-    for i in 1:size(buses,1), branch in branches
+    for i in 1:size(nodes,1), branch in branches
         if i == branch.fbus || i == branch.tbus
             Ybus[i,i] += 1/(branch.r + branch.x*im) + branch.b*im / 2
         end
@@ -143,18 +143,18 @@ Import a Power System description to two DataFrames
 (Bus and Branch) on the MatPower format
 """
 function importXLSX(filename::String)
-    buses = DataFrame(XLSX.readtable(filename, "BusData")...)
-    rename!(buses, [:ibus, :type, :vmag, :vang, :Pd, :Qd, :Pmax, :Qmax])
+    nodes = DataFrame(XLSX.readtable(filename, "BusData")...)
+    rename!(nodes, [:ibus, :type, :vmag, :vang, :Pd, :Qd, :Pmax, :Qmax])
     branches = DataFrame(XLSX.readtable(filename, "BranchData")...)
     rename!(branches, [:fbus, :tbus, :r, :x, :b])
-    return buses, branches
+    return nodes, branches
 end
 
-# buses, branches = importXLSX("System_data_69bus.xlsx")
-# @time Ybus = makeYbus(buses,branches)
+# nodes, branches = importXLSX("System_data_69bus.xlsx")
+# @time Ybus = makeYbus(nodes,branches)
 # display(Ybus)
 
 # using BenchmarkTools
-# @benchmark DCPowerFlow.dcopf!(buses, branches) setup=(buses, branches = SystemDescription.importXLSX("System_data_69bus.xlsx"))
+# @benchmark DCPowerFlow.dcopf!(nodes, branches) setup=(nodes, branches = SystemDescription.importXLSX("System_data_69bus.xlsx"))
     
 end

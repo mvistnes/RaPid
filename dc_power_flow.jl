@@ -13,29 +13,29 @@ DC power flow calculation of a power system.
 No losses are accounted for.
 
 Input: 
-    - buses: a table with columns of ibus (bus number), type (PV=1, PQ=2, ref=3), and Pd.
+    - nodes: a table with columns of ibus (bus number), type (PV=1, PQ=2, ref=3), and Pd.
     - branches: a table with columns of fbus (from bus number), tbus (to bus number), 
     and x (series reactance).
 
 Output: 
-    - buses: extended with
+    - nodes: extended with
         - Pd: vector of real power into each bus (and with reactive power assemed 0 pu).
         - theta: vector of voltage angle at each bus (and with voltage magnitude assumed 1.0 pu).
 """
-function dcpf!(buses::DataFrame, branches::DataFrame)
-    buses_vec, branches_vec, convert_bus = vectorize(buses, branches)
-    P_bus, theta, branches[!, :P] = dcpf!(buses_vec, branches_vec)
-    buses[!, :P] = zeros(size(buses,1))
-    buses[!, :theta] = zeros(size(buses,1))
-    for bus in eachrow(buses)
+function dcpf!(nodes::DataFrame, branches::DataFrame)
+    nodes_vec, branches_vec, convert_bus = vectorize(nodes, branches)
+    P_bus, theta, branches[!, :P] = dcpf!(nodes_vec, branches_vec)
+    nodes[!, :P] = zeros(size(nodes,1))
+    nodes[!, :theta] = zeros(size(nodes,1))
+    for bus in eachrow(nodes)
         bus.P = P_bus[convert_bus[bus.ibus]]
         bus.theta = theta[convert_bus[bus.ibus]]
     end
-    return buses, branches
+    return nodes, branches
 end
-function dcpf!(buses::Vector{Bus}, branches::Vector{Branch})
-    H = buildH(buses, branches)
-    P = [buses[i].Pd for i in range(1,length(buses)-1)]
+function dcpf!(nodes::Vector{Bus}, branches::Vector{Branch})
+    H = buildH(nodes, branches)
+    P = [nodes[i].Pd for i in range(1,length(nodes)-1)]
     theta = calcangles(P, H)
     P_bus, P_branch = calcP(theta, branches)
     return P_bus, theta, P_branch
@@ -49,19 +49,19 @@ Input: as dcpf!().
 
 Output: an admittance matrix based on the line series reactances.
 """
-function buildH(buses::Vector{Bus}, branches::Vector{Branch})
-    H = zeros(Float64, size(buses,1)-1, size(buses,1)-1)
+function buildH(nodes::Vector{Bus}, branches::Vector{Branch})
+    H = zeros(Float64, size(nodes,1)-1, size(nodes,1)-1)
     for branch in branches
         (f, t) = (branch.fbus, branch.tbus)
         y = 1 / branch.x
-        if buses[f].type != ref::TypeB # If the from bus is NOT a slack bus
+        if nodes[f].type != ref::TypeB # If the from bus is NOT a slack bus
             H[f,f] += y
-            if buses[t].type != ref::TypeB # If the to bus is NOT a slack bus
+            if nodes[t].type != ref::TypeB # If the to bus is NOT a slack bus
                 H[t,t] += y
                 H[f,t] = -y
                 H[t,f] = -y
             end
-        elseif buses[t].type != ref::TypeB
+        elseif nodes[t].type != ref::TypeB
             H[t,t] += y
         end
     end
@@ -117,18 +117,18 @@ Input: as dcpf!().
 
 Output: a matrix of the distribution factors.
 """
-function distr_factors(buses, branches)
-    buses_vec, branches_vec, convert_bus = vectorize(buses, branches)
-    H = lu(buildH(buses_vec, branches_vec))
-    a = zeros(Float64, size(branches_vec,1), size(buses_vec,1)-1) # Container for the distribution factors
+function distr_factors(nodes, branches)
+    nodes_vec, branches_vec, convert_bus = vectorize(nodes, branches)
+    H = lu(buildH(nodes_vec, branches_vec))
+    a = zeros(Float64, size(branches_vec,1), size(nodes_vec,1)-1) # Container for the distribution factors
     for (i, branch) in enumerate(branches_vec)
         if branch.x != ref::TypeB
-            deltaPd = zeros(Float64, size(buses_vec,1)-1) # Container for the right side
+            deltaPd = zeros(Float64, size(nodes_vec,1)-1) # Container for the right side
             (f, t) = (branch.fbus, branch.tbus) # (f)rom and (t)o bus at this branch
-            if buses_vec[f].type != ref::TypeB # If the bus is NOT a slack bus
+            if nodes_vec[f].type != ref::TypeB # If the bus is NOT a slack bus
                 deltaPd[f] = 1 / branch.x
             end
-            if buses_vec[t].type != ref::TypeB # If the bus is NOT a slack bus
+            if nodes_vec[t].type != ref::TypeB # If the bus is NOT a slack bus
                 deltaPd[t] = -1 / branch.x
             end
             a[i, :] = H \ deltaPd # append factors to matrix
@@ -137,10 +137,10 @@ function distr_factors(buses, branches)
     return a
 end
 
-function print_distr_factors(buses, branches, a)
+function print_distr_factors(nodes, branches, a)
     # Nicely printed distribution factors
     print("Distribution factors\nBus  ")
-    for e in buses
+    for e in nodes
         if e.type != ref::TypeB
             @printf("%12d", e.ibus)
         end
@@ -158,18 +158,18 @@ end
 
 
 """
-Prints all buses with voltage magnitude and angle
+Prints all nodes with voltage magnitude and angle
 
 Input: 
- - buses: as dcpf!().
+ - nodes: as dcpf!().
  - P: vector of real power into each bus.
  - theta: vector of voltage angle at each bus.
 """
-function printsystem(buses, Pd::Vector{AbstractFloat}, theta::Vector{AbstractFloat})
+function printsystem(nodes, Pd::Vector{AbstractFloat}, theta::Vector{AbstractFloat})
     println("\n Bus \tVoltage ang \tActive power")
     println("-------------------------------------")
     for i in 1:length(Pd)
-        @printf("%4d \t%8.4f \t%8.4f\n", buses.ibus[i], theta[i], P[i])
+        @printf("%4d \t%8.4f \t%8.4f\n", nodes.ibus[i], theta[i], P[i])
     end
     println("")
 end

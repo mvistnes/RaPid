@@ -4,6 +4,8 @@ module NewtonRaphson
 
 using LinearAlgebra
 using Printf
+include("system_description.jl")
+import .SystemDescription
 
 
 """
@@ -15,42 +17,41 @@ lim is the convergance limit
 
 print_out = True -> state for each iteration
 """
-function nr_method!(buses::DataFrame, branches::DataFrame, it_max::Unsigned, lim::AbstractFloat; print_out::Bool = false)
-    buses_vec, branches_vec, convert_bus = vectorize(buses, branches)
-    it, buses, branches = nr_method!(buses_vec, branches_vec, it_max, lim, print_out)
-    buses[!, :P] = zeros(size(buses,1))
-    buses[!, :Q] = zeros(size(buses,1))
-    buses[!, :Vm] = zeros(size(buses,1))
-    buses[!, :Va] = zeros(size(buses,1))
-    for bus in eachrow(buses)
+function nr_method!(nodes::DataFrame, branches::DataFrame, it_max::UInt64, lim::Float64; print_out::Bool = false)
+    nodes_vec, branches_vec, convert_bus = vectorize(nodes, branches)
+    it, nodes_vec, branches_vec = nr_method!(nodes_vec, branches_vec, it_max, lim, print_out)
+    nodes[!, :P] = zeros(size(nodes,1))
+    nodes[!, :Q] = zeros(size(nodes,1))
+    nodes[!, :Vm] = zeros(size(nodes,1))
+    nodes[!, :Va] = zeros(size(nodes,1))
+    for bus in eachrow(nodes)
         bus.P = P_bus[convert_bus[bus.ibus]]
         bus.Q = Q_bus[convert_bus[bus.ibus]]
         bus.Vm = Vm[convert_bus[bus.ibus]]
         bus.Va = Va[convert_bus[bus.ibus]]
     end
-    return buses, branches
+    return nodes, branches
 end
-function nr_method!(buses::Vector{Bus}, branches::Vector{Branch}, it_max::Unsigned, lim::AbstractFloat; print_out::Bool = false)
-    numB = length(buses) # number of buses
-    sizeJ = sum(bus.type for bus in buses if bus.type != Int(ref::TypeB)) # size of jacobi matrix
+function nr_method!(nodes::Vector{Bus}, branches::Vector{Branch}, it_max::UInt64, lim::Float64; print_out::Bool = false)
+    numB = length(nodes) # number of nodes
+    B_id, sizeJ = makeB_id(nodes)
     deltaPQ = zeros(Float64, sizeJ)
-    PQ_init = [buses[B_id[i]].P for i in range(numB-1); buses[B_id[i]].Q for i in range(numB-1, sizeJ)]
-    V = [buses[B_id[i]].Va for i in range(numB-1); buses[B_id[i]].Vm for i in range(numB-1, sizeJ)]
+    PQ_init = [nodes[B_id[i]].P for i in range(numB-1); nodes[B_id[i]].Q for i in range(numB-1, sizeJ)]
+    V = [nodes[B_id[i]].Va for i in range(numB-1); nodes[B_id[i]].Vm for i in range(numB-1, sizeJ)]
 
     it = 1
     jac = zeros(Float64, sizeJ,sizeJ)
-    Ybus = makeYbus(buses, branches)
-    B_id = makeB_id(buses)
+    Ybus = makeYbus(nodes, branches)
     while true
-        buses, branches = PQ_update(Ybus, buses, branches, B_id)
-        jac = build_jacobi(Ybus, jac, buses, branches, B_id)
+        nodes, branches = PQ_update(Ybus, nodes, branches, B_id)
+        jac = build_jacobi(Ybus, jac, nodes, branches, B_id)
         deltaV = linear_solve(deltaPQ, jac)
-        buses = V_update(buses, deltaV, B_id)
+        nodes = V_update(nodes, deltaV, B_id)
         if print_out
             print("\n-------------------------  Iteration", it, " -------------------------")
             print_jacobi(jac)
             print_vectors(deltaV, deltaPQ)
-            print_buses(buses)
+            print_nodes(nodes)
         end
 
         # convergance and iteration check
@@ -59,7 +60,7 @@ function nr_method!(buses::Vector{Bus}, branches::Vector{Branch}, it_max::Unsign
     end
 
     if !print_out
-        print_buses(buses)
+        print_nodes(nodes)
     end
     if it >= it_max
         print("\nNo converge in ", it, " iterations\n")
@@ -68,14 +69,14 @@ function nr_method!(buses::Vector{Bus}, branches::Vector{Branch}, it_max::Unsign
     else
         print("\nConvergance in ", it, " iterations\n")
     end
-    return it, buses, branches
+    return it, nodes, branches
 end
 
-function print_buses(buses)
+function print_nodes(nodes)
     println(" Bus \tVoltage mag \tVoltage ang \tActive power \tReactive power")
     println("-------------------------------------------------------------------")
-    [println("% 4d", " \t% 8.4f"^4, buses[i].id, buses[i].Vm, buses[i].Va, 
-            buses[i].P, buses[i].Q) for i in range(1,length(buses))];
+    [println("% 4d", " \t% 8.4f"^4, nodes[i].id, nodes[i].Vm, nodes[i].Va, 
+            nodes[i].P, nodes[i].Q) for i in range(1,length(nodes))];
 end
 
 function print_vectors(deltaV, deltaPQ)
@@ -100,7 +101,7 @@ Tij(Gij, Bij, Vai, Vaj) = return Gij*cos(Vai-Vaj) + Bij*sin(Vai-Vaj)
 Uij(Gij, Bij, Vai, Vaj) = return Gij*sin(Vai-Vaj) - Bij*cos(Vai-Vaj)
 
 """Power equation at the bus"""
-function power(Ybus, buses, bus)
+function power(Ybus, nodes, bus)
     p = 0
     q = 0
     for i in range(numB)
@@ -109,11 +110,11 @@ function power(Ybus, buses, bus)
         b = imag(y)
         if g != 0 # If there is a line
             if i == bus.id
-                p += buses[i].Vm * g
-                q -= buses[i].Vm * b
+                p += nodes[i].Vm * g
+                q -= nodes[i].Vm * b
             else
-                p += buses[i].Vm * Tij(g, b, bus.Va, buses[i].Va)
-                q += buses[i].Vm * Uij(g, b, bus.Va, buses[i].Va)
+                p += nodes[i].Vm * Tij(g, b, bus.Va, nodes[i].Va)
+                q += nodes[i].Vm * Uij(g, b, bus.Va, nodes[i].Va)
             end
         end
     end
@@ -122,20 +123,20 @@ end
 
 
 """Calculate the power and the power difference from initial at each bus"""
-function PQ_update(Ybus, buses, branches, B_id)
+function PQ_update(Ybus, nodes, branches, B_id)
     #Calculating the power at each bus
     for i in range(numB)
-        buses[i].P, buses[i].Q = power(Ybus, buses, buses[i])
+        nodes[i].P, nodes[i].Q = power(Ybus, nodes, nodes[i])
     end
     
     #Find the differences from initial
     for i in range(numB-1)
-        deltaPQ[i,0] = buses[B_id[i]].P_init - buses[B_id[i]].P
+        deltaPQ[i,0] = nodes[B_id[i]].P_init - nodes[B_id[i]].P
     end
     for i in range(numB-1, sizeJ)
-        deltaPQ[i,0] = buses[B_id[i]].Q_init - buses[B_id[i]].Q
+        deltaPQ[i,0] = nodes[B_id[i]].Q_init - nodes[B_id[i]].Q
     end
-    return buses, branches
+    return nodes, branches
 end
 function PQ_update(Ybus, PQ, PQ_init)
     for i in 1:numB
@@ -147,24 +148,24 @@ end
 
 
 """Update the voltages and angles from deltaV"""
-function V_update(buses, deltaV, B_id)
+function V_update(nodes, deltaV, B_id)
     for i in range(numB-1)
-        buses[B_id[i]].Va += deltaV[i,0]
+        nodes[B_id[i]].Va += deltaV[i,0]
     end
     for i in range(numB-1, sizeJ)
-        buses[B_id[i]].Vm += deltaV[i,0]
+        nodes[B_id[i]].Vm += deltaV[i,0]
     end
-    return buses
+    return nodes
 end
 function V_update(V, deltaV)
     return V .+ deltaV
 end
 
 """Jacobi matrix calculation"""
-function build_jacobi(Ybus, jac, buses, branches, B_id)
+function build_jacobi(Ybus, jac, nodes, branches, B_id)
     # all sub-matrices have different equations for the diagonal
     # elements and the off-diagonal elements
-    numB = length(buses) # number of buses
+    numB = length(nodes) # number of nodes
 
     # J1: dP/dTheta
     for i in range(numB-1)
@@ -172,9 +173,9 @@ function build_jacobi(Ybus, jac, buses, branches, B_id)
         for j in range(numB-1)
             J = B_id[j]
             jac[i,j] = ifelse(i == j, 
-                -buses[I].Q - imag(Ybus[I,I]) * buses[I].Vm^2, 
-                buses[I].Vm * buses[J].Vm * Uij(real(Ybus[I,J]), 
-                    imag(Ybus[I,J]), buses[I].Va, buses[J].Va)
+                -nodes[I].Q - imag(Ybus[I,I]) * nodes[I].Vm^2, 
+                nodes[I].Vm * nodes[J].Vm * Uij(real(Ybus[I,J]), 
+                    imag(Ybus[I,J]), nodes[I].Va, nodes[J].Va)
             )
         end
     end
@@ -185,9 +186,9 @@ function build_jacobi(Ybus, jac, buses, branches, B_id)
         for j in range(numB-1, sizeJ)
             J = B_id[j]
             jac[i,j] = ifelse(I == J, 
-                buses[I].P / buses[I].Vm + real(Ybus[I,I]) * buses[I].Vm,
-                buses[I].Vm * Tij(real(Ybus[I,J]), imag(Ybus[I,J]), 
-                    buses[I].Va, buses[J].Va)
+                nodes[I].P / nodes[I].Vm + real(Ybus[I,I]) * nodes[I].Vm,
+                nodes[I].Vm * Tij(real(Ybus[I,J]), imag(Ybus[I,J]), 
+                    nodes[I].Va, nodes[J].Va)
             )
         end
     end
@@ -198,9 +199,9 @@ function build_jacobi(Ybus, jac, buses, branches, B_id)
         for j in range(numB-1)
             J = B_id[j]
             jac[i,j] = ifelse(I == J, 
-                buses[I].P - real(Ybus[I,I]) * buses[I].Vm^2,
-                -buses[I].Vm * buses[J].Vm * Tij(real(Ybus[I,J]), 
-                    imag(Ybus[I,J]), buses[I].Va, buses[J].Va)
+                nodes[I].P - real(Ybus[I,I]) * nodes[I].Vm^2,
+                -nodes[I].Vm * nodes[J].Vm * Tij(real(Ybus[I,J]), 
+                    imag(Ybus[I,J]), nodes[I].Va, nodes[J].Va)
             )
         end
     end
@@ -211,9 +212,9 @@ function build_jacobi(Ybus, jac, buses, branches, B_id)
         for j in range(numB-1, sizeJ)
             J = B_id[j]
             jac[i,j] = ifelse(I == J, 
-                buses[I].Q / buses[I].Vm - imag(Ybus[I,I]) * buses[I].Vm,
-                buses[I].Vm * Uij(real(Ybus[I,J]), imag(Ybus[I,J]), 
-                    buses[I].Va, buses[J].Va)
+                nodes[I].Q / nodes[I].Vm - imag(Ybus[I,I]) * nodes[I].Vm,
+                nodes[I].Vm * Uij(real(Ybus[I,J]), imag(Ybus[I,J]), 
+                    nodes[I].Va, nodes[J].Va)
             )
         end
     end

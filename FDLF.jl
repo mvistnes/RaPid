@@ -17,44 +17,44 @@ Primal Fast Decoupled Power Flow = "pri" and
 Dual Fast Decoupled Power Flow = "dual"
 
 print_out = True -> state for each iteration"""
-function fdlf(buses::Vector{Bus}, branches::Vector{Branch}, it_max::Int, lim::AbstractFloat; method = "std", print_out = false)
-    numB = size(buses,1)
-    sizeJ = sum(bus.type for bus in buses if bus.type != Int(ref::TypeB)) # size of jacobi matrix
+function fdlf(nodes::Vector{Bus}, branches::Vector{Branch}, it_max::Int, lim::AbstractFloat; method = "std", print_out = false)
+    numB = size(nodes,1)
+    sizeJ = sum(bus.type for bus in nodes if bus.type != Int(ref::TypeB)) # size of jacobi matrix
 
     # Assuming 1 slack bus
     # building the two sub-matrices
-    Ybus = makeYbus(buses, branches)
-    B_id = makeB_id(buses)
+    Ybus = makeYbus(nodes, branches)
+    B_id = makeB_id(nodes)
     it = 1
     if method == "std"
         println("Standard Fast Decoupled Power Flow")
-        dP = dQ = buildH(buses, branches)
+        dP = dQ = buildH(nodes, branches)
     else if method == "pri"
         println("Primal Fast Decoupled Power Flow")
         dP = buildB(Ybus, B_id, numB, sizeJ)
-        dQ = buildH(buses, branches)
+        dQ = buildH(nodes, branches)
     else if method == "dual"
         println("Dual Fast Decoupled Power Flow")
-        dP = buildH(buses, branches)
+        dP = buildH(nodes, branches)
         dQ = buildB(Ybus, B_id, numB, sizeJ)
     else
-        return -1, buses, branches
+        return -1, nodes, branches
     end
 
     while true
-        buses, branches = PQ_update(buses, branches)
+        nodes, branches = PQ_update(nodes, branches)
         if method == "std" || method == "pri"
-            buses, branches, deltaT = solve_dP(buses, branches)
-            buses, branches, deltaV = solve_dQ(buses, branches)
+            nodes, branches, deltaT = solve_dP(nodes, branches)
+            nodes, branches, deltaV = solve_dQ(nodes, branches)
         else
-            buses, branches, deltaV = solve_dQ(buses, branches)
-            buses, branches, deltaT = solve_dP(buses, branches)
+            nodes, branches, deltaV = solve_dQ(nodes, branches)
+            nodes, branches, deltaT = solve_dP(nodes, branches)
         end
         b = concatenate((deltaT,deltaV), axis=0)
         if print_out
             println("\n-------------------------  Iteration", it, " -------------------------")
             print_vectors(b, deltaPQ)
-            print_buses(buses)
+            print_nodes(nodes)
         end
 
         it += 1
@@ -67,8 +67,8 @@ function fdlf(buses::Vector{Bus}, branches::Vector{Branch}, it_max::Int, lim::Ab
     else
         println("\nConvergance in ", it, " iterations\n")
     end
-    print_jacobi_dpf(buses, deltaT, deltaV)
-    return it, buses, branches
+    print_jacobi_dpf(nodes, deltaT, deltaV)
+    return it, nodes, branches
 end
 
 """Builds a matrix with the Ybus-elements imaginary part"""
@@ -81,20 +81,20 @@ function buildB(Ybus, B_id, numB, sizeJ)
 end
 
 """Solves the dP/dVa-sub-matrix"""
-function solve_dP(buses, branches, numB, sizeJ)
+function solve_dP(nodes, branches, numB, sizeJ)
     b = deltaPQ[0:numB,:]
     deltaT = lu(dP) \ b
     b = concatenate((deltaT, zeros(sizeJ-numB,1)), axis=0)
-    buses = TV_update(buses, b, B_id)
-    return buses, branches, deltaT
+    nodes = TV_update(nodes, b, B_id)
+    return nodes, branches, deltaT
 end
 
 """Solves the dQ/dVm-sub-matrix"""
-function solve_dQ(buses, branches, numB, sizeJ)
+function solve_dQ(nodes, branches, numB, sizeJ)
     deltaV = lu(dQ) \ deltaPQ[(numB-1):sizeJ]
     b = concatenate((zeros(numB-1,1), deltaV), axis=0)
-    buses = TV_update(buses, b, B_id)
-    return buses, branches, deltaV
+    nodes = TV_update(nodes, b, B_id)
+    return nodes, branches, deltaV
 end
 
 """Make a jacobi matrix out of the sub-matrices"""

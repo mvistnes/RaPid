@@ -6,7 +6,7 @@ using GLPK # LP, Integer
 using Plots
 using StatsPlots
 using Printf
-using PowerSystemCaseBuilder
+# using PowerSystemCaseBuilder
 using Test
 include("utils.jl")
 include("N-1_SCOPF.jl")
@@ -36,9 +36,9 @@ function scatter_all(model, system; sys_name = "")
             plt = scatterplot(model, system, name[1], name[2])
             display(plt)
             path = mkpath(joinpath("results",sys_name))
-            savefig(plt, joinpath(path,@sprintf("%s.pdf",name[1])))
+            savefig(plt, joinpath(path,"$(name[1]).pdf"))
         catch e
-            @printf("No %s. ", name[1])
+            print("No $(name[1]). ")
         end
     end
 end
@@ -119,3 +119,5 @@ objective_value(sl_model[2])
 # for l in branches
 #     @printf("%s = %.4f <= %.2f \n", get_name(l), value(pf0[get_name(l)]), get_rate(l))
 # end
+
+solve_time(model)
