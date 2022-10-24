@@ -1,5 +1,6 @@
 using PowerSystems
 using JuMP
+using Printf
 include("N-1_SCOPF.jl")
 
 function make_first_stage_problem(system::System, optimizer; time_limit_sec = 60, voll = nothing, contingencies = nothing, prob = nothing, unit_commit::Bool=false)
@@ -28,9 +29,12 @@ function solve_subproblem(x)
     return (obj = objective_value(opfm.mod), lsc = value.(opfm[:lsc]), π = dual.(opfm[:pf0_lim]))
 end
 
+MAXIMUM_ITERATIONS = 100
+ABSOLUTE_OPTIMALITY_GAP = 1e-6
+k=0
 """ Callback for Benders decomposition. """
-function benders_cb(cb_data, _k=0)
-    _k += 1
+function benders_cb(cb_data, k=0)
+    global k += 1
     x_k = callback_value.(cb_data, x)
     θ_k = callback_value(cb_data, θ)
     lower_bound = c_1' * x_k + θ_k
@@ -44,5 +48,12 @@ function benders_cb(cb_data, _k=0)
     end
     cut = @build_constraint(θ >= ret.obj + -ret.π' * A_1 * (x .- x_k))
     MOI.submit(model, MOI.LazyConstraint(cb_data), cut)
+    return
+end
+
+
+function print_iteration(k, args...)
+    f(x) = Printf.@sprintf("%12.4e", x)
+    println(lpad(k, 9), " ", join(f.(args), " "))
     return
 end
