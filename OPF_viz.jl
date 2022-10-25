@@ -121,3 +121,28 @@ objective_value(sl_model[2])
 # end
 
 solve_time(model)
+
+function comparison(range, fname)
+    @info "----------- Start of simulation -----------"
+    system = System(fname)
+    result = Vector()
+    x = 1
+    for i in range
+        try
+            for d in get_components(StaticLoad, system)
+                set_active_power!(d, get_active_power(d)*i/x)
+            end
+            x = i
+            opfm = pc_scopf(system, Gurobi.Optimizer, voll=voll, prob=prob)
+            solve_model!(opfm.mod)
+            sl_model = sl_scopf(system, Gurobi.Optimizer, voll=voll, prob=prob)
+            push!(result, (i,
+                solve_time(opfm.mod), objective_value(opfm.mod),
+                solve_time(sl_model[2]), objective_value(sl_model[2])
+            ))
+        catch e
+            @warn "Error when load is x$(i)"
+        end
+    end
+    return result
+end

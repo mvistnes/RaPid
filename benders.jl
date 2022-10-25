@@ -19,14 +19,22 @@ function make_first_stage_problem(system::System, optimizer; time_limit_sec = 60
     return opfm
 end
 
-function solve_subproblem(x)
+function solve_subproblem(x, contingency)
     opfm = opfmodel(system, optimizer, time_limit_sec, voll)
-    opfm = init_var_dc_SCOPF!(opfm) |> set_ref_angle! |> add_c_bus! |> add_c_branch! |> add_obj!
+        # add pgu and pgd here and make pg0 a parameter!!!
+    opfm = init_var_dc_SCOPF!(opfm, max_shed) |> add_c_bus! |> add_c_branch! |> add_obj!
     if unit_commit
         opfm = add_unit_commit!(opfm)
     end
+    @constraint(opfm, opfm[:pf0][contingency] == 0)
     solve_model!(opfm.mod)
-    return (obj = objective_value(opfm.mod), lsc = value.(opfm[:lsc]), π = dual.(opfm[:pf0_lim]))
+    return (
+        obj = objective_value(opfm.mod), 
+        # pgu = value.(opfm[:pgu]), 
+        # λ = dual.(opfm[:pfcc_lim]), 
+        lsc = value.(opfm[:lsc]), 
+        π = dual.(opfm[:pfc_lim])
+    )
 end
 
 MAXIMUM_ITERATIONS = 100
@@ -38,7 +46,7 @@ function benders_cb(cb_data, k=0)
     x_k = callback_value.(cb_data, x)
     θ_k = callback_value(cb_data, θ)
     lower_bound = c_1' * x_k + θ_k
-    ret = solve_subproblem(x_k)
+    ret = [solve_subproblem(x_k,c) for c in contingencies]
     upper_bound = c_1' * x_k + c_2' * ret.y
     gap = (upper_bound - lower_bound) / upper_bound
     print_iteration(_k, lower_bound, upper_bound, gap)
