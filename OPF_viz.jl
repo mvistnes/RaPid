@@ -26,10 +26,13 @@ scatterplot(model, system, name, type) =
 
 function scatter_all(model, system; sys_name = "")
     names = [
-        (:pg0, Generator), (:pgu, Generator), (:pgd, Generator), (:pgc, Generator), (:pf0, Branch), 
-        (:pfc, Branch), (:pfcc, Branch), (:ls0, StaticLoad), (:lsc, StaticLoad), (:qg0, Generator), 
-        (:qgu, Generator), (:qgd, Generator), (:qf0, Branch), (:qfc, Branch), (:qfcc, Branch), 
-        (:va0, Bus), (:vac, Bus), (:vacc, Bus), (:cbc, Bus), (:cbcc, Bus)
+        (:pg0, Generator), (:pgu, Generator), (:pgd, Generator), (:u, ThermalGen),
+        (:pf0, Branch), (:pfc, Branch), (:pfcc, Branch), 
+        (:ls0, StaticLoad), (:lsc, StaticLoad), (:lscc, StaticLoad), 
+        (:qg0, Generator), (:qgu, Generator), (:qgd, Generator), 
+        (:qf0, Branch), (:qfc, Branch), (:qfcc, Branch), 
+        (:va0, Bus), (:vac, Bus), (:vacc, Bus), 
+        (:cbc, Bus), (:cbcc, Bus)
     ]
     for name in names
         try
@@ -126,6 +129,7 @@ function comparison(range, fname)
     @info "----------- Start of simulation -----------"
     system = System(fname)
     result = Vector()
+    pg = Vector()
     x = 1
     for i in range
         try
@@ -133,16 +137,18 @@ function comparison(range, fname)
                 set_active_power!(d, get_active_power(d)*i/x)
             end
             x = i
-            opfm = pc_scopf(system, Gurobi.Optimizer, voll=voll, prob=prob)
+            opfm = pc_scopf(system, Gurobi.Optimizer, voll=voll, prob=prob, max_shed=0.5)
             solve_model!(opfm.mod)
-            sl_model = sl_scopf(system, Gurobi.Optimizer, voll=voll, prob=prob)
+            sl_model = sl_scopf(system, Gurobi.Optimizer, voll=voll, prob=prob, max_shed=0.5)
             push!(result, (i,
                 solve_time(opfm.mod), objective_value(opfm.mod),
                 solve_time(sl_model[2]), objective_value(sl_model[2])
             ))
+            push!(pg, (i, value.(opfm.mod[:pg0]).data, value.(sl_model[1].mod[:pg0]).data))
         catch e
             @warn "Error when load is x$(i)"
+            break
         end
     end
-    return result
+    return result, pg
 end
