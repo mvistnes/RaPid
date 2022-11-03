@@ -1,8 +1,9 @@
+# CC BY 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2022
 using PowerSystems
 using JuMP
-using Ipopt # LP, SOCP, Nonconvex
+# using Ipopt # LP, SOCP, Nonconvex
 using Gurobi # LP, SOCP, Integer
-using GLPK # LP, Integer
+# using GLPK # LP, Integer
 using Plots
 using StatsPlots
 using Printf
@@ -68,8 +69,8 @@ prob = JuMP.Containers.DenseAxisArray(
     get_name.(get_components(ACBranch, ieee_rts))
 )
 prob /= 8760
-model = scopf(ieee_rts, Gurobi.Optimizer)
-model = pc_scopf(ieee_rts, Gurobi.Optimizer, voll=voll, prob=prob)
+model = scopf(SC, ieee_rts, Gurobi.Optimizer)
+model = scopf(PCSC, ieee_rts, Gurobi.Optimizer, voll=voll, prob=prob)
 sl_model = sl_scopf(ieee_rts, Gurobi.Optimizer, voll=voll, prob=prob)
 scatterplot(model, ieee_rts, :pg0, Generator)
 print_variabel(model, ieee_rts, :pg0, Generator)
@@ -125,30 +126,3 @@ objective_value(sl_model[2])
 
 solve_time(model)
 
-function comparison(range, fname)
-    @info "----------- Start of simulation -----------"
-    system = System(fname)
-    result = Vector()
-    pg = Vector()
-    x = 1
-    for i in range
-        try
-            for d in get_components(StaticLoad, system)
-                set_active_power!(d, get_active_power(d)*i/x)
-            end
-            x = i
-            opfm = pc_scopf(system, Gurobi.Optimizer, voll=voll, prob=prob, max_shed=0.5)
-            solve_model!(opfm.mod)
-            sl_model = sl_scopf(system, Gurobi.Optimizer, voll=voll, prob=prob, max_shed=0.5)
-            push!(result, (i,
-                solve_time(opfm.mod), objective_value(opfm.mod),
-                solve_time(sl_model[2]), objective_value(sl_model[2])
-            ))
-            push!(pg, (i, value.(opfm.mod[:pg0]).data, value.(sl_model[1].mod[:pg0]).data))
-        catch e
-            @warn "Error when load is x$(i)"
-            break
-        end
-    end
-    return result, pg
-end

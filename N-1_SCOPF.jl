@@ -1,14 +1,20 @@
+# CC BY 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2022
+module SCOPF
+
 using PowerSystems
 using JuMP
 using Ipopt
 using GLPK
+
+@enum OPF SC=0 PSC=1 PCSC=2 # SCOPF, P-SCOPF, SC-SCOPF
 
 """ OPF model type """
 mutable struct OPFmodel
     sys::PowerSystems.System
     mod::JuMP.Model
     # beta::Union{Nothing, JuMP.Containers.DenseAxisArray} # Should convert to sparse some time in the future
-    voll::Union{Nothing, JuMP.Containers.DenseAxisArray}
+    voll::JuMP.Containers.DenseAxisArray
+    cost::JuMP.Containers.DenseAxisArray
     contingencies::Union{Nothing, Vector{String}}
     prob::Union{Nothing, JuMP.Containers.DenseAxisArray}
 end
@@ -21,6 +27,11 @@ function opfmodel(sys::System, optimizer, time_limit_sec, voll=nothing, continge
     end
     set_time_limit_sec(mod, time_limit_sec)
     
+    cost = JuMP.Containers.DenseAxisArray(
+        [[get_generator_cost(g)[2] for g in gens_t(sys)]; [5 for _ in gens_h(sys)]],
+        get_name.(get_ctrl_generation(sys))
+    )
+
     # β = JuMP.Containers.DenseAxisArray{Int64}(undef, get_name.(nodes(sys)), get_name.(branches(sys)))
     # for l in branches(sys)
     #     β[get_name(l.arc.from), get_name(l)] = 1
@@ -30,7 +41,7 @@ function opfmodel(sys::System, optimizer, time_limit_sec, voll=nothing, continge
     # @assert length(voll) == length(get_nonctrl_generation(sys)) # should be implemented
     # @assert isempty(prob) || length(contingencies) == length(prob)
 
-    return OPFmodel(sys, mod, voll, contingencies, prob)
+    return OPFmodel(sys, mod, voll, cost, contingencies, prob)
 end
 
 """Find value of β, β = 1 if from-bus is the bus, β = -1 if to-bus is the bus, 0 else"""
@@ -124,11 +135,7 @@ end
 
 """ Objective with base case generation and load shedding """
 function add_obj!(opfm::OPFmodel)
-    @objective(opfm.mod, Min, 
-        sum(opfm.mod[:pg0][get_name(g)] * get_generator_cost(g)[2] for g in gens_t(opfm.sys)) + 
-        sum(opfm.mod[:pg0][get_name(g)] * 5 for g in gens_h(opfm.sys)) + 
-        sum(opfm.voll[d] * opfm.mod[:ls0][d] for d in get_name.(get_nonctrl_generation(opfm.sys)))
-    )
+    @objective(opfm.mod, Min, opfm.cost.data' * opfm.mod[:pg0] + opfm.voll.data' * opfm.mod[:ls0])
     @info "Objective added: base case generation and load shedding"
     return opfm
 end
@@ -140,24 +147,21 @@ function add_obj_cont!(opfm::OPFmodel, ramp_minutes)
             for d in get_name.(get_nonctrl_generation(opfm.sys))
         )
     )
-    @info " - contingency load shedding"
+    @info "- contingency load shedding"
     return opfm
 end
 """ Objective with base case and contingency generation and load shedding """
 function add_obj_ccont!(opfm::OPFmodel, ramp_minutes, repair_time = 1.0)
     opfm = add_obj_cont!(opfm, ramp_minutes)
     set_objective_function(opfm.mod, objective_function(opfm.mod) +
-        sum(get_generator_cost(g)[2] * sum(opfm.prob[c] * repair_time * (opfm.mod[:pgu][get_name(g),c] #=+ opfm.mod[:pgd][get_name(g),c]*0.1=#) 
-            for c in opfm.contingencies) for g in gens_t(opfm.sys)
-        ) + 
-        sum(5 * sum(opfm.prob[c] * (opfm.mod[:pgu][get_name(g),c] #=+ opfm.mod[:pgd][get_name(g),c]*0.1=#)
-            for c in opfm.contingencies) for g in gens_h(opfm.sys)
+        sum(opfm.cost[g] * sum(opfm.prob[c] * repair_time * (opfm.mod[:pgu][g,c] #=+ opfm.mod[:pgd][g,c]*0.1=#) 
+            for c in opfm.contingencies) for g in get_name.(get_ctrl_generation(opfm.sys))
         ) +
         sum(opfm.voll[d] * (sum(opfm.prob[c] * opfm.mod[:lscc][d,c] for c in opfm.contingencies)) 
             for d in get_name.(get_nonctrl_generation(opfm.sys))
         )
     )
-    @info " - corrective generation and load shedding"
+    @info "- corrective generation and load shedding"
     return opfm
 end
 
@@ -189,7 +193,7 @@ function add_unit_commit_ccont!(opfm::OPFmodel)
     @constraint(opfm.mod, pg_lim[g = get_name.(gens_h(opfm.sys)), c = opfm.contingencies], 
         0 <= opfm.mod[:pg0][g] + (opfm.mod[:pgu][g,c] - opfm.mod[:pgd][g,c]) <= p_lim[g].max
     )
-    @info " - Constricted to contingencies"
+    @info "- Constricted to contingencies"
     return opfm
 end
 
@@ -434,17 +438,43 @@ function solve_model!(model::Model)
 end
 
 """ Run a SCOPF of a power system """
-function scopf(system::System, optimizer; 
-        time_limit_sec::Int64 = 600, 
+function scopf(type::OPF, system::System, optimizer; 
         voll = nothing, 
+        contingencies = nothing, 
+        prob = nothing,
+        time_limit_sec::Int64 = 600,
+        unit_commit::Bool = false,
+        max_shed::Float64 = 0.1,
+        max_curtail::Float64 = 1.0,
+        ratio::Float64= 0.5, 
+        circuit_breakers::Bool=false,
+        short_term_limit_multi::Float64 = 1.5,
+        ramp_minutes::Int64 = 10,
+        repair_time::Float64 = 1.0)
+    voll = isnothing(voll) ? make_voll(system) : voll
+    contingencies = (type != SC::OPF && isnothing(contingencies)) ? get_name.(branches(system)) : contingencies
+    prob = (type == PCSC::OPF && isnothing(prob)) ? make_prob(contingencies) : prob
+    set_renewable_prod!(system, ratio)
+
+    opfm = opfmodel(system, optimizer, time_limit_sec, voll, contingencies, prob)
+    if type == SC::OPF
+        opfm = scopf(opfm, unit_commit=unit_commit, max_shed=max_shed, max_curtail=max_curtail, ratio=ratio)
+    elseif type == PSC::OPF
+        opfm = p_scopf(opfm, unit_commit=unit_commit, max_shed=max_shed, max_curtail=max_curtail, ratio=ratio, 
+        circuit_breakers=circuit_breakers, short_term_limit_multi=short_term_limit_multi, ramp_minutes=ramp_minutes)
+    elseif type == PCSC::OPF
+        opfm = pc_scopf(opfm, unit_commit=unit_commit, max_shed=max_shed, max_curtail=max_curtail, ratio=ratio, 
+        circuit_breakers=circuit_breakers, short_term_limit_multi=short_term_limit_multi, ramp_minutes=ramp_minutes,
+        repair_time=repair_time)
+    end
+    return opfm
+end
+
+function scopf(opfm::OPFmodel; 
         unit_commit::Bool = false,
         max_shed::Float64 = 0.1,
         max_curtail::Float64 = 1.0,
         ratio::Float64 = 0.5)
-    voll = isnothing(voll) ? make_voll(system) : voll
-    set_renewable_prod!(system, ratio)
-
-    opfm = opfmodel(system, optimizer, time_limit_sec, voll)
     opfm = init_var_dc_SCOPF!(opfm) |> add_c_bus! |> add_c_branch! |> add_obj!
     opfm = add_lim_nonctrl_shed!(opfm, max_shed, max_curtail)
     if unit_commit
@@ -454,11 +484,7 @@ function scopf(system::System, optimizer;
 end
 
 """ Run a P-SCOPF of a power system """
-function p_scopf(system::System, optimizer; 
-        voll = nothing, 
-        contingencies = nothing, 
-        prob = nothing,
-        time_limit_sec::Int64 = 600, 
+function p_scopf(opfm::OPFmodel; 
         unit_commit::Bool=false,
         max_shed::Float64 = 0.1,
         max_curtail::Float64 = 1.0,
@@ -466,12 +492,7 @@ function p_scopf(system::System, optimizer;
         circuit_breakers::Bool = false,
         short_term_limit_multi::Float64 = 1.5,
         ramp_minutes::Int64 = 10)
-    voll = isnothing(voll) ? make_voll(system) : voll
-    contingencies = isnothing(contingencies) ? get_name.(branches(system)) : contingencies
-    prob = isnothing(prob) ? make_prob(contingencies) : prob
-    set_renewable_prod!(system, ratio)
-
-    opfm = opfmodel(system, optimizer, time_limit_sec, voll, contingencies, prob) |> init_var_dc_P_SCOPF! |> add_c_bus_cont! 
+    opfm = init_var_dc_P_SCOPF!(opfm) |> add_c_bus_cont! 
     opfm = add_obj_cont!(opfm, ramp_minutes)
     opfm = add_lim_nonctrl_shed_cont!(opfm, max_shed, max_curtail)
     if circuit_breakers
@@ -486,11 +507,7 @@ function p_scopf(system::System, optimizer;
 end
 
 """ Run a PC-SCOPF of a power system """
-function pc_scopf(system::System, optimizer; 
-        voll = nothing, 
-        contingencies = nothing, 
-        prob = nothing,
-        time_limit_sec::Int64 = 600,
+function pc_scopf(opfm::OPFmodel; 
         unit_commit::Bool = false,
         max_shed::Float64 = 0.1,
         max_curtail::Float64 = 1.0,
@@ -499,12 +516,7 @@ function pc_scopf(system::System, optimizer;
         short_term_limit_multi::Float64 = 1.5,
         ramp_minutes::Int64 = 10,
         repair_time::Float64 = 1.0)
-    voll = isnothing(voll) ? make_voll(system) : voll
-    contingencies = isnothing(contingencies) ? get_name.(branches(system)) : contingencies
-    prob = isnothing(prob) ? make_prob(contingencies) : prob
-    set_renewable_prod!(system, ratio)
-    
-    opfm = opfmodel(system, optimizer, time_limit_sec, voll, contingencies, prob) |> init_var_dc_PC_SCOPF! |> add_c_bus_ccont! 
+    opfm = init_var_dc_PC_SCOPF!(opfm) |> add_c_bus_ccont! 
     opfm = add_obj_ccont!(opfm, ramp_minutes, repair_time)
     # opfm = init_var_dc_PC_SCOPF!(opfm, max_shed) |> add_c_bus_ccont! |> add_obj!
     opfm = add_lim_nonctrl_shed_ccont!(opfm, max_shed, max_curtail)
@@ -521,3 +533,4 @@ function pc_scopf(system::System, optimizer;
     return opfm
 end
 
+end # module

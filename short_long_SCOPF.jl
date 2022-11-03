@@ -1,3 +1,6 @@
+# CC BY 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2022
+module ShortLongSCOPF
+
 using PowerSystems
 using JuMP
 include("N-1_SCOPF.jl")
@@ -18,22 +21,18 @@ function sl_scopf(system::System, optimizer;
     contingencies = isnothing(contingencies) ? get_name.(branches(system)) : contingencies
     prob = isnothing(prob) ? make_prob(contingencies) : prob
     
-    p_opfm = p_scopf(system, optimizer, time_limit_sec=time_limit_sec, voll=voll, contingencies=contingencies, 
+    p_opfm = scopf(PSC, system, optimizer, time_limit_sec=time_limit_sec, voll=voll, contingencies=contingencies, 
         unit_commit=unit_commit, max_shed=max_shed, ratio=ratio, short_term_limit_multi=short_term_limit_multi, ramp_minutes=ramp_minutes)
     p_opfm.mod = solve_model!(p_opfm.mod)
-    c_mod = c_scopf(system, optimizer, value.(p_opfm.mod[:pg0]), value.(p_opfm.mod[:ls0]), value.(p_opfm.mod[:lsc]), 
-        unit_commit ? value.(p_opfm.mod[:u]) : nothing, voll=voll, contingencies=contingencies, prob=prob, 
-        time_limit_sec=time_limit_sec, unit_commit=unit_commit, max_shed=max_shed,
+    c_mod = c_scopf(system, optimizer, voll, contingencies, prob, value.(p_opfm.mod[:pg0]), value.(p_opfm.mod[:ls0]), value.(p_opfm.mod[:lsc]), 
+        unit_commit ? value.(p_opfm.mod[:u]) : nothing, time_limit_sec=time_limit_sec, unit_commit=unit_commit, max_shed=max_shed,
         short_term_limit_multi=short_term_limit_multi, ramp_minutes=ramp_minutes, repair_time=repair_time)
     c_mod = solve_model!(c_mod)
 
     return p_opfm, c_mod
 end
 
-function c_scopf(system::System, optimizer, pg0, ls0, lsc, u = nothing; 
-        voll = nothing, 
-        contingencies = nothing,
-        prob = nothing, 
+function c_scopf(system::System, optimizer, voll, contingencies, prob, pg0, ls0, lsc, u = nothing; 
         time_limit_sec::Int64 = 600,
         unit_commit::Bool = false,
         max_shed::Float64 = 0.1,
@@ -43,6 +42,11 @@ function c_scopf(system::System, optimizer, pg0, ls0, lsc, u = nothing;
         repair_time::Float64 = 1.0)
 
     model = Model(optimizer)
+    cost = JuMP.Containers.DenseAxisArray(
+        [[get_generator_cost(g)[2] for g in gens_t(system)]; [5 for _ in gens_h(system)]],
+        get_name.(get_ctrl_generation(system))
+    )
+
     
     @variables(model, begin
         0 <= pgu[g in get_name.(get_ctrl_generation(system)), c in contingencies]    # active power variables for the generators in contingencies ramp up 
@@ -54,12 +58,8 @@ function c_scopf(system::System, optimizer, pg0, ls0, lsc, u = nothing;
 
     # minimize socio-economic cost
     @objective(model, Min, 
-        sum(get_generator_cost(g)[2] * (pg0[get_name(g)] + 
-            sum(prob[c] * (pgu[get_name(g),c] #=+ pgd[get_name(g),c]*0.1=#) for c in contingencies))
-            for g in gens_t(system)
-        ) + 
-        sum(5 * (pg0[get_name(g)] + sum(prob[c] * (pgu[get_name(g),c] #=+ pgd[get_name(g),c]*0.1=#)
-            for c in contingencies)) for g in gens_h(system)
+        sum(cost[g] * (pg0[g] + sum(prob[c] * (pgu[g,c] #=+ pgd[get_name(g),c]*0.1=#) 
+            for c in contingencies)) for g in get_name.(get_ctrl_generation(system))
         ) +
         sum(voll[d] * (ls0[d] + sum(prob[c] * (lsc[d,c] * ramp_minutes / 60 + lscc[d,c] * repair_time) for c in contingencies)) 
             for d in get_name.(get_nonctrl_generation(system))
@@ -128,3 +128,6 @@ function c_scopf(system::System, optimizer, pg0, ls0, lsc, u = nothing;
 
     return model
 end
+
+    
+end # module
