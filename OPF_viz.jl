@@ -12,48 +12,10 @@ using Test
 include("utils.jl")
 include("N-1_SCOPF.jl")
 include("short_long_SCOPF.jl")
+include("benders.jl")
 
 
-scatterplot(model, system, name, type) = 
-    scatter(
-        [get_name.(get_components(type, system))], 
-        [value.(model[name]).data], 
-        dpi=100, 
-        size=(600,600), 
-        label = false, 
-        rotation=90, 
-        title = name
-    )
-
-function scatter_all(model, system; sys_name = "")
-    names = [
-        (:pg0, Generator), (:pgu, Generator), (:pgd, Generator), (:u, ThermalGen),
-        (:pf0, Branch), (:pfc, Branch), (:pfcc, Branch), 
-        (:ls0, StaticLoad), (:lsc, StaticLoad), (:lscc, StaticLoad), 
-        (:qg0, Generator), (:qgu, Generator), (:qgd, Generator), 
-        (:qf0, Branch), (:qfc, Branch), (:qfcc, Branch), 
-        (:va0, Bus), (:vac, Bus), (:vacc, Bus), 
-        (:cbc, Bus), (:cbcc, Bus)
-    ]
-    for name in names
-        try
-            plt = scatterplot(model, system, name[1], name[2])
-            display(plt)
-            path = mkpath(joinpath("results",sys_name))
-            savefig(plt, joinpath(path,"$(name[1]).pdf"))
-        catch e
-            print("No $(name[1]). ")
-        end
-    end
-end
-
-function print_variabel(model, system, name, type)
-    for (i,x) in zip(get_name.(get_components(type, system)), value.(model[name]).data)
-        @printf("%s: %.3f\n", i, x)
-    end
-end
-
-ieee_rts = System("ieee_rts.json")
+ieee_rts = System(joinpath("data","ieee_rts.json"))
 voll = JuMP.Containers.DenseAxisArray(
     [rand(1000:3000, length(get_components(StaticLoad, ieee_rts))); rand(1:30, length(get_components(RenewableGen, ieee_rts)))], 
     [get_name.(get_components(StaticLoad, ieee_rts)); get_name.(get_components(RenewableGen, ieee_rts))]
@@ -69,8 +31,8 @@ prob = JuMP.Containers.DenseAxisArray(
     get_name.(get_components(ACBranch, ieee_rts))
 )
 prob /= 8760
-model = scopf(SC, ieee_rts, Gurobi.Optimizer)
-model = scopf(PCSC, ieee_rts, Gurobi.Optimizer, voll=voll, prob=prob)
+opfm = scopf(SC, ieee_rts, Gurobi.Optimizer)
+opfm = scopf(PCSC, ieee_rts, Gurobi.Optimizer, voll=voll, prob=prob)
 sl_model = sl_scopf(ieee_rts, Gurobi.Optimizer, voll=voll, prob=prob)
 scatterplot(model, ieee_rts, :pg0, Generator)
 print_variabel(model, ieee_rts, :pg0, Generator)
@@ -78,8 +40,8 @@ print_variabel(model, ieee_rts, :pg0, Generator)
 get_active_power.(get_components(StaticLoad, ieee_rts)) - value.(pc_model[:lsd0]).data
 [value.(model[:pgu]).data[1,:] , value.(model[:pgd]).data[1,:]]
 
-for d in get_components(StaticLoad, ieee_rts)
-    set_active_power!(d, get_active_power(d)/1.4*1.2)
+for d in get_components(StaticLoad, threebus)
+    set_active_power!(d, get_active_power(d)*2)
 end
 
 function print_cb()

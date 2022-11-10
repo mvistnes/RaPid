@@ -265,6 +265,7 @@ function my_callback(cb_data)
     end
     cut = @build_constraint(θ >= ret.obj + -ret.π' * A_1 * (x .- x_k))
     MOI.submit(model, MOI.LazyConstraint(cb_data), cut)
+    @info "Adding the cut $(cut)"
     return
 end
 

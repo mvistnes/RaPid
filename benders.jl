@@ -1,17 +1,17 @@
 # CC BY 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2022
-module Benders
 
 using PowerSystems
 using JuMP
 using Printf
+using Gurobi
 import MathOptInterface
 const MOI = MathOptInterface
-include("N-1_SCOPF.jl")
-include("short_long_SCOPF.jl")
+# include("N-1_SCOPF.jl")
+# include("short_long_SCOPF.jl")
 
 const ABSOLUTE_OPTIMALITY_GAP = 1e-6
 k::Int64 = 0
-global opfm::OPFmodel
+global _opfm::OPFmodel
 global _unit_commit::Bool
 global _max_shed::Float64
 global _max_curtail::Float64
@@ -41,7 +41,7 @@ function benders_scopf(system::System, optimizer;
     
     # Set global variables
     M = -1000
-    global opfm = opfmodel(system, optimizer, time_limit_sec, voll, contingencies, prob)
+    global _opfm = opfmodel(system, optimizer, time_limit_sec, voll, contingencies, prob)
     global _unit_commit=unit_commit
     global _max_shed=max_shed
     global _max_curtail=max_curtail
@@ -51,28 +51,28 @@ function benders_scopf(system::System, optimizer;
     global _ramp_minutes=ramp_minutes
     global _repair_time=repair_time
     
-    opfm = p_scopf(opfm, unit_commit=_unit_commit, max_shed=_max_shed, max_curtail=_max_curtail, ratio=_ratio, 
+    _opfm = p_scopf(_opfm, unit_commit=_unit_commit, max_shed=_max_shed, max_curtail=_max_curtail, ratio=_ratio, 
         circuit_breakers=_circuit_breakers, short_term_limit_multi=_short_term_limit_multi, ramp_minutes=_ramp_minutes)
-    @variable(opfm.mod, θ >= M)
-    # @objective(opfm.mod, Min, θ)
-    set_objective_function(opfm.mod, objective_function(opfm.mod) + θ)
-    MOI.set(opfm.mod, MOI.LazyConstraintCallback(), benders_cb)
-    solve_model!(opfm.mod)
-    return opfm
+    @variable(_opfm.mod, θ >= M)
+    @objective(_opfm.mod, Min, θ)
+    # set_objective_function(_opfm.mod, objective_function(_opfm.mod) + θ)
+    MOI.set(_opfm.mod, MOI.LazyConstraintCallback(), benders_cb)
+    _opfm.mod = solve_model!(_opfm.mod)
+    return _opfm
 end
 
 """ Callback for Benders decomposition. """
 function benders_cb(cb_data)
     global k += 1
-    pg0_k = callback_value.(cb_data, pg0)
-    ls0_k = callback_value.(cb_data, ls0)
-    lsc_k = callback_value.(cb_data, lsc)
-    θ_k = callback_value(cb_data, θ)
+    pg0_k = callback_value.(cb_data, _opfm.mod[:pg0])
+    ls0_k = callback_value.(cb_data, _opfm.mod[:ls0])
+    lsc_k = callback_value.(cb_data, _opfm.mod[:lsc])
+    θ_k = callback_value(cb_data, _opfm.mod[:θ])
 
-    # ret = [solve_subproblem(pg0_k, ls0_k, lsc_k, c) for c in opfm.contingencies]
+    # ret = [solve_subproblem(pg0_k, ls0_k, lsc_k, c) for c in _opfm.contingencies]
     ret = solve_subproblem(pg0_k, ls0_k, lsc_k)
-    upper_bound = sum(opfm.cost.data' * pg0_k) + sum(opfm.voll.data' * ls0_k) + sum(opfm.prob.data * opfm.voll.data' * lsc_k) +
-        sum(opfm.prob.data * opfm.cost.data' * ret.pgu) + sum(opfm.prob.data * opfm.voll.data' * ret.lscc)
+    upper_bound = sum(_opfm.cost.data' * pg0_k) + sum(_opfm.voll.data' * ls0_k) + sum(_opfm.prob.data * _opfm.voll.data' * lsc_k) +
+        sum(_opfm.prob.data * _opfm.cost.data' * ret.pgu) + sum(_opfm.prob.data * _opfm.voll.data' * ret.lscc)
     gap = 1 - (θ_k / upper_bound)
 
     print_iteration(k, θ_k, upper_bound, gap)
@@ -81,14 +81,15 @@ function benders_cb(cb_data)
         return
     end
 
-    p_lim = [get_active_power_limits(x).max for x in get_ctrl_generation(opfm.sys)]
-    cut = @build_constraint(θ >= ret.obj + -ret.λ' * p_lim * (pg0 .- pg0_k) + -ret.π' * opfm.voll.data * (ls0 .- ls0_k))
+    p_lim = [get_active_power_limits(x).max for x in get_ctrl_generation(_opfm.sys)]
+    cut = @build_constraint(_opfm.mod[:θ] >= ret.obj + ret.λ' * p_lim * (_opfm.mod[:pg0] .- pg0_k) + ret.π' * _opfm.voll.data * (_opfm.mod[:ls0] .- ls0_k))
     MOI.submit(model, MOI.LazyConstraint(cb_data), cut)
+    @info "Adding the cut $(cut)"
     return
 end
     
 function solve_subproblem(pg0, ls0, lsc, u = nothing)
-    opfm = c_scopf(sys, optimizer, opfm.voll, opfm.contingencies, opfm.prob, pg0, ls0, lsc, u, 
+    opfm = c_scopf(_opfm.sys, Gurobi.Optimizer, _opfm.voll, _opfm.contingencies, _opfm.prob, pg0, ls0, lsc, u, 
         unit_commit=_unit_commit, max_shed=_max_shed, short_term_limit_multi=_short_term_limit_multi, 
         ramp_minutes=_ramp_minutes, repair_time=_repair_time)
     solve_model!(opfm.mod)
@@ -106,5 +107,3 @@ function print_iteration(k, args...)
     println(lpad(k, 9), " ", join(f.(args), " "))
     return
 end
-
-end # module

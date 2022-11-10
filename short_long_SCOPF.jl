@@ -1,9 +1,7 @@
 # CC BY 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2022
-module ShortLongSCOPF
-
 using PowerSystems
 using JuMP
-include("N-1_SCOPF.jl")
+# include("N-1_SCOPF.jl")
 
 function sl_scopf(system::System, optimizer; 
         voll = nothing, 
@@ -12,6 +10,7 @@ function sl_scopf(system::System, optimizer;
         time_limit_sec = 600,
         unit_commit::Bool=false,
         max_shed = 0.1,
+        max_curtail::Float64 = 1.0,
         ratio = 0.5, 
         short_term_limit_multi = 1.5,
         ramp_minutes::Int64 = 10,
@@ -21,12 +20,13 @@ function sl_scopf(system::System, optimizer;
     contingencies = isnothing(contingencies) ? get_name.(branches(system)) : contingencies
     prob = isnothing(prob) ? make_prob(contingencies) : prob
     
-    p_opfm = scopf(PSC, system, optimizer, time_limit_sec=time_limit_sec, voll=voll, contingencies=contingencies, 
-        unit_commit=unit_commit, max_shed=max_shed, ratio=ratio, short_term_limit_multi=short_term_limit_multi, ramp_minutes=ramp_minutes)
+    p_opfm = scopf(PSC, system, optimizer, voll=voll, prob=prob, contingencies=contingencies, time_limit_sec=time_limit_sec,
+        unit_commit=unit_commit, max_shed=max_shed, max_curtail=max_curtail, ratio=ratio, short_term_limit_multi=short_term_limit_multi, 
+        ramp_minutes=ramp_minutes)
     p_opfm.mod = solve_model!(p_opfm.mod)
     c_mod = c_scopf(system, optimizer, voll, contingencies, prob, value.(p_opfm.mod[:pg0]), value.(p_opfm.mod[:ls0]), value.(p_opfm.mod[:lsc]), 
-        unit_commit ? value.(p_opfm.mod[:u]) : nothing, time_limit_sec=time_limit_sec, unit_commit=unit_commit, max_shed=max_shed,
-        short_term_limit_multi=short_term_limit_multi, ramp_minutes=ramp_minutes, repair_time=repair_time)
+        unit_commit ? value.(p_opfm.mod[:u]) : nothing, time_limit_sec=time_limit_sec, unit_commit=unit_commit, max_shed=max_shed, max_curtail=max_curtail,
+        ramp_minutes=ramp_minutes, repair_time=repair_time)
     c_mod = solve_model!(c_mod)
 
     return p_opfm, c_mod
@@ -37,7 +37,6 @@ function c_scopf(system::System, optimizer, voll, contingencies, prob, pg0, ls0,
         unit_commit::Bool = false,
         max_shed::Float64 = 0.1,
         max_curtail::Float64 = 1.0,
-        short_term_limit_multi::Float64 = 1.5,
         ramp_minutes::Int64 = 10,
         repair_time::Float64 = 1.0)
 
@@ -58,7 +57,7 @@ function c_scopf(system::System, optimizer, voll, contingencies, prob, pg0, ls0,
 
     # minimize socio-economic cost
     @objective(model, Min, 
-        sum(cost[g] * (pg0[g] + sum(prob[c] * (pgu[g,c] #=+ pgd[get_name(g),c]*0.1=#) 
+        sum(cost[g] * (pg0[g] + sum(prob[c] * repair_time * (pgu[g,c] #=+ pgd[get_name(g),c]*0.1=#) 
             for c in contingencies)) for g in get_name.(get_ctrl_generation(system))
         ) +
         sum(voll[d] * (ls0[d] + sum(prob[c] * (lsc[d,c] * ramp_minutes / 60 + lscc[d,c] * repair_time) for c in contingencies)) 
@@ -72,10 +71,10 @@ function c_scopf(system::System, optimizer, voll, contingencies, prob, pg0, ls0,
 
     # incerted power at each bus for the base case and contingencies
     @constraint(model, inj_pcc[n = get_name.(nodes(system)), c = contingencies],
-        sum(get_name(get_bus(g)) == n ? pg0[get_name(g)] + pgu[get_name(g),c] - pgd[get_name(g),c] : 0 for g in get_ctrl_generation(system)) -
+        sum(g.bus.name == n ? pg0[get_name(g)] + pgu[get_name(g),c] - pgd[get_name(g),c] : 0 for g in get_ctrl_generation(system)) -
         sum(beta(n,l) * pfcc[get_name(l),c] for l in branches(system)) == 
-        sum(get_name(get_bus(d)) == n ? get_active_power(d) - lscc[get_name(d),c] : 0 for d in demands(system)) +
-        sum(get_name(get_bus(d)) == n ? -get_active_power(d) + lscc[get_name(d),c] : 0 for d in renewables(system))
+        sum(d.bus.name == n ? get_active_power(d) - lscc[get_name(d),c] : 0 for d in demands(system)) +
+        sum(d.bus.name == n ? -get_active_power(d) + lscc[get_name(d),c] : 0 for d in renewables(system))
     )
     # @constraint(model, -π/2 .<= vacc .<= π/2) # Not really needed, could be implemented with spesific line angle limits
     
@@ -128,6 +127,3 @@ function c_scopf(system::System, optimizer, voll, contingencies, prob, pg0, ls0,
 
     return model
 end
-
-    
-end # module
