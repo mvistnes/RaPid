@@ -1,109 +1,232 @@
-# CC BY 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2022
+# CC BY 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2022 
+# Based on code by Sigurd Hofsmo Jakobsen, SINTEF Energy Research, 2022
 
 using PowerSystems
-using JuMP
-using Printf
-using Gurobi
+import JuMP
+import Printf
+import Gurobi
 import MathOptInterface
 const MOI = MathOptInterface
+import LinearAlgebra
+import SparseArrays
 # include("N-1_SCOPF.jl")
 # include("short_long_SCOPF.jl")
+# include("utils.jl")
 
-const ABSOLUTE_OPTIMALITY_GAP = 1e-6
-k::Int64 = 0
-global _opfm::OPFmodel
-global _unit_commit::Bool
-global _max_shed::Float64
-global _max_curtail::Float64
-global _ratio::Float64
-global _circuit_breakers::Bool
-global _short_term_limit_multi::Float64
-global _ramp_minutes::Int64
-global _repair_time
+""" 
+Solve the optimization model using Benders decomposition.
 
-function benders_scopf(system::System, optimizer; 
-        voll = nothing, 
-        contingencies = nothing,
-        prob = nothing, 
-        time_limit_sec::Int64 = 600,
-        unit_commit::Bool = false,
-        max_shed::Float64 = 0.1,
-        max_curtail::Float64 = 1.0,
-        ratio::Float64= 0.5, 
-        circuit_breakers::Bool=false,
-        short_term_limit_multi::Float64 = 1.5,
-        ramp_minutes::Int64 = 10,
-        repair_time::Float64 = 1.0)
-    system = set_renewable_prod!(system, ratio)
-    voll = isnothing(voll) ? make_voll(system) : voll
-    contingencies = isnothing(contingencies) ? get_name.(branches(system)) : contingencies
-    prob = isnothing(prob) ? make_prob(contingencies) : prob
+Function creates extra production constraints on generators in the system
+based on the power transfer distribution factors of the generators in the
+system. 
+"""
+function run_benders(opfm::OPFmodel, voll, contingencies, prob;
+            time_limit_sec::Int64 = 600,
+            unit_commit::Bool = false,
+            max_shed::Float64 = 0.1,
+            max_curtail::Float64 = 1.0,
+            ratio::Float64= 0.5, 
+            circuit_breakers::Bool=false,
+            short_term_limit_multi::Float64 = 1.5,
+            ramp_minutes::Int64 = 10,
+            repair_time::Float64 = 1.0
+        )
     
     # Set global variables
-    M = -1000
-    global _opfm = opfmodel(system, optimizer, time_limit_sec, voll, contingencies, prob)
-    global _unit_commit=unit_commit
-    global _max_shed=max_shed
-    global _max_curtail=max_curtail
-    global _ratio=ratio 
-    global _circuit_breakers=circuit_breakers
-    global _short_term_limit_multi=short_term_limit_multi
-    global _ramp_minutes=ramp_minutes
-    global _repair_time=repair_time
-    
-    _opfm = p_scopf(_opfm, unit_commit=_unit_commit, max_shed=_max_shed, max_curtail=_max_curtail, ratio=_ratio, 
-        circuit_breakers=_circuit_breakers, short_term_limit_multi=_short_term_limit_multi, ramp_minutes=_ramp_minutes)
-    @variable(_opfm.mod, θ >= M)
-    @objective(_opfm.mod, Min, θ)
-    # set_objective_function(_opfm.mod, objective_function(_opfm.mod) + θ)
-    MOI.set(_opfm.mod, MOI.LazyConstraintCallback(), benders_cb)
-    _opfm.mod = solve_model!(_opfm.mod)
-    return _opfm
-end
+    nodes = get_sorted_nodes(opfm.sys)
+    drop_idx = get_nodes_idx([x for x in nodes if x.bustype != BusTypes.REF])
+    drop_id = sort!(collect(keys(drop_idx)))
+    list_gen = make_list(opfm, get_ctrl_generation)
+    contanal = iterative_cont_anal(opfm.sys, nodes, drop_idx, contingencies)
 
-""" Callback for Benders decomposition. """
-function benders_cb(cb_data)
-    global k += 1
-    pg0_k = callback_value.(cb_data, _opfm.mod[:pg0])
-    ls0_k = callback_value.(cb_data, _opfm.mod[:ls0])
-    lsc_k = callback_value.(cb_data, _opfm.mod[:lsc])
-    θ_k = callback_value(cb_data, _opfm.mod[:θ])
+    for (c,cont) in enumerate(contingencies)
+        Pᵢ = get_Pᵢ(opfm)
+        ptdf = get_cont_ptdf(contanal, c)
+        overloads = get_overload2(contanal, c, Pᵢ.data[drop_id])
 
-    # ret = [solve_subproblem(pg0_k, ls0_k, lsc_k, c) for c in _opfm.contingencies]
-    ret = solve_subproblem(pg0_k, ls0_k, lsc_k)
-    upper_bound = sum(_opfm.cost.data' * pg0_k) + sum(_opfm.voll.data' * ls0_k) + sum(_opfm.prob.data * _opfm.voll.data' * lsc_k) +
-        sum(_opfm.prob.data * _opfm.cost.data' * ret.pgu) + sum(_opfm.prob.data * _opfm.voll.data' * ret.lscc)
-    gap = 1 - (θ_k / upper_bound)
+        for (i,ol) in enumerate(overloads)
+            abs(ol) < 0.001 && continue
+            expr = JuMP.AffExpr(-ol)
 
-    print_iteration(k, θ_k, upper_bound, gap)
-    if gap < ABSOLUTE_OPTIMALITY_GAP
-        println("Terminating with the optimal solution")
-        return
+            for n in nodes 
+                n.bustype != BusTypes.REF && JuMP.add_to_expression!(expr, 
+                        -ptdf[i, drop_idx[n.number]] * (sum((opfm.mod[:pg0][g.name] for g in list_gen[n.name]), init=0.0) - Pᵢ[n.name])
+                    )
+            end
+            @info "Cut added: " * sprint_expr(expr)
+            set_warm_start!(opfm.mod, :pg0) # query of information then edit of model, else OptimizeNotCalled errors
+            JuMP.@constraint(opfm.mod, expr <= 0)
+            opfm.mod = solve_model!(opfm.mod)
+        end
+
     end
-
-    p_lim = [get_active_power_limits(x).max for x in get_ctrl_generation(_opfm.sys)]
-    cut = @build_constraint(_opfm.mod[:θ] >= ret.obj + ret.λ' * p_lim * (_opfm.mod[:pg0] .- pg0_k) + ret.π' * _opfm.voll.data * (_opfm.mod[:ls0] .- ls0_k))
-    MOI.submit(model, MOI.LazyConstraint(cb_data), cut)
-    @info "Adding the cut $(cut)"
-    return
+    return opfm
 end
+
+mutable struct IterativeDCContAnal
+    lodf::Array{Float64, 3}
+    contingencies::Vector{String}
+    linerating::Vector{Float64}
+end
+
+""" Note about LODF / PTDF:
+In our current implementation we will store the PTDF for the base case (i.e. no outages) in LODF[:,:,1], while 
+for all contingencies we will store the N first order contingencies at indices LODF[:,:,i] for i in 2:N. 
+    Second/third order contingencies are not yet covered but will likely be indexed in a similar fashion. 
+
+It is worth noting the terminology use of LODF / PTDF. The LODF for e.g.  branch 1 is the same as the PTDF when 
+branch 1 is outaged. As such, it may not make sense that, in the code below, the LODF[:,:,1] calculated as the 
+PTDF of the base case is not accurate use of this terminology, but rather a simplification for us to avoid 
+having to create a separate PTDF variable for the base case (and thus increase the number of variables...).
+
+    """
+function iterative_cont_anal(sys::System, nodes::Vector{Bus}, drop_idx::Dict{<: Any, <: Int}, contingencies::Vector{String})
+    branches = get_sorted_branches(sys)
+    lodf = zeros(
+            length(branches), 
+            length(nodes)-1, 
+            length(contingencies)+1
+        )
+    i_slack, slack = find_slack(nodes)
+    lodf[:,:,1] = get_ptdf(nodes, branches, drop_idx, i_slack)
     
-function solve_subproblem(pg0, ls0, lsc, u = nothing)
-    opfm = c_scopf(_opfm.sys, Gurobi.Optimizer, _opfm.voll, _opfm.contingencies, _opfm.prob, pg0, ls0, lsc, u, 
-        unit_commit=_unit_commit, max_shed=_max_shed, short_term_limit_multi=_short_term_limit_multi, 
-        ramp_minutes=_ramp_minutes, repair_time=_repair_time)
-    solve_model!(opfm.mod)
-    return (
-        obj = objective_value(opfm.mod), 
-        pgu = value.(opfm[:pgu]), 
-        λ = dual.(opfm[:pfcc_lim]),
-        lscc = value.(opfm[:lscc]), 
-        π = dual.(opfm[:pfcc_lim])
-    )
+    for (i,cont) in enumerate(contingencies)
+        branches_cont = [b for b in branches if b.name != cont]
+        islands = get_islands(sys, branches_cont)
+        if length(islands) == 1
+            drop_cont = [j for (j,b) in enumerate(branches) if b.name != cont]
+            lodf[drop_cont, :, i+1] = get_ptdf(nodes, branches_cont, drop_idx, i_slack)
+                # The B-matrix can be altered instead of rebuilt from the ground up
+        elseif length(islands) == 2
+            if slack.number ∈ get_number.(islands[1][1]) # Nodes in island 1
+                island_idx = get_nodes_idx([x for x in islands[1][1] if x.bustype != BusTypes.REF])
+                drop_id = sort!(collect(values(island_idx)))
+                drop_cont = [j for (j,b) in enumerate(branches) if b.name != cont && b.name ∈ get_name.(islands[1][2])]
+                lodf[drop_cont, drop_id, i+1] = get_ptdf(islands[1][1], islands[1][2], island_idx, i_slack)
+            else
+                island_idx = get_nodes_idx([x for x in islands[2][1] if x.bustype != BusTypes.REF])
+                drop_id = sort!(collect(values(island_idx)))
+                drop_cont = [j for (j,b) in enumerate(branches) if b.name != cont && b.name ∈ get_name.(islands[2][2])]
+                lodf[drop_cont, drop_id, i+1] = get_ptdf(islands[2][1], islands[2][2], island_idx, i_slack)
+            end
+        else
+            @warn "More than two islands is not implemented!"
+        end
+    end
+    return IterativeDCContAnal(lodf, contingencies, get_rate.(branches))
 end
 
-function print_iteration(k, args...)
-    f(x) = Printf.@sprintf("%12.4e", x)
-    println(lpad(k, 9), " ", join(f.(args), " "))
-    return
+" Get the overload of all lines "
+get_overload(contanal::IterativeDCContAnal, cont::Int, Pᵢ::Vector{Float64}) = 
+    find_overload.(
+            calculate_line_flows(get_cont_ptdf(contanal, cont), Pᵢ), 
+            contanal.linerating
+        )
+
+" Get the PTDF corresponding to the contingency "
+function get_cont_ptdf(contanal::IterativeDCContAnal, cont::Int)
+    @assert 0 <= cont <= length(contanal.contingencies)  # "No entry in LODF matrix for the given contingency. "
+    # cont+1 as first element in LODF is PTDF for base case
+    return contanal.lodf[:,:, cont+1]  
 end
+
+" Make the PTDF matrix for using the input nodes and branches "
+function get_ptdf(nodes::Vector{Bus}, branches::Vector{<: Branch}, idx::Dict{<: Any, <: Int}, slack::Int)
+    B = LinearAlgebra.lu(buildB(nodes, branches, idx, slack))
+    return get_ptdf(B, nodes, branches, idx, slack)
+end
+function get_ptdf(B, nodes::Vector{Bus}, branches::Vector{<: Branch}, idx::Dict{<: Any, <: Int}, slack::Int)
+    A = zeros(Float64, size(branches,1), size(nodes,1)-1) # Container for the distribution factors
+    for (i, branch) in enumerate(branches)
+        branch.x == 0 && continue
+        ΔP = zeros(Float64, size(nodes,1)-1)
+        (f, t) = get_bus_id(branch) # (f)rom and (t)o bus at this branch
+        if f != slack
+            ΔP[idx[f]] = 1 / branch.x
+        end
+        if t != slack # ∈ keys(idx)
+            ΔP[idx[t]] = -1 / branch.x
+        end
+        A[i, :] = B \ ΔP # append factors to matrix
+    end
+    return A
+end
+
+"""
+Builds an admittance matrix with the line series reactance of the lines.
+idx must not include the slack bus.
+ToDo: Only need the upper half triagonal matrix as it's symetric.
+"""
+function buildB(nodes::Vector{Bus}, branches::Vector{<: Branch}, idx::Dict{<: Any, <: Int}, slack::Int)
+    B = SparseArrays.spzeros(size(nodes,1)-1, size(nodes,1)-1)
+    for branch in branches
+        (f, t) = get_bus_id(branch)
+        if f != slack # not BusTypes.REF
+            B[idx[f],idx[f]] += 1 / branch.x
+            if t != slack
+                B[idx[t],idx[t]] += 1 / branch.x
+                B[idx[f],idx[t]] = -1 / branch.x
+                B[idx[t],idx[f]] = -1 / branch.x
+            end
+        elseif t != slack
+            B[idx[t],idx[t]] += 1 / branch.x
+        end
+    end
+    return B
+end
+
+""" Find island(s) in the system returned in a nested Vector.
+Each element of the Vector consists of two lists, nodes and branches, in that island. """
+function get_islands(sys::System, branches::Vector{<: Branch})
+    islands = Vector()
+    visited_nodes = Vector{Bus}([branches[1].arc.from]) # start node on island 1 marked as visited
+    visited_branches, new_nodes = find_connected(branches, first(visited_nodes))
+        # all nodes connected are set as neighouring nodes not visited,
+        # via visited branches
+
+    bus_numbers = length(sys.bus_numbers)
+    bus_number = 0
+    while true
+
+        # Visit new nodes until there are no neighouring nodes connected
+        while !isempty(new_nodes)
+            node = pop!(new_nodes)
+            push!(visited_nodes, node)
+            bn = find_connected(branches, node)
+            union!(visited_branches, bn[1])
+            union!(new_nodes, setdiff(bn[2], visited_nodes))
+        end
+
+        push!(islands, (visited_nodes, visited_branches))
+        bus_number += length(visited_nodes)
+        bus_numbers == bus_number && break # all nodes are visited 
+        visited_nodes = Vector([get_component(
+                Bus, 
+                sys, 
+                setdiff(sys.bus_numbers, get_number.(visited_nodes)) |> first |> string
+                    # a random node not visited yet starts a new island
+            )])
+        visited_branches, new_nodes = find_connected(branches, first(visited_nodes))
+    end
+    return islands
+end
+
+" Find nodes connected to a node "
+function find_connected(branches::Vector{<: Branch}, node::Bus)
+    new_branches = Vector{Branch}()
+    new_nodes = Vector{Bus}()
+    for branch in branches
+        if branch.arc.from.number === node.number
+            push!(new_branches, branch)
+            push!(new_nodes, branch.arc.to)
+        elseif branch.arc.to.number === node.number
+            push!(new_branches, branch)
+            push!(new_nodes, branch.arc.from)
+        end
+    end
+    return new_branches, new_nodes
+end
+
+" An AffExpr nicely formatted to a string "
+sprint_expr(expr::AffExpr) = join(Printf.@sprintf("%s%5.2f %s ", (x[2] > 0 ? "+" : "-"), abs(x[2]), x[1]) for x in expr.terms) * 
+    (expr.constant > 0 ? " +" : " -") * string(abs(expr.constant)) * " <= 0"

@@ -9,6 +9,7 @@ using StatsPlots
 using Printf
 # using PowerSystemCaseBuilder
 using Test
+using Statistics
 # include("N-1_SCOPF.jl")
 # include("short_long_SCOPF.jl")
 
@@ -26,131 +27,125 @@ function add_system_data_to_json(;
     to_json(system_data, file_name, force=true)
 end
 
-function hot_start(model::JuMP.Model)
-    x = JuMP.all_variables(model)
-    x_solution = JuMP.value.(x)
-    JuMP.set_start_value.(x, x_solution)
-    JuMP.optimize!(model)
+get_generator_cost(gen) = get_operation_cost(gen) |> get_variable |> get_cost |> get_value
+get_value(x::Vector{Tuple{Float64, Float64}}) = x[1]
+get_value(x::Tuple{Float64, Float64}) = x
+
+""" An iterator to a type of power system component """
+get_gens_t(sys::System) = get_components(ThermalGen, sys)
+get_gens_h(sys::System) = get_components(HydroGen, sys)
+get_branches(sys::System) = get_components(ACBranch, sys) # Includes both Line and Phase Shifting Transformer
+get_nodes(sys::System) = get_components(Bus, sys)
+get_demands(sys::System) = get_components(StaticLoad, sys)
+get_renewables(sys::System) = get_components(RenewableGen, sys) # Renewable modelled as negative demand
+get_ctrl_generation(sys::System) = Iterators.flatten((get_gens_t(sys), get_gens_h(sys))) # An iterator of all controllable generators
+get_nonctrl_generation(sys::System) = Iterators.flatten((get_demands(sys), get_renewables(sys))) # An iterator of all non-controllable load and generation
+
+""" A sorted vector to a type of power system component """
+get_sorted_nodes(sys::System) = sort_nodes!(collect(get_components(Bus, sys)))
+get_sorted_branches(sys::System) = sort_branches!(collect(get_components(ACBranch, sys)))
+sort_nodes!(nodes::Vector{Bus}) = sort!(nodes,by = x -> x.number)
+sort_branches!(branches::Vector{<: Branch}) = sort!(branches,
+        by = x -> (get_number(get_arc(x).from), get_number(get_arc(x).to))
+    )
+
+# it_name(::Type{T}, mos::Model) where {T <: Component} = get_name.(get_components(T,mod))
+
+""" Make a DenseAxisArray using the list and function for the value of each element """
+make_named_array(value_func, list) = JuMP.Containers.DenseAxisArray(
+    [value_func(x) for x in list], get_name.(list) 
+)
+
+""" An array of the Value Of Lost Load for the demand and get_renewables """
+make_voll(sys::System) = JuMP.Containers.DenseAxisArray(
+        [rand(1000:3000, length(get_demands(sys))); rand(1:30, length(get_renewables(sys)))], 
+        [get_name.(get_demands(sys)); get_name.(get_renewables(sys))]
+    )
+
+""" An array of the outage probability of the contingencies """
+make_prob(contingencies::Vector{String}) = JuMP.Containers.DenseAxisArray(
+        (rand(length(contingencies)).*(0.5-0.02).+0.02)./8760, 
+        contingencies
+    )
+
+""" A list with type_func componentes distributed on their node """
+function make_list(opfm::OPFmodel, type_func, nodes = get_nodes(opfm.sys)) 
+    list = JuMP.Containers.DenseAxisArray(
+        [[] for _ in 1:length(nodes)], get_name.(nodes)
+    )
+    for g in type_func(opfm.sys)
+        push!(list[g.bus.name], g)
+    end
+    return list
+end
+
+""" Return the (first) slack bus in the system. """
+function find_slack(nodes)
+    for (i,x) in enumerate(nodes)
+        x.bustype == BusTypes.REF && return i,x
+    end
+    @warn "No slack bus found!"
+end
+find_slack(sys::System) = find_slack(get_sorted_nodes(sys))
+
+""" Run optimizer to solve the model and check for optimality """
+function solve_model!(model::Model)
+    optimize!(model)
+    if termination_status(model) != MOI.OPTIMAL 
+        @warn "Model not optimally solved with status $(termination_status(model))!"
+    else
+        @info "Model solved in $(solve_time(model)) seconds with an objective value of $(objective_value(model))"
+    end
     return model
 end
 
-function comparison(range, fname, optimizer; 
-        sys_name = "",
-        voll = nothing, 
-        contingencies = nothing, 
-        prob = nothing,
-        time_limit_sec = 600,
-        unit_commit::Bool=false,
-        max_shed = 0.1,
-        max_curtail::Float64 = 1.0,
-        ratio = 0.5, 
-        short_term_limit_multi = 1.5,
-        ramp_minutes::Int64 = 10,
-        repair_time::Float64 = 1.0)
-
-    @info "----------- Start of simulation -----------"
-    system = System(fname)
-    p_names = [(:pg0, Generator), (:pf0, Branch), (:pfc, Branch), (:ls0, StaticLoad), (:lsc, StaticLoad), (:va0, Bus), (:vac, Bus)]
-    c_names = [(:pgu, Generator), (:pgd, Generator), (:pfcc, Branch), (:lscc, StaticLoad), (:vacc, Bus)]
-    result = Vector()
-    pg = Vector()
-    x = 1
-    for i in range
-        try
-            for d in get_components(StaticLoad, system)
-                set_active_power!(d, get_active_power(d)*i/x)
-            end
-            x = i
-            opfm = scopf(PCSC, system, optimizer, voll=voll, prob=prob, contingencies=contingencies, time_limit_sec=time_limit_sec,
-                unit_commit=unit_commit, max_shed=max_shed, max_curtail=max_curtail, ratio=ratio, short_term_limit_multi=short_term_limit_multi, 
-                ramp_minutes=ramp_minutes, repair_time=repair_time)
-            solve_model!(opfm.mod)
-            sl_model = sl_scopf(system, optimizer, voll=voll, prob=prob, contingencies=contingencies, time_limit_sec=time_limit_sec,
-                unit_commit=unit_commit, max_shed=max_shed, max_curtail=max_curtail, ratio=ratio, short_term_limit_multi=short_term_limit_multi, 
-                ramp_minutes=ramp_minutes, repair_time=repair_time)
-            push!(result, (i,
-                solve_time(opfm.mod), objective_value(opfm.mod),
-                solve_time(sl_model[1].mod)+solve_time(sl_model[2]), objective_value(sl_model[2])
-            ))
-            push!(pg, (i, value.(opfm.mod[:pg0]).data, value.(sl_model[1].mod[:pg0]).data))
-            for name in p_names
-                make_save_plot(opfm.mod, system, string("norm",sys_name,string(i)), name)
-                make_save_plot(sl_model[1].mod, system, string("sl",sys_name,string(i)), name)
-            end
-            for name in c_names
-                make_save_plot(opfm.mod, system, string("norm",sys_name,string(i)), name)
-                make_save_plot(sl_model[2], system, string("sl",sys_name,string(i)), name)
-            end
-        catch e
-            @warn "$(e) when load is x$(i)"
-            break
-        end
+" Sets the start values of symbols to the previous solution "
+function set_warm_start!(model::JuMP.Model, symb::Symbol) 
+    x_sol = JuMP.value.(model[symb])
+    JuMP.set_start_value.(model[symb], x_sol)
+    return model
+end
+function set_warm_start!(model::JuMP.Model, symbs::Vector{Symbol}) 
+    x_sol = [JuMP.value.(model[symb]) for symb in symbs]
+    for symb in symbs
+        JuMP.set_start_value.(model[symb], x_sol)
     end
-    return result, pg
+    return model
 end
 
-scatterplot(model, system, name, type) = 
-    scatter(
-        [get_name.(get_components(type, system))], 
-        [value.(model[name]).data], 
-        dpi=100, 
-        size=(600,600), 
-        label = false, 
-        rotation=90, 
-        title = name
-    )
+" Get a dict of bus-number-keys and vector-position-values "
+get_nodes_idx(nodes::Vector{Bus}) = PowerSystems._make_ax_ref(nodes)
 
-function make_save_plot(model, system, sys_name, name)
-    plt = scatterplot(model, system, name[1], name[2])
-    display(plt)
-    path = mkpath(joinpath("results",sys_name))
-    savefig(plt, joinpath(path,"$(name[1]).pdf"))
-end
+" Get the number of the from-bus and to-bus from a branch"
+get_bus_id(branch::ACBranch) = (branch.arc.from.number, branch.arc.to.number)
 
-function scatter_all(model, system; sys_name = "")
-    names = [
-        (:pg0, Generator), (:pgu, Generator), (:pgd, Generator), (:u, ThermalGen),
-        (:pf0, Branch), (:pfc, Branch), (:pfcc, Branch), 
-        (:ls0, StaticLoad), (:lsc, StaticLoad), (:lscc, StaticLoad), 
-        (:qg0, Generator), (:qgu, Generator), (:qgd, Generator), 
-        (:qf0, Branch), (:qfc, Branch), (:qfcc, Branch), 
-        (:va0, Bus), (:vac, Bus), (:vacc, Bus), 
-        (:cbc, Bus), (:cbcc, Bus)
-    ]
-    for name in names
-        try
-            plt = scatterplot(model, system, name[1], name[2])
-            display(plt)
-            path = mkpath(joinpath("results",sys_name))
-            savefig(plt, joinpath(path,"$(name[1]).pdf"))
-        catch e
-            print("No $(name[1]). ")
-        end
+" Return the overload of a line, else return 0.0 "
+find_overload(flow::Float64, lim::Float64) = abs(flow)-lim > 0 ? sign(flow)*(abs(flow)-lim) : 0.0
+
+" DC line flow calculation"
+calculate_line_flows(isf::Array{Float64,2}, Pᵢ::Array{Float64}) = isf*Pᵢ
+
+" DC power flow calculation "
+run_pf(X::Array{Float64, 2}, Pᵢ::Array{Float64}) = X*Pᵢ 
+
+""" Return the power injected at each node sorted by bus number. """
+function get_Pᵢ(opfm::OPFmodel)
+    nodes = get_sorted_nodes(opfm.sys)
+    Pᵢ = JuMP.Containers.DenseAxisArray(
+            zeros(length(nodes)), get_name.(nodes) 
+        )
+    p = JuMP.value.(opfm.mod[:pg0])
+    for g in get_components(Generator, opfm.sys)
+        Pᵢ[g.bus.name] += p[get_name(g)]
     end
-end
-
-function print_variabel(model, system, name, type)
-    for (i,x) in zip(get_name.(get_components(type, system)), value.(model[name]).data)
-        @printf("%s: %.3f\n", i, x)
+    p = JuMP.value.(opfm.mod[:ls0])
+    for r in get_components(RenewableGen, opfm.sys)
+        Pᵢ[r.bus.name] += get_active_power(r) - p[get_name(r)]
     end
+    for d in get_components(StaticLoad, opfm.sys)
+        Pᵢ[d.bus.name] -= get_active_power(d) + p[get_name(d)]
+    end
+    @assert abs(sum(Pᵢ)) < 0.001
+    return Pᵢ
 end
 
-# # corrective control failure probability
-# phi(p, n) = sum((-1)^k * p^k * binomial(n,k) for k in 1:n)
-
-# # severity function
-# @expression(opf_m, severity, sum(voll[d] * lse[d] for d in get_name.(demands)))
-
-
-# for l in get_name.(get_components(ACBranch, ieee_rts))
-#     for g in get_name.(get_components(Generator, ieee_rts))
-#         if value.(results[:pgu])[g,l] > 0.00001 
-#             @printf("%s: \t%s \t= %.5f \n", l, g, value.(results[:pgu])[g,l])
-#         end
-#     end
-# end
-        
-# add_system_data_to_json()
-# system_data = System("system_data.json")
-# results = opf_model(system_data, Ipopt.Optimizer)
-# value.(results[:pl])

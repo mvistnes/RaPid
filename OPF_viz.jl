@@ -63,7 +63,7 @@ end
 
 plt = scatter(
     [get_name.(get_components(Branch, ieee_rts))], 
-    [value.(model[:pf0]).data ./ get_rate.(get_components(Branch, ieee_rts))], 
+    [value.(opfm.mod[:pf0]).data ./ get_rate.(get_components(Branch, ieee_rts))], 
     dpi=100, 
     size=(600,600), 
     label = false, 

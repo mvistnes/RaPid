@@ -4,10 +4,10 @@
 Security Constrained Optimal Power Flow
 
 ## Description
-A solver of SCOPF-problems. It can take input on the Matpower-format, both as a csv-file and an xlsx-file. Constraints can be set manualy and automatically.
+A solver of SCOPF-problems. It can take input on the Matpower-format, both as a csv-file and an xlsx-file. Constraints can be set manually and automatically.
 
 ## Installation
-Julia 1.7.2
+Julia 1.8
 
 ## Usage
 "Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README."

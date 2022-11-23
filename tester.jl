@@ -1,70 +1,73 @@
-# Example from PowerSystems docs https://nrel-siip.github.io/PowerSystems.jl/stable/modeler_guide/generatopf_modeling_with_JuMP/
-
+# CC BY 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2022
 using PowerSystems
 using JuMP
-using Ipopt
+# using Ipopt # LP, SOCP, Nonconvex
+using Gurobi # LP, SOCP, Integer
+# using GLPK # LP, Integer
+using Plots
+using StatsPlots
+using Printf
+# using PowerSystemCaseBuilder
+using Test
+using Statistics
+# include("N-1_SCOPF.jl")
+# include("short_long_SCOPF.jl")
 
-installed_capacity(system::System; ::Type{T}) where T <: Generator = sum(get_max_active_power.(get_components(T, system)))
+function comparison(range, fname, optimizer; 
+        sys_name = "",
+        voll = nothing, 
+        contingencies = nothing, 
+        prob = nothing,
+        time_limit_sec = 600,
+        unit_commit::Bool=false,
+        max_shed = 0.1,
+        max_curtail::Float64 = 1.0,
+        ratio = 0.5, 
+        short_term_limit_multi = 1.5,
+        ramp_minutes::Int64 = 10,
+        repair_time::Float64 = 1.0)
 
-function opf_model(system::System, optimizer)
-    opf_m = Model(optimizer)
-    set_time_limit_sec(opf_m, 60.0)
-
-    # ybus = Ybus(system)
-    ptdf = PTDF(system)
-
-    # make active power variables for the generators
-    @variable(opf_m, pg[g in get_name.(get_components(ThermalStandard, system))]) # TODO: add load curtailment variable
-    # make voltage angle and active power variables for the nodes
-    @variable(opf_m, angle[b in get_name.(get_components(Bus, system))])
-    @variable(opf_m, pb[b in get_name.(get_components(Bus, system))])
-
-    # restrict active power generation to min and max values
-    for g in get_components(ThermalStandard, system)
-        set_lower_bound(pg[get_name(g)], get_active_power_limits(g).min) 
-        set_upper_bound(pg[get_name(g)], get_active_power_limits(g).max)
+    @info "----------- Start of simulation -----------"
+    system = System(joinpath("data", fname))
+    p_names = [(:pg0, Generator), (:pf0, Branch), (:pfc, Branch), (:ls0, StaticLoad), (:lsc, StaticLoad), (:va0, Bus), (:vac, Bus)]
+    c_names = [(:pgu, Generator), (:pgd, Generator), (:pfcc, Branch), (:lscc, StaticLoad), (:vacc, Bus)]
+    result = Vector()
+    pg = Vector()
+    ls = zeros(length(demands(system))+length(renewables(system)))
+    x = 1
+    for i in range
+        try
+            for d in get_components(StaticLoad, system)
+                set_active_power!(d, get_active_power(d)*i/x)
+            end
+            x = i
+            opfm = scopf(PCSC, system, optimizer, voll=voll, prob=prob, contingencies=contingencies, time_limit_sec=time_limit_sec,
+                unit_commit=unit_commit, max_shed=max_shed, max_curtail=max_curtail, ratio=ratio, short_term_limit_multi=short_term_limit_multi, 
+                ramp_minutes=ramp_minutes, repair_time=repair_time)
+            solve_model!(opfm.mod)
+            sl_model = sl_scopf(system, optimizer, voll=voll, prob=prob, contingencies=contingencies, time_limit_sec=time_limit_sec,
+                unit_commit=unit_commit, max_shed=max_shed, max_curtail=max_curtail, ratio=ratio, short_term_limit_multi=short_term_limit_multi, 
+                ramp_minutes=ramp_minutes, repair_time=repair_time)
+            push!(result, (i,
+                solve_time(opfm.mod), objective_value(opfm.mod), 
+                value.(opfm.mod[:pf0]).data ./ get_rate.(get_components(Branch, system)).|> abs |> mean,
+                solve_time(sl_model[1].mod)+solve_time(sl_model[2]), objective_value(sl_model[2]), 
+                value.(sl_model[1].mod[:pf0]).data ./ get_rate.(get_components(Branch, system)).|> abs |> mean
+            ))
+            push!(pg, (i, value.(opfm.mod[:pg0]).data, value.(sl_model[1].mod[:pg0]).data))
+            ls .+= (value.(opfm.mod[:ls0]) .+ sum(value.(opfm.mod[:lsc]).data, dims=2) .+ sum(value.(opfm.mod[:lscc]).data, dims=2)).data
+            # for name in p_names
+            #     make_save_plot(opfm.mod, system, string("norm",sys_name,string(i)), name)
+            #     make_save_plot(sl_model[1].mod, system, string("sl",sys_name,string(i)), name)
+            # end
+            # for name in c_names
+            #     make_save_plot(opfm.mod, system, string("norm",sys_name,string(i)), name)
+            #     make_save_plot(sl_model[2], system, string("sl",sys_name,string(i)), name)
+            # end
+        catch e
+            @warn "$(e) when load is x$(i)"
+            break
+        end
     end
-
-    # incerted power at each bus
-    for b in get_components(Bus, system)
-        @constraint(opf_m, pb[get_name(b)] == sum(get_bus(g) == b ? pg[get_name(g)] : 0 for g in get_components(ThermalStandard, system))
-                                             - sum(get_bus(l) == b ? get_max_active_power(l) : 0 for l in get_components(StaticLoad, system)))
-    end
-
-    # sum up the load and sum up renewable active power generation as negative load
-    net_load = sum(get_max_active_power(g) for g in get_components(StaticLoad, system)) # - sum(get_max_active_power(g) for g in get_components(RenewableGen, system))
-    # power balance
-    @constraint(opf_m, power_balance, sum(pg[g] for g in get_name.(get_components(ThermalStandard, system))) == net_load)
-
-    # power flow on line and line limit
-    # for l in get_components(Line, system)
-    #     bus_from = get_name(get_arc(l).from)
-    #     bus_to = get_name(get_arc(l).to)
-    #     @constraint(opf_m, pb[bus_from] - pb[bus_to] == (angle[bus_from] - angle[bus_to]) / get_x(l))
-    #     @constraint(opf_m, -get_rate(l) <= pb[bus_from] - pb[bus_to] <= get_rate(l))
-    # end
-    @constraint(opf_m, get_rate.(get_components(Line, system)) <= ptdf * pb <= get_rate.(get_components(Line, system)))
-
-    # minimize cost of generation, quadratic costs
-    @objective(opf_m, Min, sum(
-        pg[get_name(g)]^2 * get_cost(get_variable(get_operation_cost(g)))[1] +
-        pg[get_name(g)] * get_cost(get_variable(get_operation_cost(g)))[2]
-        for g in get_components(ThermalGen, system)
-        )
-    )
-
-    optimize!(opf_m)
-    for g in get_name.(get_components(ThermalStandard, system))
-        println(g, " = ", value(pg[g]))
-    end
-
-    return opf_m
+    return result, pg, ls
 end
-
-# add_system_data_to_json()
-# system_data = System("system_data.json")
-# results = opf_model(system_data, Ipopt.Optimizer)
-# value.(results[:pl])
-# write_to_file(results, "model.mps")
-# latex_formulation(results)
-# model = read_from_file("model.mps") # the names in the model will not be registered, use variable_by_name or constraint_by_name.
