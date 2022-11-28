@@ -31,34 +31,57 @@ function run_benders(opfm::OPFmodel, voll, contingencies, prob;
             ramp_minutes::Int64 = 10,
             repair_time::Float64 = 1.0
         )
-    
+
     # Set global variables
     nodes = get_sorted_nodes(opfm.sys)
+    branches = get_sorted_branches(opfm.sys)
     drop_idx = get_nodes_idx([x for x in nodes if x.bustype != BusTypes.REF])
     drop_id = sort!(collect(keys(drop_idx)))
     list_gen = make_list(opfm, get_ctrl_generation)
-    contanal = iterative_cont_anal(opfm.sys, nodes, drop_idx, contingencies)
+    contanal = iterative_cont_anal(opfm.sys, nodes, branches, drop_idx, contingencies)
 
-    for (c,cont) in enumerate(contingencies)
-        Pᵢ = get_Pᵢ(opfm)
+    it = enumerate(contingencies)
+    next = iterate(it)
+    while next !== nothing
+        (c, cont), state = next
+        Pᵢ = get_Pᵢ(opfm, nodes)
         ptdf = get_cont_ptdf(contanal, c)
-        overloads = get_overload2(contanal, c, Pᵢ.data[drop_id])
-
-        for (i,ol) in enumerate(overloads)
-            abs(ol) < 0.001 && continue
-            expr = JuMP.AffExpr(-ol)
-
-            for n in nodes 
-                n.bustype != BusTypes.REF && JuMP.add_to_expression!(expr, 
-                        -ptdf[i, drop_idx[n.number]] * (sum((opfm.mod[:pg0][g.name] for g in list_gen[n.name]), init=0.0) - Pᵢ[n.name])
-                    )
+        overloads = get_overload(contanal, c, get_net_Pᵢ(opfm, nodes)[drop_id])
+        overloads = [(i,ol) for (i,ol) in enumerate(overloads) if abs(ol) > 0.001]
+        if length(overloads) > 0
+            sort!(overloads, rev = true, by = x -> abs(x[2]))
+            (i,ol) = first(overloads)
+            submod = Model(Gurobi.Optimizer)
+            @variable(submod, 0 <= pgu[g in get_name.(get_ctrl_generation(opfm.sys))])
+            @variable(submod, 0 <= pgd[g in get_name.(get_ctrl_generation(opfm.sys))])
+            @objective(submod, Min, sum(pgu) + sum(pgd))
+            @constraint(submod, sum(pgu) - sum(pgd) == 0)
+            expr = sum(
+                        ptdf[i, drop_idx[n.number]] * 
+                        sum((submod[:pgu][g.name] - submod[:pgd][g.name] for g in list_gen[n.name]), init=0.0) 
+                        for n in nodes if n.bustype != BusTypes.REF
+                    ) 
+            if ol > 0
+                @constraint(submod, expr <= ol + contanal.linerating[i])
+            else
+                @constraint(submod, expr >= abs(ol))
             end
-            @info "Cut added: " * sprint_expr(expr)
+            solve_model!(submod)
+
+            expr = JuMP.AffExpr(objective_value(submod))
+            JuMP.add_to_expression!(expr, sum(
+                    (sum((opfm.mod[:pg0][g.name] for g in list_gen[n.name]), init=0.0) - Pᵢ[n.number]) *
+                    (n.bustype != BusTypes.REF && abs(ptdf[i, drop_idx[n.number]]) > 0.001 ? -1 : 1) for n in nodes 
+                ))
+            @info "Contingency on $(cont) resulted in overload on $(branches[i].name) of $(ol) \nCut added: $(sprint_expr(expr))\n"
             set_warm_start!(opfm.mod, :pg0) # query of information then edit of model, else OptimizeNotCalled errors
             JuMP.@constraint(opfm.mod, expr <= 0)
+            MOI.set(opfm.mod, MOI.Silent(), true) # supress output from the solver
             opfm.mod = solve_model!(opfm.mod)
+            termination_status(opfm.mod) != MOI.OPTIMAL && return
+        else
+            next = iterate(it, state)
         end
-
     end
     return opfm
 end
@@ -80,34 +103,33 @@ PTDF of the base case is not accurate use of this terminology, but rather a simp
 having to create a separate PTDF variable for the base case (and thus increase the number of variables...).
 
     """
-function iterative_cont_anal(sys::System, nodes::Vector{Bus}, drop_idx::Dict{<: Any, <: Int}, contingencies::Vector{String})
-    branches = get_sorted_branches(sys)
+function iterative_cont_anal(sys::System, nodes::Vector{Bus}, branches::Vector{<: Branch}, drop_idx::Dict{<: Any, <: Int}, contingencies::Vector{String})
     lodf = zeros(
             length(branches), 
             length(nodes)-1, 
             length(contingencies)+1
         )
     i_slack, slack = find_slack(nodes)
-    lodf[:,:,1] = get_ptdf(nodes, branches, drop_idx, i_slack)
+    lodf[:,:,1] = get_ptdf(nodes, branches, drop_idx, slack.number)
     
     for (i,cont) in enumerate(contingencies)
         branches_cont = [b for b in branches if b.name != cont]
         islands = get_islands(sys, branches_cont)
         if length(islands) == 1
             drop_cont = [j for (j,b) in enumerate(branches) if b.name != cont]
-            lodf[drop_cont, :, i+1] = get_ptdf(nodes, branches_cont, drop_idx, i_slack)
+            lodf[drop_cont, :, i+1] = get_ptdf(nodes, branches_cont, drop_idx, slack.number)
                 # The B-matrix can be altered instead of rebuilt from the ground up
         elseif length(islands) == 2
             if slack.number ∈ get_number.(islands[1][1]) # Nodes in island 1
                 island_idx = get_nodes_idx([x for x in islands[1][1] if x.bustype != BusTypes.REF])
                 drop_id = sort!(collect(values(island_idx)))
                 drop_cont = [j for (j,b) in enumerate(branches) if b.name != cont && b.name ∈ get_name.(islands[1][2])]
-                lodf[drop_cont, drop_id, i+1] = get_ptdf(islands[1][1], islands[1][2], island_idx, i_slack)
+                lodf[drop_cont, drop_id, i+1] = get_ptdf(islands[1][1], islands[1][2], island_idx, slack.number)
             else
                 island_idx = get_nodes_idx([x for x in islands[2][1] if x.bustype != BusTypes.REF])
                 drop_id = sort!(collect(values(island_idx)))
                 drop_cont = [j for (j,b) in enumerate(branches) if b.name != cont && b.name ∈ get_name.(islands[2][2])]
-                lodf[drop_cont, drop_id, i+1] = get_ptdf(islands[2][1], islands[2][2], island_idx, i_slack)
+                lodf[drop_cont, drop_id, i+1] = get_ptdf(islands[2][1], islands[2][2], island_idx, slack.number)
             end
         else
             @warn "More than two islands is not implemented!"
@@ -132,8 +154,9 @@ end
 
 " Make the PTDF matrix for using the input nodes and branches "
 function get_ptdf(nodes::Vector{Bus}, branches::Vector{<: Branch}, idx::Dict{<: Any, <: Int}, slack::Int)
-    B = LinearAlgebra.lu(buildB(nodes, branches, idx, slack))
-    return get_ptdf(B, nodes, branches, idx, slack)
+    B = buildB(nodes, branches, idx, slack)
+    isempty(B) && return B
+    return get_ptdf(LinearAlgebra.lu(B), nodes, branches, idx, slack)
 end
 function get_ptdf(B, nodes::Vector{Bus}, branches::Vector{<: Branch}, idx::Dict{<: Any, <: Int}, slack::Int)
     A = zeros(Float64, size(branches,1), size(nodes,1)-1) # Container for the distribution factors
@@ -200,6 +223,7 @@ function get_islands(sys::System, branches::Vector{<: Branch})
         push!(islands, (visited_nodes, visited_branches))
         bus_number += length(visited_nodes)
         bus_numbers == bus_number && break # all nodes are visited 
+        bus_numbers < bus_number && @error "More nodes counted, $(bus_number), than nodes in the system, $(bus_numbers)!"
         visited_nodes = Vector([get_component(
                 Bus, 
                 sys, 
@@ -230,3 +254,59 @@ end
 " An AffExpr nicely formatted to a string "
 sprint_expr(expr::AffExpr) = join(Printf.@sprintf("%s%5.2f %s ", (x[2] > 0 ? "+" : "-"), abs(x[2]), x[1]) for x in expr.terms) * 
     (expr.constant > 0 ? " +" : " -") * string(abs(expr.constant)) * " <= 0"
+
+
+
+# -------------------------------------- OLD --------------------------------------
+
+# function run_benders(opfm::OPFmodel, voll, contingencies, prob;
+#             time_limit_sec::Int64 = 600,
+#             unit_commit::Bool = false,
+#             max_shed::Float64 = 0.1,
+#             max_curtail::Float64 = 1.0,
+#             ratio::Float64= 0.5, 
+#             circuit_breakers::Bool=false,
+#             short_term_limit_multi::Float64 = 1.5,
+#             ramp_minutes::Int64 = 10,
+#             repair_time::Float64 = 1.0
+#         )
+
+#     # Set global variables
+#     nodes = get_sorted_nodes(opfm.sys)
+#     branches = get_sorted_branches(opfm.sys)
+#     drop_idx = get_nodes_idx([x for x in nodes if x.bustype != BusTypes.REF])
+#     drop_id = sort!(collect(keys(drop_idx)))
+#     list_gen = make_list(opfm, get_ctrl_generation)
+#     contanal = iterative_cont_anal(opfm.sys, nodes, branches, drop_idx, contingencies)
+
+#     it = enumerate(contingencies)
+#     next = iterate(it)
+#     while next !== nothing
+#         (c, cont), state = next
+#         Pᵢ = get_Pᵢ(opfm)
+#         ptdf = get_cont_ptdf(contanal, c)
+#         overloads = get_overload(contanal, c, Pᵢ.data[drop_id])
+
+#         for (i,ol) in enumerate(overloads)
+#             abs(ol) < 0.001 && continue
+#             expr = JuMP.AffExpr(-ol)
+
+#             JuMP.add_to_expression!(expr, sum(
+#                 -ptdf[i, drop_idx[n.number]] * 
+#                 (sum((opfm.mod[:pg0][g.name] for g in list_gen[n.name]), init=0.0) - Pᵢ[n.name]) 
+#                 for n in nodes if n.bustype != BusTypes.REF
+#             ))
+            
+#             @info "Contingency on $(cont) resulted in overload on $(branches[i].name) of $(ol) \nCut added: $(sprint_expr(expr))\n"
+#             set_warm_start!(opfm.mod, :pg0) # query of information then edit of model, else OptimizeNotCalled errors
+#             JuMP.@constraint(opfm.mod, expr .<= 0)
+#             MOI.set(opfm.mod, MOI.Silent(), true) # supress output from the solver
+#             opfm.mod = solve_model!(opfm.mod)
+#             break
+#         end
+#         if abs(ol) < 0.001
+#             next = iterate(it, state)
+#         end
+#     end
+#     return opfm
+# end

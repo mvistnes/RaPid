@@ -70,13 +70,24 @@ function print_active_power(opfm::OPFmodel)
     list_gen = make_list(opfm, get_ctrl_generation, nodes)
     list_d = make_list(opfm, get_demands, nodes)
     list_r = make_list(opfm, get_renewables, nodes)
-    xprint(x, val) = @printf("%10s:%6.2f ", get_name(x), val)
+    xprint(x, val) = @printf("%7s:%6.2f, ", split(x.name, "_", limit=2)[end], val)
+    sort_x!(list) = sort!(list, by = x -> parse(Int64, split(x.name, "_")[end]))
+    sort_alt!(list) = sort!(list, by = x -> x.name)
     get_injection(g::Union{ThermalGen, HydroGen}) = value(opfm.mod[:pg0][get_name(g)])
     get_injection(r::RenewableGen) = get_active_power(r) - value(opfm.mod[:ls0][get_name(r)])
     get_injection(d::StaticLoad) =  -get_active_power(d) + value(opfm.mod[:ls0][get_name(d)])
-    print(" Bus   Total  Injections")
+    print(" Bus   Total  Injections...")
     tot = 0.0
     for (n, g, d, r) in zip(nodes, list_gen, list_d, list_r)
+        try 
+            sort_x!(g)
+            sort_x!(d)
+            sort_x!(r)
+        catch
+            sort_alt!(g)
+            sort_alt!(d)
+            sort_alt!(r)
+        end
         val_g = get_injection.(g)
         val_d = get_injection.(d)
         val_r = get_injection.(r)
@@ -87,7 +98,19 @@ function print_active_power(opfm::OPFmodel)
         xprint.(d, val_d)
         xprint.(r, val_r)
     end
-    @printf("\n Sum  %6.2f", tot)
+    @printf("\n Sum  %6.2f\n", tot)
+end
+
+function print_power_flow(opfm::OPFmodel)
+    branches = get_sorted_branches(opfm.sys)
+    println("    Branch    Flow  Rating")
+    for branch in branches
+        @printf("%10s  %6.2f  %6.2f\n", 
+                get_name(branch), 
+                value(opfm.mod[:pf0][get_name(branch)]), 
+                get_rate(branch)
+            )
+    end
 end
 
 # # corrective control failure probability

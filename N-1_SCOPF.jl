@@ -2,57 +2,7 @@
 
 using PowerSystems
 using JuMP
-using Ipopt
-using GLPK
-using Gurobi
-import Statistics
-
-@enum OPF SC=0 PSC=1 PCSC=2 # SCOPF, P-SCOPF, SC-SCOPF
-
-""" OPF model type """
-mutable struct OPFmodel
-    sys::PowerSystems.System
-    mod::JuMP.Model
-    # beta::Union{Nothing, JuMP.Containers.DenseAxisArray} # Should convert to sparse some time in the future
-    voll::JuMP.Containers.DenseAxisArray
-    cost::JuMP.Containers.DenseAxisArray
-    contingencies::Union{Nothing, Vector{String}}
-    prob::Union{Nothing, JuMP.Containers.DenseAxisArray}
-end
-
-""" Constructor for OPFmodel """
-function opfmodel(sys::System, optimizer, time_limit_sec, voll=nothing, contingencies=nothing, prob=nothing)
-    mod = Model(optimizer)
-    if GLPK.Optimizer == optimizer 
-        set_optimizer_attribute(mod, "msg_lev", GLPK.GLP_MSG_ON)
-    end
-    c = [get_generator_cost(g)[2] for g in get_gens_t(sys)]
-    cost = JuMP.Containers.DenseAxisArray(
-        [c; [Statistics.mean(c) for _ in get_gens_h(sys)]],
-        get_name.(get_ctrl_generation(sys))
-    )
-
-    # β = JuMP.Containers.DenseAxisArray{Int64}(undef, get_name.(get_nodes(sys)), get_name.(get_branches(sys)))
-    # for l in get_branches(sys)
-    #     β[get_name(l.arc.from), get_name(l)] = 1
-    #     β[get_name(l.arc.to), get_name(l)] = -1
-    # end
-
-    # @assert length(voll) == length(get_nonctrl_generation(sys)) # should be implemented
-    # @assert isempty(prob) || length(contingencies) == length(prob)
-
-    return OPFmodel(sys, mod, voll, cost, contingencies, prob)
-end
-
-"""Find value of β, β = 1 if from-bus is the bus, β = -1 if to-bus is the bus, 0 else"""
-beta(bus::Bus, branch::Branch) = bus == branch.arc.from ? 1 : bus == branch.arc.to ? -1 : 0
-beta(bus::String, branch::Branch) = bus == branch.arc.from.name ? 1 : bus == branch.arc.to.name ? -1 : 0
-function beta(sys::System, branch::String) 
-    l = get_component(ACBranch, sys, branch)
-    return [beta(b, l) for b in get_nodes(sys)]
-end
-
-a(line::String,contingency::String) = line != contingency ? 1 : 0
+include("utils.jl")
 
 """ Set the renewable production to a ratio of maximum active power """
 function set_renewable_prod!(system::System, ratio::Float64=0.5)
@@ -66,12 +16,12 @@ end
 function init_var_dc_SCOPF!(opfm::OPFmodel)
     p_lim = make_named_array(get_active_power_limits, get_ctrl_generation(opfm.sys))
     @variables(opfm.mod, begin
-        0 <= pg0[g in get_name.(get_ctrl_generation(opfm.sys))] <= p_lim[g].max     # active power variables for the generators
-            # restricted to positive numbers (can be changed to minimum active power) and less than maximum active power
-        pf0[l in get_name.(get_branches(opfm.sys))]      # power flow on get_branches in base case
-        va0[b in get_name.(get_nodes(opfm.sys))]         # voltage angle at a node in base case
-        0 <= ls0[d in get_name.(get_nonctrl_generation(opfm.sys))]  # demand curtailment variables
-    end)
+            0 <= pg0[g in get_name.(get_ctrl_generation(opfm.sys))] <= p_lim[g].max     # active power variables for the generators
+                # restricted to positive numbers (can be changed to minimum active power) and less than maximum active power
+            pf0[l in get_name.(get_branches(opfm.sys))]      # power flow on get_branches in base case
+            va0[b in get_name.(get_nodes(opfm.sys))]         # voltage angle at a node in base case
+            0 <= ls0[d in get_name.(get_nonctrl_generation(opfm.sys))]  # demand curtailment variables
+        end)
     @info "Variables added: pg0, pf0, va0, ls0"
     return opfm
 end
@@ -79,10 +29,10 @@ end
 function init_var_dc_P_SCOPF!(opfm::OPFmodel)
     opfm = init_var_dc_SCOPF!(opfm)    
     @variables(opfm.mod, begin
-        pfc[l in get_name.(get_branches(opfm.sys)), c in opfm.contingencies] # power flow on get_branches in contingencies
-        vac[b in get_name.(get_nodes(opfm.sys)), c in opfm.contingencies] # voltage angle at a node in contingencies
-        0 <= lsc[d in get_name.(get_nonctrl_generation(opfm.sys)), c in opfm.contingencies] # demand curtailment variables
-    end)
+            pfc[l in get_name.(get_branches(opfm.sys)), c in opfm.contingencies] # power flow on get_branches in contingencies
+            vac[b in get_name.(get_nodes(opfm.sys)), c in opfm.contingencies] # voltage angle at a node in contingencies
+            0 <= lsc[d in get_name.(get_nonctrl_generation(opfm.sys)), c in opfm.contingencies] # demand curtailment variables
+        end)
     @info "Variables added: pfc, vac, lsc"
     return opfm
 end
@@ -90,12 +40,12 @@ end
 function init_var_dc_PC_SCOPF!(opfm::OPFmodel)
     opfm = init_var_dc_P_SCOPF!(opfm)
     @variables(opfm.mod, begin
-        0 <= pgu[g in get_name.(get_ctrl_generation(opfm.sys)), c in opfm.contingencies]    # active power variables for the generators in contingencies ramp up 
-        0 <= pgd[g in get_name.(get_ctrl_generation(opfm.sys)), c in opfm.contingencies]       # and ramp down
-        pfcc[l in get_name.(get_branches(opfm.sys)), c in opfm.contingencies]         # power flow on get_branches in in contingencies after corrective actions
-        vacc[b in get_name.(get_nodes(opfm.sys)), c in opfm.contingencies]            # voltage angle at a node in in contingencies after corrective actions
-        0 <= lscc[d in get_name.(get_nonctrl_generation(opfm.sys)), c in opfm.contingencies] # load curtailment variables in in contingencies
-    end)
+            0 <= pgu[g in get_name.(get_ctrl_generation(opfm.sys)), c in opfm.contingencies]    # active power variables for the generators in contingencies ramp up 
+            0 <= pgd[g in get_name.(get_ctrl_generation(opfm.sys)), c in opfm.contingencies]       # and ramp down
+            pfcc[l in get_name.(get_branches(opfm.sys)), c in opfm.contingencies]         # power flow on get_branches in in contingencies after corrective actions
+            vacc[b in get_name.(get_nodes(opfm.sys)), c in opfm.contingencies]            # voltage angle at a node in in contingencies after corrective actions
+            0 <= lscc[d in get_name.(get_nonctrl_generation(opfm.sys)), c in opfm.contingencies] # load curtailment variables in in contingencies
+        end)
     @info "Variables added: pgu, pgd, pfcc, vacc, lscc"
     return opfm
 end
@@ -110,10 +60,10 @@ end
 function add_obj_cont!(opfm::OPFmodel, ramp_minutes)
     opfm = add_obj!(opfm)
     add_to_expression!(objective_function(opfm.mod),
-        sum(opfm.voll[d] * sum(opfm.prob[c] * opfm.mod[:lsc][d,c] * ramp_minutes / 60 for c in opfm.contingencies)
-            for d in get_name.(get_nonctrl_generation(opfm.sys))
+            sum(opfm.voll[d] * sum(opfm.prob[c] * opfm.mod[:lsc][d,c] * ramp_minutes / 60 for c in opfm.contingencies)
+                    for d in get_name.(get_nonctrl_generation(opfm.sys))
+                )
         )
-    )
     @info "- contingency load shedding"
     return opfm
 end
@@ -121,13 +71,13 @@ end
 function add_obj_ccont!(opfm::OPFmodel, ramp_minutes, repair_time = 1.0)
     opfm = add_obj_cont!(opfm, ramp_minutes)
     add_to_expression!(objective_function(opfm.mod),
-        sum(opfm.cost[g] * sum(opfm.prob[c] * repair_time * (opfm.mod[:pgu][g,c] #=+ opfm.mod[:pgd][g,c]*0.1=#) 
-            for c in opfm.contingencies) for g in get_name.(get_ctrl_generation(opfm.sys))
-        ) +
-        sum(opfm.voll[d] * sum(opfm.prob[c] * repair_time * opfm.mod[:lscc][d,c] for c in opfm.contingencies)
-            for d in get_name.(get_nonctrl_generation(opfm.sys))
+            sum(opfm.cost[g] * sum(opfm.prob[c] * repair_time * (opfm.mod[:pgu][g,c] #=+ opfm.mod[:pgd][g,c]*0.1=#) 
+                for c in opfm.contingencies) for g in get_name.(get_ctrl_generation(opfm.sys))
+            ) +
+            sum(opfm.voll[d] * sum(opfm.prob[c] * repair_time * opfm.mod[:lscc][d,c] for c in opfm.contingencies)
+                for d in get_name.(get_nonctrl_generation(opfm.sys))
+            )
         )
-    )
     @info "- corrective generation and load shedding"
     return opfm
 end
@@ -152,14 +102,14 @@ function add_unit_commit_ccont!(opfm::OPFmodel)
     unregister(opfm.mod, :pg_lim)
     p_lim = make_named_array(get_active_power_limits, get_ctrl_generation(opfm.sys))
     @constraint(opfm.mod, pg_lim_d[g = get_name.(get_gens_t(opfm.sys)), c = opfm.contingencies], 
-        0 <= opfm.mod[:pg0][g] + (opfm.mod[:pgu][g,c] - opfm.mod[:pgd][g,c])
-    )
+            0 <= opfm.mod[:pg0][g] + (opfm.mod[:pgu][g,c] - opfm.mod[:pgd][g,c])
+        )
     @constraint(opfm.mod, pg_lim_u[g = get_name.(get_gens_t(opfm.sys)), c = opfm.contingencies], 
-        opfm.mod[:pg0][g] + (opfm.mod[:pgu][g,c] - opfm.mod[:pgd][g,c]) <= p_lim[g].max * opfm.mod[:u][g]
-    )
+            opfm.mod[:pg0][g] + (opfm.mod[:pgu][g,c] - opfm.mod[:pgd][g,c]) <= p_lim[g].max * opfm.mod[:u][g]
+        )
     @constraint(opfm.mod, pg_lim[g = get_name.(get_gens_h(opfm.sys)), c = opfm.contingencies], 
-        0 <= opfm.mod[:pg0][g] + (opfm.mod[:pgu][g,c] - opfm.mod[:pgd][g,c]) <= p_lim[g].max
-    )
+            0 <= opfm.mod[:pg0][g] + (opfm.mod[:pgu][g,c] - opfm.mod[:pgd][g,c]) <= p_lim[g].max
+        )
     @info "- Constricted to contingencies"
     return opfm
 end
@@ -177,10 +127,10 @@ function add_c_bus!(opfm::OPFmodel, slack::Bus, listGen, listD, listRe)
     @expression(opfm.mod, ctrl[n = get_name.(get_nodes(opfm.sys))], 
         sum(opfm.mod[:pg0][g.name] for g in listGen[n]))
     @constraint(opfm.mod, inj_p[n = get_name.(get_nodes(opfm.sys))], ctrl[n] .- 
-        sum(beta(n, l) * opfm.mod[:pf0][get_name(l)] for l in get_branches(opfm.sys)) .== 
-        sum((get_active_power(d) - opfm.mod[:ls0][get_name(d)] for d in listD[n]), init = 0.0) + 
-        sum((-get_active_power(d) + opfm.mod[:ls0][get_name(d)] for d in listRe[n]), init = 0.0)
-    )
+            sum(beta(n, l) * opfm.mod[:pf0][get_name(l)] for l in get_branches(opfm.sys)) .== 
+            sum((get_active_power(d) - opfm.mod[:ls0][get_name(d)] for d in listD[n]), init = 0.0) + 
+            sum((-get_active_power(d) + opfm.mod[:ls0][get_name(d)] for d in listRe[n]), init = 0.0)
+        )
     # @constraint(opfm.mod, va_lim, -π/2 .<= opfm.mod[:va0] .<= π/2) # Not really needed, could be implemented with spesific line angle limits
     @constraint(opfm.mod, opfm.mod[:va0][get_name(slack)] == 0) # Set voltage angle at reference bus
     @info "Constraints for power balance at each bus: Base case"
@@ -190,10 +140,10 @@ end
 function add_c_bus_cont!(opfm::OPFmodel, slack::Bus, listGen, listD, listRe)
     opfm = add_c_bus!(opfm, slack, listGen, listD, listRe)
     @constraint(opfm.mod, inj_pc[n = get_name.(get_nodes(opfm.sys)), c = opfm.contingencies], opfm.mod[:ctrl][n] .- 
-        sum(beta(n,l) * opfm.mod[:pfc][get_name(l),c] for l in get_branches(opfm.sys)) .== 
-        sum((get_active_power(d) - opfm.mod[:lsc][get_name(d),c] for d in listD[n]), init = 0.0) +
-        sum((-get_active_power(d) + opfm.mod[:lsc][get_name(d),c] for d in listRe[n]), init = 0.0)
-    )
+            sum(beta(n,l) * opfm.mod[:pfc][get_name(l),c] for l in get_branches(opfm.sys)) .== 
+            sum((get_active_power(d) - opfm.mod[:lsc][get_name(d),c] for d in listD[n]), init = 0.0) +
+            sum((-get_active_power(d) + opfm.mod[:lsc][get_name(d),c] for d in listRe[n]), init = 0.0)
+        )
     # @constraint(opfm.mod, vac_lim, -π/2 .<= opfm.mod[:vac] .<= π/2) # Not really needed
     @constraint(opfm.mod, ref_vac[c = opfm.contingencies], opfm.mod[:vac][get_name(slack),c] == 0) # Set voltage angle at reference bus
     @info "- After contingency, before corrective actions"
@@ -203,12 +153,12 @@ end
 function add_c_bus_ccont!(opfm::OPFmodel, slack::Bus, listGen, listD, listRe)
     opfm = add_c_bus_cont!(opfm, slack, listGen, listD, listRe)
     @constraint(opfm.mod, inj_pcc[n = get_name.(get_nodes(opfm.sys)), c = opfm.contingencies],
-        sum(opfm.mod[:pg0][get_name(g)] + opfm.mod[:pgu][get_name(g),c] - 
-            opfm.mod[:pgd][get_name(g),c] for g in listGen[n]) -
-        sum(beta(n,l) * opfm.mod[:pfcc][get_name(l),c] for l in get_branches(opfm.sys)) == 
-        sum(get_active_power(d) - opfm.mod[:lscc][get_name(d),c] for d in listD[n]) +
-        sum(-get_active_power(d) + opfm.mod[:lscc][get_name(d),c] for d in listRe[n])
-    )
+            sum(opfm.mod[:pg0][get_name(g)] + opfm.mod[:pgu][get_name(g),c] - 
+                opfm.mod[:pgd][get_name(g),c] for g in listGen[n]) -
+            sum(beta(n,l) * opfm.mod[:pfcc][get_name(l),c] for l in get_branches(opfm.sys)) == 
+            sum(get_active_power(d) - opfm.mod[:lscc][get_name(d),c] for d in listD[n]) +
+            sum(-get_active_power(d) + opfm.mod[:lscc][get_name(d),c] for d in listRe[n])
+        )
     # @constraint(opfm.mod, vacc_lim, -π/2 .<= opfm.mod[:vacc] .<= π/2) # Not really needed
     @constraint(opfm.mod, ref_vacc[c = opfm.contingencies], opfm.mod[:vacc][get_name(slack),c] == 0) # Set voltage angle at reference bus
     @info "- After contingency and corrective actions"
@@ -223,47 +173,50 @@ add_c_bus_ccont!(opfm::OPFmodel) = add_c_bus_ccont!(opfm, find_slack(opfm.sys)[2
 
 """ Power flow on branch and branch limits for the base case """
 function add_c_branch!(
-        opfm::OPFmodel, 
-        x::JuMP.Containers.DenseAxisArray, 
-        branch_rating::JuMP.Containers.DenseAxisArray)
+            opfm::OPFmodel, 
+            x::JuMP.Containers.DenseAxisArray, 
+            branch_rating::JuMP.Containers.DenseAxisArray
+        )
     @constraint(opfm.mod, pf0_lim[l = get_name.(get_branches(opfm.sys))], 
-        -branch_rating[l] <= opfm.mod[:pf0][l] <= branch_rating[l]
-    )
+            -branch_rating[l] <= opfm.mod[:pf0][l] <= branch_rating[l]
+        )
     @constraint(opfm.mod, pb0[l = get_name.(get_branches(opfm.sys))],
-        opfm.mod[:pf0][l] - sum(beta(opfm.sys,l) .* opfm.mod[:va0]) / x[l] == 0
-    )
+            opfm.mod[:pf0][l] - sum(beta(opfm.sys,l) .* opfm.mod[:va0]) / x[l] == 0
+        )
     @info "Power flow on lines: Base case"
     return opfm
 end
 """ Power flow on branch and branch limits for the base case and short-term contingency """
 function add_c_branch_cont!(
-        opfm::OPFmodel, 
-        x::JuMP.Containers.DenseAxisArray, 
-        branch_rating::JuMP.Containers.DenseAxisArray, 
-        short_term_limit_multi::Float64 = 1.0)
+            opfm::OPFmodel, 
+            x::JuMP.Containers.DenseAxisArray, 
+            branch_rating::JuMP.Containers.DenseAxisArray, 
+            short_term_limit_multi::Float64 = 1.0
+        )
     @constraint(opfm.mod, pfc_lim[l = get_name.(get_branches(opfm.sys)), c = opfm.contingencies], 
-        -branch_rating[l] .* a(l,c) .* short_term_limit_multi .<= opfm.mod[:pfc][l,c] .<= branch_rating[l] .* a(l,c) .* short_term_limit_multi
-    )
+            -branch_rating[l] .* a(l,c) .* short_term_limit_multi .<= opfm.mod[:pfc][l,c] .<= branch_rating[l] .* a(l,c) .* short_term_limit_multi
+        )
     opfm = add_c_branch!(opfm, x, branch_rating)
     @constraint(opfm.mod, pbc[l = get_name.(get_branches(opfm.sys)), c = opfm.contingencies],
-        opfm.mod[:pfc][l,c] .- a(l,c) .* sum(beta(opfm.sys,l) .* opfm.mod[:vac][:,c]) ./ x[l] .== 0
-    )
+            opfm.mod[:pfc][l,c] .- a(l,c) .* sum(beta(opfm.sys,l) .* opfm.mod[:vac][:,c]) ./ x[l] .== 0
+        )
     @info "- After contingency, before corrective actions"
     return opfm
 end
 """ Power flow on branch and branch limits for the base case and short-term and long-term contingency """
 function add_c_branch_ccont!(
-        opfm::OPFmodel, 
-        x::JuMP.Containers.DenseAxisArray, 
-        branch_rating::JuMP.Containers.DenseAxisArray, 
-        short_term_limit_multi::Float64 = 1.0)
+            opfm::OPFmodel, 
+            x::JuMP.Containers.DenseAxisArray, 
+            branch_rating::JuMP.Containers.DenseAxisArray, 
+            short_term_limit_multi::Float64 = 1.0
+        )
     @constraint(opfm.mod, pfcc_lim[l = get_name.(get_branches(opfm.sys)), c = opfm.contingencies], 
-        -branch_rating[l] .* a(l,c) .<= opfm.mod[:pfcc][l,c] .<= branch_rating[l] .* a(l,c)
-    )
+            -branch_rating[l] .* a(l,c) .<= opfm.mod[:pfcc][l,c] .<= branch_rating[l] .* a(l,c)
+        )
     opfm = add_c_branch_cont!(opfm, x, branch_rating, short_term_limit_multi)
     @constraint(opfm.mod, pbcc[l = get_name.(get_branches(opfm.sys)), c = opfm.contingencies],
-        opfm.mod[:pfcc][l,c] .- a(l,c) .* sum(beta(opfm.sys,l) .* opfm.mod[:vacc][:,c]) ./ x[l] .== 0
-    )
+            opfm.mod[:pfcc][l,c] .- a(l,c) .* sum(beta(opfm.sys,l) .* opfm.mod[:vacc][:,c]) ./ x[l] .== 0
+        )
     @info "- After contingency and corrective actions"
     return opfm
 end
@@ -276,41 +229,43 @@ add_c_branch_ccont!(opfm::OPFmodel, short_term_limit_multi::Float64 = 1.0) =
 
 """ Add circuit breakers, then power flow on branch and branch limits for the base case and short-term contingency"""
 function add_circuit_breakers_cont!(
-        opfm::OPFmodel, 
-        x::JuMP.Containers.DenseAxisArray, 
-        branch_rating::JuMP.Containers.DenseAxisArray, 
-        short_term_limit_multi::Float64 = 1.0)
+            opfm::OPFmodel, 
+            x::JuMP.Containers.DenseAxisArray, 
+            branch_rating::JuMP.Containers.DenseAxisArray, 
+            short_term_limit_multi::Float64 = 1.0
+        )
     @variable(opfm.mod, cbc[l in get_name.(get_branches(opfm.sys)), c in opfm.contingencies], Bin) # circuit breakers on get_branches in in contingencies before 
     @constraint(opfm.mod, pfc_lim_l[l = get_name.(get_branches(opfm.sys)), c = opfm.contingencies], 
-        -branch_rating[l] .* a(l,c) .* cbc[l,c] .* short_term_limit_multi .<= opfm.mod[:pfc][l,c]
-    )
+            -branch_rating[l] .* a(l,c) .* cbc[l,c] .* short_term_limit_multi .<= opfm.mod[:pfc][l,c]
+        )
     @constraint(opfm.mod, pfc_lim_u[l = get_name.(get_branches(opfm.sys)), c = opfm.contingencies], 
-        opfm.mod[:pfc][l,c] .<= branch_rating[l] .* a(l,c) .* cbc[l,c] .* short_term_limit_multi
-    )
+            opfm.mod[:pfc][l,c] .<= branch_rating[l] .* a(l,c) .* cbc[l,c] .* short_term_limit_multi
+        )
     opfm = add_c_branch!(opfm, x, branch_rating)
     @constraint(opfm.mod, pbc[l = get_name.(get_branches(opfm.sys)), c = opfm.contingencies],
-        opfm.mod[:pfc][l,c] .- a(l,c) .* cbc[l,c] .* sum(beta(opfm.sys,l) .* opfm.mod[:vac][:,c]) ./ x[l] .== 0
-    )
+            opfm.mod[:pfc][l,c] .- a(l,c) .* cbc[l,c] .* sum(beta(opfm.sys,l) .* opfm.mod[:vac][:,c]) ./ x[l] .== 0
+        )
     @info "- After contingency, before corrective actions, with circuit breakers"
     return opfm
 end
 """ Add circuit breakers, then power flow on branch and branch limits for the base case and short-term and long-term contingency """
 function add_circuit_breakers_ccont!(
-        opfm::OPFmodel, 
-        x::JuMP.Containers.DenseAxisArray, 
-        branch_rating::JuMP.Containers.DenseAxisArray, 
-        short_term_limit_multi::Float64 = 1.0)
+            opfm::OPFmodel, 
+            x::JuMP.Containers.DenseAxisArray, 
+            branch_rating::JuMP.Containers.DenseAxisArray, 
+            short_term_limit_multi::Float64 = 1.0
+        )
     @variable(opfm.mod, cbcc[l in get_name.(get_branches(opfm.sys)), c in opfm.contingencies], Bin) # and after corrective actions
     @constraint(opfm.mod, pfcc_lim_l[l = get_name.(get_branches(opfm.sys)), c = opfm.contingencies], 
-        -branch_rating[l] .* a(l,c) .* cbcc[l,c] .<= opfm.mod[:pfcc][l,c]
-    )
+            -branch_rating[l] .* a(l,c) .* cbcc[l,c] .<= opfm.mod[:pfcc][l,c]
+        )
     @constraint(opfm.mod, pfcc_lim_u[l = get_name.(get_branches(opfm.sys)), c = opfm.contingencies], 
-        opfm.mod[:pfcc][l,c] .<= branch_rating[l] .* a(l,c) .* cbcc[l,c]
-    )
+            opfm.mod[:pfcc][l,c] .<= branch_rating[l] .* a(l,c) .* cbcc[l,c]
+        )
     opfm = add_circuit_breakers_cont!(opfm, x, branch_rating, short_term_limit_multi)
     @constraint(opfm.mod, pbcc[l = get_name.(get_branches(opfm.sys)), c = opfm.contingencies],
-        opfm.mod[:pfcc][l,c] .- a(l,c) .* cbcc[l,c] .* sum(beta(opfm.sys,l) .* opfm.mod[:vacc][:,c]) ./ x[l] .== 0
-    )
+            opfm.mod[:pfcc][l,c] .- a(l,c) .* cbcc[l,c] .* sum(beta(opfm.sys,l) .* opfm.mod[:vacc][:,c]) ./ x[l] .== 0
+        )
     @info "- After contingency and corrective actions, with circuit breakers"
     return opfm
 end
@@ -336,8 +291,8 @@ function add_lim_ramp_P_gen!(opfm::OPFmodel, ramp_minutes)
         set_upper_bound(opfm.mod[:pgd][get_name(g),c], get_ramp_limits(g).down * ramp_minutes)
     end
     @constraint(opfm.mod, pg_lim[g = get_name.(get_ctrl_generation(opfm.sys)), c = opfm.contingencies], 
-        0 <= opfm.mod[:pg0][g] + (opfm.mod[:pgu][g,c] - opfm.mod[:pgd][g,c]) <= p_lim[g].max
-    )
+            0 <= opfm.mod[:pg0][g] + (opfm.mod[:pgu][g,c] - opfm.mod[:pgd][g,c]) <= p_lim[g].max
+        )
     @info "Ramping restrictions on generators added"
     return opfm
 end
@@ -346,24 +301,24 @@ end
 function add_lim_load_shed!(opfm::OPFmodel, max_shed::Float64 = 1.0)
     p = make_named_array(get_active_power, get_demands(opfm.sys))
     @constraint(opfm.mod, load_shed[d in get_name.(get_demands(opfm.sys))], 
-        opfm.mod[:ls0][d] <= p[d] * max_shed
-    )
+            opfm.mod[:ls0][d] <= p[d] * max_shed
+        )
     @info "Restriction of load shedding to $(max_shed) of load per node: Base case"
     return opfm
 end
 function add_lim_load_shed_cont!(opfm::OPFmodel, max_shed::Float64 = 1.0)
     p = make_named_array(get_active_power, get_demands(opfm.sys))
     @constraint(opfm.mod, load_shed_cont[d in get_name.(get_demands(opfm.sys)), c in opfm.contingencies], 
-        opfm.mod[:lsc][d,c] <= p[d] * max_shed
-    )
+            opfm.mod[:lsc][d,c] <= p[d] * max_shed
+        )
     @info "- After contingency, before corrective actions"
     return opfm
 end
 function add_lim_load_shed_ccont!(opfm::OPFmodel, max_shed::Float64 = 1.0)
     p = make_named_array(get_active_power, get_demands(opfm.sys))
     @constraint(opfm.mod, load_shed_ccont[d in get_name.(get_demands(opfm.sys)), c in opfm.contingencies], 
-        opfm.mod[:lscc][d,c] <= p[d] * max_shed
-    )
+            opfm.mod[:lscc][d,c] <= p[d] * max_shed
+        )
     @info "- After contingency and corrective actions"
     return opfm
 end
@@ -371,24 +326,24 @@ end
 function add_lim_renewable_shed!(opfm::OPFmodel, max_curtail::Float64 = 1.0)
     p = make_named_array(get_active_power, get_renewables(opfm.sys))
     @constraint(opfm.mod, renew_shed[d = get_name.(get_renewables(opfm.sys))], 
-        opfm.mod[:ls0][d] <= p[d] * max_curtail
-    )
+            opfm.mod[:ls0][d] <= p[d] * max_curtail
+        )
     @info "Restriction of renewable shedding: Base case"
     return opfm
 end
 function add_lim_renewable_shed_cont!(opfm::OPFmodel, max_curtail::Float64 = 1.0)
     p = make_named_array(get_active_power, get_renewables(opfm.sys))
     @constraint(opfm.mod, renew_shed_cont[d = get_name.(get_renewables(opfm.sys)), c = opfm.contingencies], 
-        opfm.mod[:lsc][d,c] <= p[d] * max_curtail
-    )
+            opfm.mod[:lsc][d,c] <= p[d] * max_curtail
+        )
     @info "- After contingency, before corrective actions"
     return opfm
 end
 function add_lim_renewable_shed_ccont!(opfm::OPFmodel, max_curtail::Float64 = 1.0)
     p = make_named_array(get_active_power, get_renewables(opfm.sys))
     @constraint(opfm.mod, renew_shed_ccont[d = get_name.(get_renewables(opfm.sys)), c = opfm.contingencies], 
-        opfm.mod[:lscc][d,c] <= p[d] * max_curtail
-    )
+            opfm.mod[:lscc][d,c] <= p[d] * max_curtail
+        )
     @info "- After contingency and corrective actions"
     return opfm
 end
@@ -410,18 +365,19 @@ add_lim_nonctrl_shed_ccont!(opfm::OPFmodel, max_shed::Float64 = 1.0, max_curtail
 
 """ Run a SCOPF of a power system """
 function scopf(type::OPF, system::System, optimizer; 
-        voll = nothing, 
-        contingencies = nothing, 
-        prob = nothing,
-        time_limit_sec::Int64 = 600,
-        unit_commit::Bool = false,
-        max_shed::Float64 = 0.1,
-        max_curtail::Float64 = 1.0,
-        ratio::Float64= 0.5, 
-        circuit_breakers::Bool=false,
-        short_term_limit_multi::Float64 = 1.5,
-        ramp_minutes::Int64 = 10,
-        repair_time::Float64 = 1.0)
+            voll = nothing, 
+            contingencies = nothing, 
+            prob = nothing,
+            time_limit_sec::Int64 = 600,
+            unit_commit::Bool = false,
+            max_shed::Float64 = 0.1,
+            max_curtail::Float64 = 1.0,
+            ratio::Float64= 0.5, 
+            circuit_breakers::Bool=false,
+            short_term_limit_multi::Float64 = 1.5,
+            ramp_minutes::Int64 = 10,
+            repair_time::Float64 = 1.0
+        )
     voll = isnothing(voll) ? make_voll(system) : voll
     contingencies = (type != SC::OPF && isnothing(contingencies)) ? get_name.(get_branches(system)) : contingencies
     prob = (type != SC::OPF && isnothing(prob)) ? make_prob(contingencies) : prob
@@ -442,9 +398,10 @@ function scopf(type::OPF, system::System, optimizer;
 end
 
 function scopf(opfm::OPFmodel; 
-        unit_commit::Bool = false,
-        max_shed::Float64 = 0.1,
-        max_curtail::Float64 = 1.0)
+            unit_commit::Bool = false,
+            max_shed::Float64 = 0.1,
+            max_curtail::Float64 = 1.0
+        )
     opfm = init_var_dc_SCOPF!(opfm) |> add_c_bus! |> add_c_branch! |> add_obj!
     opfm = add_lim_nonctrl_shed!(opfm, max_shed, max_curtail)
     if unit_commit
@@ -455,12 +412,13 @@ end
 
 """ Run a P-SCOPF of a power system """
 function p_scopf(opfm::OPFmodel; 
-        unit_commit::Bool=false,
-        max_shed::Float64 = 0.1,
-        max_curtail::Float64 = 1.0,
-        circuit_breakers::Bool = false,
-        short_term_limit_multi::Float64 = 1.5,
-        ramp_minutes::Int64 = 10)
+            unit_commit::Bool=false,
+            max_shed::Float64 = 0.1,
+            max_curtail::Float64 = 1.0,
+            circuit_breakers::Bool = false,
+            short_term_limit_multi::Float64 = 1.5,
+            ramp_minutes::Int64 = 10
+        )
     opfm = init_var_dc_P_SCOPF!(opfm) |> add_c_bus_cont! 
     opfm = add_obj_cont!(opfm, ramp_minutes)
     opfm = add_lim_nonctrl_shed_cont!(opfm, max_shed, max_curtail)
@@ -477,13 +435,14 @@ end
 
 """ Run a PC-SCOPF of a power system """
 function pc_scopf(opfm::OPFmodel; 
-        unit_commit::Bool = false,
-        max_shed::Float64 = 0.1,
-        max_curtail::Float64 = 1.0,
-        circuit_breakers::Bool=false,
-        short_term_limit_multi::Float64 = 1.5,
-        ramp_minutes::Int64 = 10,
-        repair_time::Float64 = 1.0)
+            unit_commit::Bool = false,
+            max_shed::Float64 = 0.1,
+            max_curtail::Float64 = 1.0,
+            circuit_breakers::Bool=false,
+            short_term_limit_multi::Float64 = 1.5,
+            ramp_minutes::Int64 = 10,
+            repair_time::Float64 = 1.0
+        )
     opfm = init_var_dc_PC_SCOPF!(opfm) |> add_c_bus_ccont! 
     opfm = add_obj_ccont!(opfm, ramp_minutes, repair_time)
     # opfm = init_var_dc_PC_SCOPF!(opfm, max_shed) |> add_c_bus_ccont! |> add_obj!
