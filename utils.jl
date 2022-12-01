@@ -97,6 +97,7 @@ sort_branches!(branches::Vector{<: Branch}) = sort!(branches,
 
 # it_name(::Type{T}, mos::Model) where {T <: Component} = get_name.(get_components(T,mod))
 
+
 """ Make a DenseAxisArray using the list and function for the value of each element """
 make_named_array(value_func, list) = JuMP.Containers.DenseAxisArray(
     [value_func(x) for x in list], get_name.(list) 
@@ -126,7 +127,7 @@ function make_list(opfm::OPFmodel, type_func, nodes = get_nodes(opfm.sys))
 end
 
 """ Return the (first) slack bus in the system. """
-function find_slack(nodes)
+function find_slack(nodes::Vector{Bus})
     for (i,x) in enumerate(nodes)
         x.bustype == BusTypes.REF && return i,x
     end
@@ -140,7 +141,7 @@ function solve_model!(model::Model)
     if termination_status(model) != MOI.OPTIMAL 
         @warn "Model not optimally solved with status $(termination_status(model))!"
     else
-        @info "Model solved in $(solve_time(model)) seconds with an objective value of $(objective_value(model))"
+        @info @sprintf "Model solved in %.6f seconds with an objective value of %.4f" solve_time(model) objective_value(model)
     end
     return model
 end
@@ -171,28 +172,25 @@ find_overload(flow::Float64, lim::Float64) = abs(flow)-lim > 0 ? sign(flow)*(abs
 " DC line flow calculation"
 calculate_line_flows(isf::Array{Float64,2}, Pᵢ::Array{Float64}) = isf*Pᵢ
 
-" DC power flow calculation "
-run_pf(X::Array{Float64, 2}, Pᵢ::Array{Float64}) = X*Pᵢ 
-
-""" Return the net power injected at each node sorted by bus number. """
-function get_net_Pᵢ(opfm::OPFmodel, nodes::Vector{Bus}, Pᵢ = copy(get_Pᵢ(opfm, nodes)))
+""" Return the net power injected at each node. """
+function get_net_Pᵢ(opfm::OPFmodel, nodes::Vector{Bus}, idx::Dict{<: Any, <: Int} = get_nodes_idx(nodes), Pᵢ = copy(get_Pᵢ(opfm, nodes)))
     p = JuMP.value.(opfm.mod[:ls0])
-    for r in get_components(RenewableGen, opfm.sys)
-        Pᵢ[r.bus.number] += get_active_power(r) - p[get_name(r)]
+    for r in get_renewables(opfm.sys)
+        Pᵢ[idx[r.bus.number]] += get_active_power(r) - p[get_name(r)]
     end
-    for d in get_components(StaticLoad, opfm.sys)
-        Pᵢ[d.bus.number] -= get_active_power(d) + p[get_name(d)]
+    for d in get_demands(opfm.sys)
+        Pᵢ[idx[d.bus.number]] -= get_active_power(d) + p[get_name(d)]
     end
     # @assert abs(sum(Pᵢ)) < 0.001
     return Pᵢ
 end
 
-""" Return the power injected at each node sorted by bus number. """
-function get_Pᵢ(opfm::OPFmodel, nodes::Vector{Bus})
+""" Return the power injected at each node. """
+function get_Pᵢ(opfm::OPFmodel, nodes::Vector{Bus}, idx::Dict{<: Any, <: Int} = get_nodes_idx(nodes))
     Pᵢ = zeros(length(nodes))
     p = JuMP.value.(opfm.mod[:pg0])
-    for g in get_components(Generator, opfm.sys)
-        Pᵢ[g.bus.number] += p[get_name(g)]
+    for g in get_ctrl_generation(opfm.sys)
+        Pᵢ[idx[g.bus.number]] += p[get_name(g)]
     end
     return Pᵢ
 end

@@ -103,16 +103,59 @@ end
 
 function print_power_flow(opfm::OPFmodel)
     branches = get_sorted_branches(opfm.sys)
+    print_power_flow(
+            get_name.(branches), 
+            value.(opfm.mod[:pf0][get_name.(branches)]).data, 
+            get_rate.(branches)
+        )
+end
+function print_power_flow(names::Vector{String}, flow::Vector{Float64}, rate::Vector{Float64})
     println("    Branch    Flow  Rating")
-    for branch in branches
-        @printf("%10s  %6.2f  %6.2f\n", 
-                get_name(branch), 
-                value(opfm.mod[:pf0][get_name(branch)]), 
-                get_rate(branch)
+    string_line(n, f, r) = @sprintf("%10s  %6.2f  %6.2f\n", n, f, r)
+    for (n,f,r) in zip(names, flow, rate)
+        if abs(f) > r + 0.0001
+            printstyled(string_line(n, f, r), color = :red)
+        else
+            print(string_line(n, f, r))
+        end
+    end
+end
+
+function print_contingency_power_flow(opfm::OPFmodel, contanal)
+    branches = get_sorted_branches(opfm.sys)
+    Pᵢ = get_net_Pᵢ(opfm, get_sorted_nodes(opfm.sys))
+    println("Base case")
+    print_power_flow(
+            get_name.(branches), 
+            calculate_line_flows(contanal.lodf[:,:,1], Pᵢ), 
+            get_rate.(branches)
+        )
+    for (i,cont) in enumerate(contanal.contingencies)
+        println("Contingency ", cont)
+        print_power_flow(
+                get_name.(branches), 
+                calculate_line_flows(get_cont_ptdf(contanal, i), Pᵢ), 
+                get_rate.(branches)
             )
     end
 end
 
+function print_contingency_overflow(opfm::OPFmodel, contanal)
+    branches = get_sorted_branches(opfm.sys)
+    Pᵢ = get_net_Pᵢ(opfm, get_sorted_nodes(opfm.sys))
+    string_line(c, n, f, r) = @sprintf("%11s %10s  %6.2f  %6.2f\n", c, n, f, r)
+    println("Contingency    Branch    Flow  Rating")
+    for (i,cont) in enumerate(contanal.contingencies)
+        names = get_name.(branches)
+        flow = calculate_line_flows(get_cont_ptdf(contanal, i), Pᵢ)
+        rate = get_rate.(branches)
+        for (n,f,r) in zip(names, flow, rate)
+            if abs(f) > r + 0.0001
+                print(string_line(cont, n, f, r))
+            end
+        end
+    end
+end
 # # corrective control failure probability
 # phi(p, n) = sum((-1)^k * p^k * binomial(n,k) for k in 1:n)
 

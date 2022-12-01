@@ -28,9 +28,6 @@ prob = JuMP.Containers.DenseAxisArray(
 prob /= 8760
 contingencies = get_name.(get_branches(ieee_rts))
 
-
-opfm = scopf(SC, ieee_rts, Gurobi.Optimizer, voll=voll)
-solve_model!(opfm.mod)
-run_benders(opfm, voll, contingencies, prob)
+opfm, contanal = run_benders(ieee_rts, voll, contingencies, prob)
 print_active_power(opfm)
 print_power_flow(opfm)
