@@ -71,34 +71,27 @@ function print_active_power(opfm::OPFmodel)
     list_d = make_list(opfm, get_demands, nodes)
     list_r = make_list(opfm, get_renewables, nodes)
     xprint(x, val) = @printf("%7s:%6.2f, ", split(x.name, "_", limit=2)[end], val)
-    sort_x!(list) = sort!(list, by = x -> parse(Int64, split(x.name, "_")[end]))
-    sort_alt!(list) = sort!(list, by = x -> x.name)
+    sort_x!(list) = sort!(list, by = x -> x.name)
     get_injection(g::Union{ThermalGen, HydroGen}) = value(opfm.mod[:pg0][get_name(g)])
     get_injection(r::RenewableGen) = get_active_power(r) - value(opfm.mod[:ls0][get_name(r)])
     get_injection(d::StaticLoad) =  -get_active_power(d) + value(opfm.mod[:ls0][get_name(d)])
-    print(" Bus   Total  Injections...")
+    print("       Bus   Total  Injections...")
     tot = 0.0
     for (n, g, d, r) in zip(nodes, list_gen, list_d, list_r)
-        try 
-            sort_x!(g)
-            sort_x!(d)
-            sort_x!(r)
-        catch
-            sort_alt!(g)
-            sort_alt!(d)
-            sort_alt!(r)
-        end
+        sort_x!(g)
+        sort_x!(d)
+        sort_x!(r)
         val_g = get_injection.(g)
         val_d = get_injection.(d)
         val_r = get_injection.(r)
         b_tot = sum(val_g, init=0.0) + sum(val_d, init=0.0) + sum(val_r, init=0.0)
         tot += b_tot
-        @printf "\n%4s  %6.2f  " n.name b_tot
+        @printf "\n%10s  %6.2f  " n.name b_tot
         xprint.(g, val_g)
         xprint.(d, val_d)
         xprint.(r, val_r)
     end
-    @printf("\n Sum  %6.2f\n", tot)
+    @printf("\n       Sum  %6.2f\n", tot)
 end
 
 function print_power_flow(opfm::OPFmodel)
@@ -110,11 +103,13 @@ function print_power_flow(opfm::OPFmodel)
         )
 end
 function print_power_flow(names::Vector{String}, flow::Vector{Float64}, rate::Vector{Float64})
-    println("    Branch    Flow  Rating")
-    string_line(n, f, r) = @sprintf("%10s  %6.2f  %6.2f\n", n, f, r)
+    println("         Branch    Flow  Rating")
+    string_line(n, f, r) = @sprintf("%15s  %6.2f  %6.2f\n", n, f, r)
     for (n,f,r) in zip(names, flow, rate)
-        if abs(f) > r + 0.0001
+        if abs(f) > r - 0.0001
             printstyled(string_line(n, f, r), color = :red)
+        elseif abs(f) > r * 0.9
+            printstyled(string_line(n, f, r), color = :yellow)
         else
             print(string_line(n, f, r))
         end
@@ -143,8 +138,8 @@ end
 function print_contingency_overflow(opfm::OPFmodel, contanal)
     branches = get_sorted_branches(opfm.sys)
     Pᵢ = get_net_Pᵢ(opfm, get_sorted_nodes(opfm.sys))
-    string_line(c, n, f, r) = @sprintf("%11s %10s  %6.2f  %6.2f\n", c, n, f, r)
-    println("Contingency    Branch    Flow  Rating")
+    string_line(c, n, f, r) = @sprintf("%15s %15s  %6.2f  %6.2f\n", c, n, f, r)
+    println("    Contingency        Branch    Flow  Rating")
     for (i,cont) in enumerate(contanal.contingencies)
         names = get_name.(branches)
         flow = calculate_line_flows(get_cont_ptdf(contanal, i), Pᵢ)
