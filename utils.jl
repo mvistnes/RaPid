@@ -27,7 +27,7 @@ function add_system_data_to_json(;
     to_json(system_data, joinpath(DATA_DIR, file_name), force=true)
 end
 
-@enum OPF SC=0 PSC=1 PCSC=2 # SCOPF, P-SCOPF, SC-SCOPF
+get_system(fname::String) = System(joinpath("data",fname))
 
 """ OPF model type """
 mutable struct OPFmodel
@@ -135,6 +135,14 @@ function find_slack(nodes::Vector{Bus})
 end
 find_slack(sys::System) = find_slack(get_sorted_nodes(sys))
 
+""" Set the renewable production to a ratio of maximum active power """
+function set_renewable_prod!(system::System, ratio::Float64=0.5)
+    for g in get_components(RenewableGen, system)
+        set_active_power!(g, get_max_active_power(g)*ratio)
+    end
+    return system
+end
+
 """ Run optimizer to solve the model and check for optimality """
 function solve_model!(model::Model)
     optimize!(model)
@@ -163,17 +171,21 @@ end
 " Get a dict of bus-number-keys and vector-position-values "
 get_nodes_idx(nodes::Vector{Bus}) = PowerSystems._make_ax_ref(nodes)
 
-" Get the number of the from-bus and to-bus from a branch"
+" Get the number of the from-bus and to-bus from a branch "
 get_bus_id(branch::ACBranch) = (branch.arc.from.number, branch.arc.to.number)
 
-" Return the overload of a line, else return 0.0 "
-find_overload(flow::Float64, lim::Float64) = abs(flow)-lim > 0 ? sign(flow)*(abs(flow)-lim) : 0.0
+" Get dual value (upper or lower bound) from model reference "
+get_low_dual(varref::VariableRef) = dual(LowerBoundRef(varref))
+get_high_dual(varref::VariableRef) = dual(UpperBoundRef(varref))
 
-" DC line flow calculation"
+" Return the overload of a line, else return 0.0 "
+find_overload(flow::Float64, rate::Float64) = abs(flow)-rate > zero(Float64) ? sign(flow)*(abs(flow)-rate) : zero(Float64)
+
+" DC line flow calculation using Injection Shift Factors and Power Injection vector"
 calculate_line_flows(isf::Array{Float64,2}, Pᵢ::Array{Float64}) = isf*Pᵢ
 
 """ Return the net power injected at each node. """
-function get_net_Pᵢ(opfm::OPFmodel, nodes::Vector{Bus}, idx::Dict{<: Any, <: Int} = get_nodes_idx(nodes), Pᵢ = copy(get_Pᵢ(opfm, nodes)))
+function get_net_Pᵢ(opfm::OPFmodel, nodes::Vector{Bus}, idx::Dict{<: Any, <: Int} = get_nodes_idx(nodes), Pᵢ = get_Pᵢ(opfm, nodes))
     p = JuMP.value.(opfm.mod[:ls0])
     for r in get_renewables(opfm.sys)
         Pᵢ[idx[r.bus.number]] += get_active_power(r) - p[get_name(r)]
@@ -195,3 +207,15 @@ function get_Pᵢ(opfm::OPFmodel, nodes::Vector{Bus}, idx::Dict{<: Any, <: Int} 
     return Pᵢ
 end
 
+function calc_severity(opfm::OPFmodel, lim = 0.9)
+    rate = make_named_array(get_rate, get_branches(opfm.sys))
+    sev = 0
+    for c in opfm.contingencies
+        for l in get_name.(get_branches(opfm.sys))
+            sev += calc_line_severity(value(opfm.mod[:pfc][l,c]), rate[l], lim)
+        end
+    end 
+    return sev
+end
+
+calc_line_severity(flow, rate, lim = 0.9) = abs(flow) > lim * rate ? (1/(1-lim)) * (abs(flow) / rate - lim) : 0

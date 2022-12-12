@@ -20,20 +20,11 @@ Function creates extra production constraints on generators in the system
 based on the power transfer distribution factors of the generators in the
 system. 
 """
-function run_benders(system::System, voll, contingencies, prob;
-            time_limit_sec::Int64 = 600,
-            unit_commit::Bool = false,
-            max_shed::Float64 = 0.1,
-            max_curtail::Float64 = 1.0,
-            ratio::Float64= 0.5, 
-            circuit_breakers::Bool=false,
-            short_term_limit_multi::Float64 = 1.5,
-            ramp_minutes::Int64 = 10,
-            repair_time::Float64 = 1.0
-        )
+function run_benders(system::System, voll, contingencies, prob, lim = 1e-6)
 
     opfm = scopf(SC, system, Gurobi.Optimizer, voll=voll)
     solve_model!(opfm.mod)
+    lower_bound = objective_value(opfm.mod)
 
     # Set global variables
     nodes = get_sorted_nodes(opfm.sys)
@@ -43,29 +34,38 @@ function run_benders(system::System, voll, contingencies, prob;
 
     it = enumerate(contingencies)
     next = iterate(it)
-    while next !== nothing
+    cut_added = false
+    while next !== nothing || cut_added # loops until no new cuts are added for the contingencies
+        if next === nothing
+            next = iterate(it)
+            cut_added = false
+        end
         (c, cont), state = next
         overloads = get_overload(contanal, c, get_net_Pᵢ(opfm, nodes))
-        overloads = [(i,ol) for (i,ol) in enumerate(overloads) if abs(ol) > 0.001]
+        overloads = [(i,ol) for (i,ol) in enumerate(overloads) if abs(ol) > lim]
         if length(overloads) > 0
             sort!(overloads, rev = true, by = x -> abs(x[2]))
             (i,ol) = first(overloads)
             Pᵢ = get_Pᵢ(opfm, nodes)
             ptdf = get_cont_ptdf(contanal, c)
             
-            expr = JuMP.AffExpr(-ol)
-            JuMP.add_to_expression!(expr, sum(
-                    -ptdf[i, in] * 
-                    (sum((opfm.mod[:pg0][g.name] for g in list_gen[n.name]), init=0.0) - Pᵢ[in]) 
-                    for (in, n) in enumerate(nodes)
-                ))
-            @info "Contingency on $(cont) resulted in overload on $(branches[i].name) of $(abs(ol)) \nCut added: $(sprint_expr(expr))\n"
+            expr = sum(
+                    ptdf[i, in] * 
+                    (Pᵢ[in] - sum((opfm.mod[:pg0][g.name] for g in list_gen[n.name]), init=0.0)) 
+                    for (in, n) in enumerate(nodes) if abs(ptdf[i, in]) > lim
+                )
+            # @info "Contingency on $(cont) resulted in overload on $(branches[i].name) of $(ol) \nCut added: $(sprint_expr(expr,lim))\n"
             set_warm_start!(opfm.mod, :pg0) # query of information then edit of model, else OptimizeNotCalled errors
-            JuMP.@constraint(opfm.mod, expr <= 0)
+            if ol < 0
+                JuMP.@constraint(opfm.mod, expr <= ol)
+            else
+                JuMP.@constraint(opfm.mod, expr >= ol)
+            end
 
             MOI.set(opfm.mod, MOI.Silent(), true) # supress output from the solver
             opfm.mod = solve_model!(opfm.mod)
             termination_status(opfm.mod) != MOI.OPTIMAL && return
+            cut_added = true
         else
             next = iterate(it, state)
         end
@@ -185,25 +185,8 @@ function find_connected(branches::Vector{<: Branch}, node::Bus)
 end
 
 " An AffExpr nicely formatted to a string "
-sprint_expr(expr::AffExpr) = join(Printf.@sprintf("%s%5.2f %s ", (x[2] > 0 ? "+" : "-"), abs(x[2]), x[1]) for x in expr.terms) * 
-    Printf.@sprintf("<= %s%.2f", (expr.constant > 0 ? "-" : "+"), abs(expr.constant))
-
-
-# " Make matrices of different kinds. idx includes all nodes, drop_id excludes the slack node. "
-# function calc_A(nodes::Vector{Bus}, branches::Vector{<: Branch}, idx::Dict{<: Any, <: Int})
-#     A = zeros(Float64, length(nodes), length(branches))
-#     for (i, branch) in enumerate(branches)
-#         A[idx[branch.arc.from.number],i] = 1 
-#         A[idx[branch.arc.to.number],i] = -1 
-#     end
-#     return A
-# end
-# function calc_X(B::AbstractMatrix{Float64}, drop_id::Vector{Int}) 
-#     X = zeros(size(B))
-#     X[drop_id,drop_id] = inv(B[drop_id, drop_id])
-#     return X
-# end
-# calc_ptdf(A::AbstractMatrix{Float64}, D::AbstractMatrix{Float64}, drop_idx::Dict{<: Any, <: Int}) = A * D
-# calc_isf(A::AbstractMatrix{Float64}, D::AbstractMatrix{Float64}, X::AbstractMatrix{Float64}) = D * A * X
-# calc_B(A::AbstractMatrix{Float64}, D::AbstractMatrix{Float64}) = A' * D * A
-# calc_D(branches::Vector{<: Branch}) = LinearAlgebra.Diagonal(get_x.(branches))
+sprint_expr(expr::AffExpr, lim = 1e-6) = 
+    join(Printf.@sprintf("%s%5.2f %s ", (x[2] > 0 ? "+" : "-"), abs(x[2]), x[1]) 
+            for x in expr.terms if abs(x[2]) > lim) * 
+        Printf.@sprintf("<= %s%.2f", (expr.constant > 0 ? "-" : "+"), abs(expr.constant)
+    )
