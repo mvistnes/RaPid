@@ -173,6 +173,7 @@ get_nodes_idx(nodes::Vector{Bus}) = PowerSystems._make_ax_ref(nodes)
 
 " Get the number of the from-bus and to-bus from a branch "
 get_bus_id(branch::ACBranch) = (branch.arc.from.number, branch.arc.to.number)
+get_bus_idx(branch::ACBranch, idx::Dict{<: Any, <: Int}) = (idx[branch.arc.from.number], idx[branch.arc.to.number])
 
 " Get dual value (upper or lower bound) from model reference "
 get_low_dual(varref::VariableRef) = dual(LowerBoundRef(varref))
@@ -205,6 +206,18 @@ function get_Pᵢ(opfm::OPFmodel, nodes::Vector{Bus}, idx::Dict{<: Any, <: Int} 
         Pᵢ[idx[g.bus.number]] += p[get_name(g)]
     end
     return Pᵢ
+end
+
+function calc_Pᵢ(branches::Vector{<: Branch}, δ::Vector{Float64}, numnodes::Int64, idx::Dict{<: Any, <: Int}, outage::Tuple = (0,0))
+    P = zeros(numnodes)
+    for branch in branches
+        (f, t) = get_bus_idx(branch, idx)
+        if outage != (f, t)
+            P[f] += (δ[f] - δ[t]) / branch.x
+            P[f] -= (δ[f] - δ[t]) / branch.x
+        end
+    end
+    return P
 end
 
 function calc_severity(opfm::OPFmodel, lim = 0.9)

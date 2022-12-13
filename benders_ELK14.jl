@@ -219,30 +219,6 @@ end
 sprint_expr(expr::AffExpr) = join(Printf.@sprintf("%s%5.2f %s ", (x[2] > 0 ? "+" : "-"), abs(x[2]), x[1]) for x in expr.terms) * 
     Printf.@sprintf("<= %s%.2f", (expr.constant > 0 ? "-" : "+"), abs(expr.constant))
 
-" Make matrices of different kinds. idx includes all nodes, drop_id excludes the slack node. "
-function calc_A(branches::Vector{<: Branch}, numnodes::Int64, idx::Dict{<: Any, <: Int})
-    A = SparseArrays.spzeros(length(branches), numnodes)
-    numlines = zeros(Int64, numnodes)
-    for (i, branch) in enumerate(branches)
-        A[i,idx[branch.arc.from.number]] = one(Float64)
-        A[i,idx[branch.arc.to.number]] = -one(Float64)
-        numlines[idx[branch.arc.from.number]] += 1
-        numlines[idx[branch.arc.to.number]] += 1
-    end
-    return A, numlines
-end
-function calc_X(B::AbstractMatrix{Float64}, slack::Int64) 
-    B[:,slack] .= zero(Float64)
-    B[slack,:] .= zero(Float64)
-    B[slack,slack] = one(Float64)
-    X = inv(Matrix(B))
-    X[slack,slack] = zero(Float64)
-    return X
-end
-calc_isf(A::AbstractMatrix{Float64}, D::AbstractMatrix{Float64}, X::AbstractMatrix{Float64}) = D * A * X
-calc_B(A::AbstractMatrix{Float64}, D::AbstractMatrix{Float64}) = A' * D * A
-calc_D(branches::Vector{<: Branch}) = LinearAlgebra.Diagonal(get_x.(branches))
-
 " Make the PTDF matrix for using the input nodes and branches "
 function get_ptdf(branches::Vector{<: Branch}, numnodes::Int64, idx::Dict{<: Any, <: Int}, slack::Int)
     B = buildB(branches, numnodes, idx)
@@ -267,6 +243,33 @@ function get_ptdf(Bx, branches::Vector{<: Branch}, numnodes::Int64, idx::Dict{<:
     end
     return A
 end
+function get_ptdf3(Binv::AbstractMatrix, branches::Vector{<: Branch}, numnodes::Int64, idx::Dict{<: Any, <: Int}, slack::Int)
+    A = zeros(Float64, size(branches,1), numnodes) # Container for the distribution factors
+    for (i, branch) in enumerate(branches)
+        branch.x == 0 && continue
+        (f, t) = get_bus_id(branch) # (f)rom and (t)o bus at this branch
+        A[i, :] = ((f != slack ? Binv[:,idx[f]] : 0) .- (t != slack ? Binv[:,idx[t]] : 0)) / branch.x # append factors to matrix
+    end
+    return A
+end
+function get_ptdf2(branches::Vector{<: Branch}, numnodes::Int64, idx::Dict{<: Any, <: Int}, slack::Int)
+    B = buildB(branches, numnodes, idx)
+    B[:,slack] .= zero(Float64)
+    B[slack,:] .= zero(Float64)
+    B[slack,slack] = one(Float64)
+    A = zeros(Float64, size(branches,1), numnodes) # Container for the distribution factors
+    for (i, branch) in enumerate(branches)
+        branch.x == 0 && continue
+        (f, t) = get_bus_id(branch) # (f)rom and (t)o bus at this branch
+        if f != slack
+            A[i, idx[f]] = 1 / branch.x
+        end
+        if t != slack # ∈ keys(idx)
+            A[i, idx[t]] = -1 / branch.x
+        end
+    end
+    return A * inv(Matrix(B))
+end
 
 """
 Builds an admittance matrix with the line series reactance of the lines.
@@ -276,8 +279,7 @@ ToDo: Only need the upper half triagonal matrix as it's symetric.
 function buildB(branches::Vector{<: Branch}, numnodes::Int64, idx::Dict{<: Any, <: Int})
     B = SparseArrays.spzeros(numnodes, numnodes)
     for branch in branches
-        (f, t) = get_bus_id(branch)
-        (f, t) = (idx[f],idx[t])
+        (f, t) = get_bus_idx(branch, idx)
         B[f,f] += 1 / branch.x
         B[t,t] += 1 / branch.x
         B[f,t] -= 1 / branch.x
@@ -286,6 +288,35 @@ function buildB(branches::Vector{<: Branch}, numnodes::Int64, idx::Dict{<: Any, 
     return B
 end
 
+
+" Make matrices of different kinds. idx includes all nodes. "
+function calc_A(branches::Vector{<: Branch}, numnodes::Int64, idx::Dict{<: Any, <: Int})
+    A = zeros(length(branches), numnodes)
+    numlines = zeros(Int64, numnodes)
+    for (i, branch) in enumerate(branches)
+        A[i,idx[branch.arc.from.number]] = one(Float64)
+        A[i,idx[branch.arc.to.number]] = -one(Float64)
+        numlines[idx[branch.arc.from.number]] += 1
+        numlines[idx[branch.arc.to.number]] += 1
+    end
+    return A, numlines
+end
+function calc_X(B::AbstractMatrix{Float64}, slack::Int64) 
+    B[:,slack] .= zero(Float64)
+    B[slack,:] .= zero(Float64)
+    B[slack,slack] = one(Float64)
+    X = inv(Matrix(B))
+    X[slack,slack] = zero(Float64)
+    return X
+end
+calc_isf(A::AbstractMatrix{Float64}, D::AbstractMatrix{Float64}, X::AbstractMatrix{Float64}) = D * A * X
+calc_B(A::AbstractMatrix{Float64}, D::AbstractMatrix{Float64}) = A' * D * A
+calc_D(branches::Vector{<: Branch}) = LinearAlgebra.Diagonal(get_x.(branches))
+function get_isf(branches::Vector{<: Branch}, numnodes::Int64, idx::Dict{<: Any, <: Int}, slack::Int64)
+    A, numlines = calc_A(branches, numnodes, idx)
+    D = calc_D(branches)
+    return calc_isf(A, D, calc_X(calc_B(A, D), slack))
+end
 
 
 # function get_radials(numlines, branches::Vector{<: Branch})

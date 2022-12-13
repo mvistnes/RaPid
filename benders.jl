@@ -44,7 +44,7 @@ function run_benders(system::System, voll, contingencies, prob, lim = 1e-6)
         overloads = get_overload(contanal, c, get_net_Pᵢ(opfm, nodes))
         overloads = [(i,ol) for (i,ol) in enumerate(overloads) if abs(ol) > lim]
         if length(overloads) > 0
-            sort!(overloads, rev = true, by = x -> abs(x[2]))
+            # sort!(overloads, rev = true, by = x -> abs(x[2]))
             (i,ol) = first(overloads)
             Pᵢ = get_Pᵢ(opfm, nodes)
             ptdf = get_cont_ptdf(contanal, c)
