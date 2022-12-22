@@ -74,9 +74,9 @@ function run_benders(system::System, voll, contingencies, prob, lim = 1e-6)
 end
 
 mutable struct IterativeDCContAnal
-    lodf::Array{Float64, 3}
+    lodf::Array{<:Real, 3}
     contingencies::Vector{String}
-    linerating::Vector{Float64}
+    linerating::Vector{<:Real}
 end
 
 """ Note about LODF / PTDF:
@@ -90,7 +90,7 @@ PTDF of the base case is not accurate use of this terminology, but rather a simp
 having to create a separate PTDF variable for the base case (and thus increase the number of variables...).
 
 """
-function iterative_cont_anal(sys::System, nodes::Vector{Bus}, branches::Vector{<: Branch}, contingencies::Vector{String})
+function iterative_cont_anal(sys::System, nodes::Vector{Bus}, branches::Vector{<:Branch}, contingencies::Vector{String})
     lodf = zeros(length(branches), length(nodes), length(contingencies)+1)
     i_slack, slack = find_slack(nodes)
     lodf[:,:,1], _ = PowerSystems._buildptdf(branches, nodes, [0.1])
@@ -120,7 +120,7 @@ function iterative_cont_anal(sys::System, nodes::Vector{Bus}, branches::Vector{<
 end
 
 " Get the overload of all lines "
-get_overload(contanal::IterativeDCContAnal, cont::Int, Pᵢ::Vector{Float64}) = 
+get_overload(contanal::IterativeDCContAnal, cont::Int, Pᵢ::Vector{<:Real}) = 
     find_overload.(
             calculate_line_flows(get_cont_ptdf(contanal, cont), Pᵢ), 
             contanal.linerating
@@ -135,7 +135,7 @@ end
 
 """ Find island(s) in the system returned in a nested Vector.
 Each element of the Vector consists of two lists, nodes and branches, in that island. """
-function get_islands(sys::System, branches::Vector{<: Branch})
+function get_islands(sys::System, branches::Vector{<:Branch})
     islands = Vector()
     visited_nodes = Vector{Bus}([branches[1].arc.from]) # start node on island 1 marked as visited
     visited_branches, new_nodes = find_connected(branches, first(visited_nodes))
@@ -169,7 +169,7 @@ function get_islands(sys::System, branches::Vector{<: Branch})
 end
 
 " Find nodes connected to a node "
-function find_connected(branches::Vector{<: Branch}, node::Bus)
+function find_connected(branches::Vector{<:Branch}, node::Bus)
     new_branches = Vector{Branch}()
     new_nodes = Vector{Bus}()
     for branch in branches

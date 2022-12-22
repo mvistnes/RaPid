@@ -21,14 +21,14 @@ based on the power transfer distribution factors of the generators in the
 system. 
 """
 function run_benders(system::System, voll, contingencies, prob;
-            time_limit_sec::Int64 = 600,
+            time_limit_sec::Int = 600,
             unit_commit::Bool = false,
             max_shed::Float64 = 0.1,
             max_curtail::Float64 = 1.0,
             ratio::Float64= 0.5, 
             circuit_breakers::Bool=false,
             short_term_limit_multi::Float64 = 1.5,
-            ramp_minutes::Int64 = 10,
+            ramp_minutes::Int = 10,
             repair_time::Float64 = 1.0
         )
 
@@ -101,9 +101,9 @@ function run_benders(system::System, voll, contingencies, prob;
 end
 
 mutable struct IterativeDCContAnal
-    lodf::Array{Float64, 3}
+    lodf::Array{<:Real, 3}
     contingencies::Vector{String}
-    linerating::Vector{Float64}
+    linerating::Vector{<:Real}
 end
 
 """ Note about LODF / PTDF:
@@ -117,8 +117,8 @@ PTDF of the base case is not accurate use of this terminology, but rather a simp
 having to create a separate PTDF variable for the base case (and thus increase the number of variables...).
 
     """
-function iterative_cont_anal(sys::System, nodes::Vector{Bus}, branches::Vector{<: Branch}, 
-        idx::Dict{<: Any, <: Int}, contingencies::Vector{String})
+function iterative_cont_anal(sys::System, nodes::Vector{Bus}, branches::Vector{<:Branch}, 
+        idx::Dict{<:Any, <:Int}, contingencies::Vector{String})
     
     numnodes = length(nodes)
     lodf = zeros(length(branches), numnodes, length(contingencies)+1)
@@ -151,7 +151,7 @@ function iterative_cont_anal(sys::System, nodes::Vector{Bus}, branches::Vector{<
 end
 
 " Get the overload of all lines "
-get_overload(contanal::IterativeDCContAnal, cont::Int, Pᵢ::Vector{Float64}) = 
+get_overload(contanal::IterativeDCContAnal, cont::Int, Pᵢ::Vector{<:Real}) = 
     find_overload.(
             calculate_line_flows(get_cont_ptdf(contanal, cont), Pᵢ), 
             contanal.linerating
@@ -166,7 +166,7 @@ end
 
 """ Find island(s) in the system returned in a nested Vector.
 Each element of the Vector consists of two lists, nodes and branches, in that island. """
-function get_islands(sys::System, branches::Vector{<: Branch})
+function get_islands(sys::System, branches::Vector{<:Branch})
     islands = Vector()
     visited_nodes = Vector{Bus}([branches[1].arc.from]) # start node on island 1 marked as visited
     visited_branches, new_nodes = find_connected(branches, first(visited_nodes))
@@ -200,7 +200,7 @@ function get_islands(sys::System, branches::Vector{<: Branch})
 end
 
 " Find nodes connected to a node "
-function find_connected(branches::Vector{<: Branch}, node::Bus)
+function find_connected(branches::Vector{<:Branch}, node::Bus)
     new_branches = Vector{Branch}()
     new_nodes = Vector{Bus}()
     for branch in branches
@@ -220,14 +220,14 @@ sprint_expr(expr::AffExpr) = join(Printf.@sprintf("%s%5.2f %s ", (x[2] > 0 ? "+"
     Printf.@sprintf("<= %s%.2f", (expr.constant > 0 ? "-" : "+"), abs(expr.constant))
 
 " Make the PTDF matrix for using the input nodes and branches "
-function get_ptdf(branches::Vector{<: Branch}, numnodes::Int64, idx::Dict{<: Any, <: Int}, slack::Int)
+function get_ptdf(branches::Vector{<:Branch}, numnodes::Int, idx::Dict{<:Any, <:Int}, slack::Int)
     B = buildB(branches, numnodes, idx)
     B[:,slack] .= zero(Float64)
     B[slack,:] .= zero(Float64)
     B[slack,slack] = one(Float64)
     return get_ptdf(LinearAlgebra.lu(B), branches, numnodes, idx, slack)
 end
-function get_ptdf(Bx, branches::Vector{<: Branch}, numnodes::Int64, idx::Dict{<: Any, <: Int}, slack::Int)
+function get_ptdf(Bx, branches::Vector{<:Branch}, numnodes::Int, idx::Dict{<:Any, <:Int}, slack::Int)
     A = zeros(Float64, size(branches,1), numnodes) # Container for the distribution factors
     for (i, branch) in enumerate(branches)
         branch.x == 0 && continue
@@ -243,40 +243,13 @@ function get_ptdf(Bx, branches::Vector{<: Branch}, numnodes::Int64, idx::Dict{<:
     end
     return A
 end
-function get_ptdf3(Binv::AbstractMatrix, branches::Vector{<: Branch}, numnodes::Int64, idx::Dict{<: Any, <: Int}, slack::Int)
-    A = zeros(Float64, size(branches,1), numnodes) # Container for the distribution factors
-    for (i, branch) in enumerate(branches)
-        branch.x == 0 && continue
-        (f, t) = get_bus_id(branch) # (f)rom and (t)o bus at this branch
-        A[i, :] = ((f != slack ? Binv[:,idx[f]] : 0) .- (t != slack ? Binv[:,idx[t]] : 0)) / branch.x # append factors to matrix
-    end
-    return A
-end
-function get_ptdf2(branches::Vector{<: Branch}, numnodes::Int64, idx::Dict{<: Any, <: Int}, slack::Int)
-    B = buildB(branches, numnodes, idx)
-    B[:,slack] .= zero(Float64)
-    B[slack,:] .= zero(Float64)
-    B[slack,slack] = one(Float64)
-    A = zeros(Float64, size(branches,1), numnodes) # Container for the distribution factors
-    for (i, branch) in enumerate(branches)
-        branch.x == 0 && continue
-        (f, t) = get_bus_id(branch) # (f)rom and (t)o bus at this branch
-        if f != slack
-            A[i, idx[f]] = 1 / branch.x
-        end
-        if t != slack # ∈ keys(idx)
-            A[i, idx[t]] = -1 / branch.x
-        end
-    end
-    return A * inv(Matrix(B))
-end
 
 """
 Builds an admittance matrix with the line series reactance of the lines.
 idx must not include the slack bus.
 ToDo: Only need the upper half triagonal matrix as it's symetric.
 """
-function buildB(branches::Vector{<: Branch}, numnodes::Int64, idx::Dict{<: Any, <: Int})
+function buildB(branches::Vector{<:Branch}, numnodes::Int, idx::Dict{<:Any, <:Int})
     B = SparseArrays.spzeros(numnodes, numnodes)
     for branch in branches
         (f, t) = get_bus_idx(branch, idx)
@@ -288,83 +261,110 @@ function buildB(branches::Vector{<: Branch}, numnodes::Int64, idx::Dict{<: Any, 
     return B
 end
 
+function calc_adjacency(branches::Vector{<:Branch}, numnodes::Int, idx::Dict{<:Any, <:Int})
+    adj = SparseArrays.spzeros(Int8, numnodes, numnodes)
+    for branch in branches
+        (f, t) = get_bus_idx(branch, idx)
+        adj[f, t] = 1
+        adj[t, f] = -1
+        adj[f, f] = 1
+        adj[t, t] = 1
+    end
+    return adj
+end
+
 
 " Make matrices of different kinds. idx includes all nodes. "
-function calc_A(branches::Vector{<: Branch}, numnodes::Int64, idx::Dict{<: Any, <: Int})
+function calc_A(branches::Vector{<:Branch}, numnodes::Int, idx::Dict{<:Any, <:Int})
     A = zeros(length(branches), numnodes)
-    numlines = zeros(Int64, numnodes)
     for (i, branch) in enumerate(branches)
-        A[i,idx[branch.arc.from.number]] = one(Float64)
-        A[i,idx[branch.arc.to.number]] = -one(Float64)
-        numlines[idx[branch.arc.from.number]] += 1
-        numlines[idx[branch.arc.to.number]] += 1
+        (f, t) = get_bus_idx(branch, idx)
+        A[i,f] = one(Float64)
+        A[i,t] = -one(Float64)
     end
-    return A, numlines
+    return A
 end
-function calc_X(B::AbstractMatrix{Float64}, slack::Int64) 
-    B[:,slack] .= zero(Float64)
-    B[slack,:] .= zero(Float64)
-    B[slack,slack] = one(Float64)
+function calc_X(B::AbstractMatrix{T}, slack::Int) where T<:Real
+    B[:,slack] .= zero(T)
+    B[slack,:] .= zero(T)
+    B[slack,slack] = one(T)
     X = inv(Matrix(B))
-    X[slack,slack] = zero(Float64)
+    X[slack,slack] = zero(T)
     return X
 end
-calc_isf(A::AbstractMatrix{Float64}, D::AbstractMatrix{Float64}, X::AbstractMatrix{Float64}) = D * A * X
-calc_B(A::AbstractMatrix{Float64}, D::AbstractMatrix{Float64}) = A' * D * A
-calc_D(branches::Vector{<: Branch}) = LinearAlgebra.Diagonal(get_x.(branches))
-function get_isf(branches::Vector{<: Branch}, numnodes::Int64, idx::Dict{<: Any, <: Int}, slack::Int64)
-    A, numlines = calc_A(branches, numnodes, idx)
+calc_isf(A::AbstractMatrix{<:Real}, D::AbstractMatrix{<:Real}, X::AbstractMatrix{<:Real}) = D * A * X
+calc_B(A::AbstractMatrix{<:Real}, D::AbstractMatrix{<:Real}) = A' * D * A
+calc_D(branches::Vector{<:Branch}) = LinearAlgebra.Diagonal(1 ./ get_x.(branches))
+function get_isf(branches::Vector{<:Branch}, numnodes::Int, idx::Dict{<:Any, <:Int}, slack::Int)
+    A = calc_A(branches, numnodes, idx)
     D = calc_D(branches)
     return calc_isf(A, D, calc_X(calc_B(A, D), slack))
 end
 
+" Get the isf-matrix after a line outage "
+function get_isf(A, D, B, from_bus_idx::Int, to_bus_idx::Int, i_branch::Int, x::Real, slack::Int)
+    neutralize_line(B, t, f, 1 / x)
+    #d = LinearAlgebra.diag(D)
+    isf = calc_isf(A, D, calc_X(B, slack))
+    #         A[1:end .!= i_branch,:], 
+    #         LinearAlgebra.Diagonal(d[1:end .!= i_branch]), 
+    #         calc_X(B, slack)
+    #     )
+    isf[i_branch,:] .= 0
+    neutralize_line(B, t, f, -1 / x)
+    return isf
+end
+function get_isf(A, D, B, idx::Dict{<:Any, <:Int}, i_branch::Int, branch::Branch, slack::Int)
+    (f, t) = get_bus_idx(branch, idx)
+    return get_isf(A, D, B, f, t, i_branch, get_x(branch), slack)
+end
 
-# function get_radials(numlines, branches::Vector{<: Branch})
-#     rad_nodes = findall(x -> x == 1, numlines)
-#     rad_lines = Vector{Int64}()
-#     for loc in rad_nodes
-#         for (i,branch) in enumerate(branches)
-#             if loc == idx[branch.arc.from.number]
-#                 push!(rad_lines, i)
-#             elseif loc == idx[branch.arc.to.number]
-#                 push!(rad_lines, i)
-#             end
-#         end
-#     end
-#     return rad_nodes, rad_lines
-# end
+function neutralize_line(B::AbstractMatrix, i::Int, j::Int, val::Real)
+    B[i,j] += val
+    B[j,i] += val
+    B[i,i] -= val
+    B[j,j] -= val
+end
 
-# function calc_ptdf(A::AbstractMatrix{Float64}, B::AbstractMatrix{Float64},  D::AbstractMatrix{Float64}, 
-#         rad_nodes::Vector{Int64}, rad_lines::Vector{Int64}, slack::Int64)
-#     A_alt = copy(A)
-#     for (i,branch) in enumerate(rad_lines)
-#         A_alt[branch, rad_nodes[i]] = zero(Float64)
-#     end
+"""
+Calculation of voltage angles in a contingency case using IMML
 
-#     Bx = copy(B)
-#     Bx[:,slack] .= zero(Float64)
-#     Bx[slack,:] .= zero(Float64)
-#     Bx[slack,slack] = one(Float64)
-#     for node in rad_nodes
-#         Bx[node, :] .= zero(Float64)
-#         Bx[node, node] = one(Float64)
-#     end
-#     X_alt = inv(Matrix(Bx))
-#     X_alt[slack, slack] = zero(Float64)
-#     ptdf = D * A * X_alt * (A_alt')
-#     for branch in rad_lines
-#         ptdf[branch, branch] = zero(Float64)
-#     end
-#     return ptdf
-# end
+change parameter is amount of reactance change,
+this should be <=1. 
+Default is 1 and this removes the line"""
+function get_changed_angles(
+            H_inv_from_bus::AbstractVector{<:Real}, 
+            H_inv_to_bus::AbstractVector{<:Real}, 
+            H::Real, 
+            delta0::AbstractVector{<:Real}, 
+            from_bus::Int, 
+            to_bus::Int, 
+            slack::Int,
+            change::Real = 1.0
+        )
 
-# function calc_lodf(ptdf::AbstractMatrix{Float64})
-#     ptdf_dem = LinearAlgebra.Diagonal(ptdf)
-#     for i in size(ptdf, 1)
-#         if (one(Float64) - ptdf_dem[i]) < 1e-6
-#             ptdf_dem[i] = zero(Float64)
-#         end
-#     end
-#     lodf = ptdf * LinearAlgebra.inv(LinearAlgebra.I - ptdf_dem)
-#     return lodf
-# end
+    x = zeros(length(delta0))
+    x[1:end .!= slack] = change .* (H_inv_from_bus .- H_inv_to_bus)
+    c_inv = 1/H + x[from_bus] - x[to_bus]
+    delta = 1/c_inv * (delta0[from_bus] - delta0[to_bus])
+    return delta0 .- x .* delta
+end
+
+get_changed_angles(
+        H_inv::AbstractMatrix{<:Real}, 
+        H::AbstractMatrix{<:Real}, 
+        delta0::AbstractVector{<:Real}, 
+        from_bus::Int, 
+        to_bus::Int, 
+        slack::Int,
+        change::Real = 1.0
+    ) = get_changed_angles(
+        H_inv[:,from_bus],
+        H_inv[:,to_bus],
+        H[from_bus,to_bus],
+        delta0,
+        from_bus,
+        to_bus,
+        slack,
+        change
+    )

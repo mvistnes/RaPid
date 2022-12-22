@@ -102,7 +102,7 @@ function print_power_flow(opfm::OPFmodel)
             get_rate.(branches)
         )
 end
-function print_power_flow(names::Vector{String}, flow::Vector{Float64}, rate::Vector{Float64})
+function print_power_flow(names::Vector{String}, flow::Vector{<:Real}, rate::Vector{<:Real})
     println("         Branch    Flow  Rating")
     string_line(n, f, r) = @sprintf("%15s  %6.2f  %6.2f\n", n, f, r)
     for (n,f,r) in zip(names, flow, rate)

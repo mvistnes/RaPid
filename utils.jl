@@ -73,9 +73,9 @@ end
 
 a(line::String,contingency::String) = line != contingency ? 1 : 0
 
-get_generator_cost(gen) = get_operation_cost(gen) |> get_variable |> get_cost |> get_value
-get_value(x::Vector{Tuple{Float64, Float64}}) = x[1]
-get_value(x::Tuple{Float64, Float64}) = x
+get_generator_cost(gen) = get_operation_cost(gen) |> get_variable |> get_cost |> _get_g_value
+_get_g_value(x::Vector{Tuple{<:Real, <:Real}}) = x[1]
+_get_g_value(x::Tuple{<:Real, <:Real}) = x
 
 """ An iterator to a type of power system component """
 get_gens_t(sys::System) = get_components(ThermalGen, sys)
@@ -91,11 +91,11 @@ get_nonctrl_generation(sys::System) = Iterators.flatten((get_demands(sys), get_r
 get_sorted_nodes(sys::System) = sort_nodes!(collect(get_components(Bus, sys)))
 get_sorted_branches(sys::System) = sort_branches!(collect(get_components(ACBranch, sys)))
 sort_nodes!(nodes::Vector{Bus}) = sort!(nodes,by = x -> x.number)
-sort_branches!(branches::Vector{<: Branch}) = sort!(branches,
+sort_branches!(branches::Vector{<:Branch}) = sort!(branches,
         by = x -> (get_number(get_arc(x).from), get_number(get_arc(x).to))
     )
 
-# it_name(::Type{T}, mos::Model) where {T <: Component} = get_name.(get_components(T,mod))
+# it_name(::Type{T}, mos::Model) where {T <:Component} = get_name.(get_components(T,mod))
 
 
 """ Make a DenseAxisArray using the list and function for the value of each element """
@@ -136,7 +136,7 @@ end
 find_slack(sys::System) = find_slack(get_sorted_nodes(sys))
 
 """ Set the renewable production to a ratio of maximum active power """
-function set_renewable_prod!(system::System, ratio::Float64=0.5)
+function set_renewable_prod!(system::System, ratio::Real=0.5)
     for g in get_components(RenewableGen, system)
         set_active_power!(g, get_max_active_power(g)*ratio)
     end
@@ -173,20 +173,23 @@ get_nodes_idx(nodes::Vector{Bus}) = PowerSystems._make_ax_ref(nodes)
 
 " Get the number of the from-bus and to-bus from a branch "
 get_bus_id(branch::ACBranch) = (branch.arc.from.number, branch.arc.to.number)
-get_bus_idx(branch::ACBranch, idx::Dict{<: Any, <: Int}) = (idx[branch.arc.from.number], idx[branch.arc.to.number])
+get_bus_idx(branch::ACBranch, idx::Dict{<:Any, <:Int}) = (idx[branch.arc.from.number], idx[branch.arc.to.number])
 
 " Get dual value (upper or lower bound) from model reference "
 get_low_dual(varref::VariableRef) = dual(LowerBoundRef(varref))
 get_high_dual(varref::VariableRef) = dual(UpperBoundRef(varref))
 
 " Return the overload of a line, else return 0.0 "
-find_overload(flow::Float64, rate::Float64) = abs(flow)-rate > zero(Float64) ? sign(flow)*(abs(flow)-rate) : zero(Float64)
+find_overload(flow::T, rate::Real) where T = abs(flow)-rate > 0.0 ? sign(flow)*(abs(flow)-rate) : zero(T)
 
 " DC line flow calculation using Injection Shift Factors and Power Injection vector"
-calculate_line_flows(isf::Array{Float64,2}, Pᵢ::Array{Float64}) = isf*Pᵢ
+calculate_line_flows(isf::AbstractMatrix{<:Real}, Pᵢ::AbstractVector{<:Real}) = isf*Pᵢ
+
+" DC power flow calculation using the Admittance matrix and Power Injection vector"
+run_pf(B::AbstractMatrix{<:Real}, P::AbstractVector{<:Real}) = B \ P
 
 """ Return the net power injected at each node. """
-function get_net_Pᵢ(opfm::OPFmodel, nodes::Vector{Bus}, idx::Dict{<: Any, <: Int} = get_nodes_idx(nodes), Pᵢ = get_Pᵢ(opfm, nodes))
+function get_net_Pᵢ(opfm::OPFmodel, nodes::Vector{Bus}, idx::Dict{<:Any, <:Int} = get_nodes_idx(nodes), Pᵢ = get_Pᵢ(opfm, nodes))
     p = JuMP.value.(opfm.mod[:ls0])
     for r in get_renewables(opfm.sys)
         Pᵢ[idx[r.bus.number]] += get_active_power(r) - p[get_name(r)]
@@ -199,7 +202,7 @@ function get_net_Pᵢ(opfm::OPFmodel, nodes::Vector{Bus}, idx::Dict{<: Any, <: I
 end
 
 """ Return the power injected at each node. """
-function get_Pᵢ(opfm::OPFmodel, nodes::Vector{Bus}, idx::Dict{<: Any, <: Int} = get_nodes_idx(nodes))
+function get_Pᵢ(opfm::OPFmodel, nodes::Vector{Bus}, idx::Dict{<:Any, <:Int} = get_nodes_idx(nodes))
     Pᵢ = zeros(length(nodes))
     p = JuMP.value.(opfm.mod[:pg0])
     for g in get_ctrl_generation(opfm.sys)
@@ -208,17 +211,31 @@ function get_Pᵢ(opfm::OPFmodel, nodes::Vector{Bus}, idx::Dict{<: Any, <: Int} 
     return Pᵢ
 end
 
-function calc_Pᵢ(branches::Vector{<: Branch}, δ::Vector{Float64}, numnodes::Int64, idx::Dict{<: Any, <: Int}, outage::Tuple = (0,0))
+function calc_Pᵢ(branches::Vector{<:Branch}, δ::Vector{<:Real}, numnodes::Int64, idx::Dict{<:Any, <:Int}, outage::Tuple = (0,0))
     P = zeros(numnodes)
     for branch in branches
         (f, t) = get_bus_idx(branch, idx)
         if outage != (f, t)
             P[f] += (δ[f] - δ[t]) / branch.x
-            P[f] -= (δ[f] - δ[t]) / branch.x
+            P[t] -= (δ[f] - δ[t]) / branch.x
         end
     end
     return P
 end
+
+function calc_Pl(branches::Vector{<:Branch}, δ::Vector{<:Real}, idx::Dict{<:Any, <:Int})
+    P = zeros(length(branches))
+    for (i,branch) in enumerate(branches)
+        (f, t) = get_bus_idx(branch, idx)
+        P[i] = (δ[f] - δ[t]) / branch.x
+    end
+    return P
+end
+
+calc_Pl2(branches::Vector{<:Branch}, δ::Vector{<:Real}, idx::Dict{<:Any, <:Int}) = 
+        calc_pl.(branches, [δ], get_bus_idx.(branches, [idx]), get_x.(branches))
+
+calc_pl(branch::Branch, δ::Vector{<:Real}, nodes::Tuple, x::Real) = (δ[nodes[1]] - δ[nodes[2]]) / x
 
 function calc_severity(opfm::OPFmodel, lim = 0.9)
     rate = make_named_array(get_rate, get_branches(opfm.sys))
