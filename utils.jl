@@ -211,6 +211,7 @@ function get_Pᵢ(opfm::OPFmodel, nodes::Vector{Bus}, idx::Dict{<:Any, <:Int} = 
     return Pᵢ
 end
 
+" Calculate the net power for each node from the voltage angles "
 function calc_Pᵢ(branches::Vector{<:Branch}, δ::Vector{<:Real}, numnodes::Int64, idx::Dict{<:Any, <:Int}, outage::Tuple = (0,0))
     P = zeros(numnodes)
     for branch in branches
@@ -223,6 +224,7 @@ function calc_Pᵢ(branches::Vector{<:Branch}, δ::Vector{<:Real}, numnodes::Int
     return P
 end
 
+" Calculate the power flow on the lines from the voltage angles "
 function calc_Pl(branches::Vector{<:Branch}, δ::Vector{<:Real}, idx::Dict{<:Any, <:Int})
     P = zeros(length(branches))
     for (i,branch) in enumerate(branches)
@@ -233,10 +235,14 @@ function calc_Pl(branches::Vector{<:Branch}, δ::Vector{<:Real}, idx::Dict{<:Any
 end
 
 calc_Pl2(branches::Vector{<:Branch}, δ::Vector{<:Real}, idx::Dict{<:Any, <:Int}) = 
-        calc_pl.(branches, [δ], get_bus_idx.(branches, [idx]), get_x.(branches))
+        calc_pl.([δ], get_bus_idx.(branches, [idx]), get_x.(branches))
 
-calc_pl(branch::Branch, δ::Vector{<:Real}, nodes::Tuple, x::Real) = (δ[nodes[1]] - δ[nodes[2]]) / x
+calc_pl(δ::Vector{<:Real}, nodes::Tuple, x::Real) = (δ[nodes[1]] - δ[nodes[2]]) / x
 
+calc_pl(A::AbstractMatrix{<:Real}, D::AbstractMatrix{<:Real}, δ::Vector{<:Real}) = D * A * δ
+
+
+" Calculate the severity index for the system based on line loading "
 function calc_severity(opfm::OPFmodel, lim = 0.9)
     rate = make_named_array(get_rate, get_branches(opfm.sys))
     sev = 0
@@ -248,4 +254,5 @@ function calc_severity(opfm::OPFmodel, lim = 0.9)
     return sev
 end
 
+" Calculate the severity index for a line based on line loading "
 calc_line_severity(flow, rate, lim = 0.9) = abs(flow) > lim * rate ? (1/(1-lim)) * (abs(flow) / rate - lim) : 0
