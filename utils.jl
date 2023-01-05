@@ -179,71 +179,9 @@ get_bus_idx(branch::ACBranch, idx::Dict{<:Any, <:Int}) = (idx[branch.arc.from.nu
 get_low_dual(varref::VariableRef) = dual(LowerBoundRef(varref))
 get_high_dual(varref::VariableRef) = dual(UpperBoundRef(varref))
 
-" Return the overload of a line, else return 0.0 "
-find_overload(flow::T, rate::Real) where T = abs(flow)-rate > 0.0 ? sign(flow)*(abs(flow)-rate) : zero(T)
-
-" DC line flow calculation using Injection Shift Factors and Power Injection vector"
-calculate_line_flows(isf::AbstractMatrix{<:Real}, Pᵢ::AbstractVector{<:Real}) = isf*Pᵢ
-
-" DC power flow calculation using the Admittance matrix and Power Injection vector"
-run_pf(B::AbstractMatrix{<:Real}, P::AbstractVector{<:Real}) = B \ P
-
-""" Return the net power injected at each node. """
-function get_net_Pᵢ(opfm::OPFmodel, nodes::Vector{Bus}, idx::Dict{<:Any, <:Int} = get_nodes_idx(nodes), Pᵢ = get_Pᵢ(opfm, nodes))
-    p = JuMP.value.(opfm.mod[:ls0])
-    for r in get_renewables(opfm.sys)
-        Pᵢ[idx[r.bus.number]] += get_active_power(r) - p[get_name(r)]
-    end
-    for d in get_demands(opfm.sys)
-        Pᵢ[idx[d.bus.number]] -= get_active_power(d) + p[get_name(d)]
-    end
-    # @assert abs(sum(Pᵢ)) < 0.001
-    return Pᵢ
-end
-
-""" Return the power injected at each node. """
-function get_Pᵢ(opfm::OPFmodel, nodes::Vector{Bus}, idx::Dict{<:Any, <:Int} = get_nodes_idx(nodes))
-    Pᵢ = zeros(length(nodes))
-    p = JuMP.value.(opfm.mod[:pg0])
-    for g in get_ctrl_generation(opfm.sys)
-        Pᵢ[idx[g.bus.number]] += p[get_name(g)]
-    end
-    return Pᵢ
-end
-
-" Calculate the net power for each node from the voltage angles "
-function calc_Pᵢ(branches::Vector{<:Branch}, δ::Vector{<:Real}, numnodes::Int64, idx::Dict{<:Any, <:Int}, outage::Tuple = (0,0))
-    P = zeros(numnodes)
-    for branch in branches
-        (f, t) = get_bus_idx(branch, idx)
-        if outage != (f, t)
-            P[f] += (δ[f] - δ[t]) / branch.x
-            P[t] -= (δ[f] - δ[t]) / branch.x
-        end
-    end
-    return P
-end
-
-" Calculate the power flow on the lines from the voltage angles "
-function calc_Pl(branches::Vector{<:Branch}, δ::Vector{<:Real}, idx::Dict{<:Any, <:Int})
-    P = zeros(length(branches))
-    for (i,branch) in enumerate(branches)
-        (f, t) = get_bus_idx(branch, idx)
-        P[i] = (δ[f] - δ[t]) / branch.x
-    end
-    return P
-end
-
-calc_Pl2(branches::Vector{<:Branch}, δ::Vector{<:Real}, idx::Dict{<:Any, <:Int}) = 
-        calc_pl.([δ], get_bus_idx.(branches, [idx]), get_x.(branches))
-
-calc_pl(δ::Vector{<:Real}, nodes::Tuple, x::Real) = (δ[nodes[1]] - δ[nodes[2]]) / x
-
-calc_pl(A::AbstractMatrix{<:Real}, D::AbstractMatrix{<:Real}, δ::Vector{<:Real}) = D * A * δ
-
 
 " Calculate the severity index for the system based on line loading "
-function calc_severity(opfm::OPFmodel, lim = 0.9)
+function calc_severity(opfm::OPFmodel, lim::Real = 0.9)
     rate = make_named_array(get_rate, get_branches(opfm.sys))
     sev = 0
     for c in opfm.contingencies
@@ -254,5 +192,18 @@ function calc_severity(opfm::OPFmodel, lim = 0.9)
     return sev
 end
 
-" Calculate the severity index for a line based on line loading "
-calc_line_severity(flow, rate, lim = 0.9) = abs(flow) > lim * rate ? (1/(1-lim)) * (abs(flow) / rate - lim) : 0
+calc_severity(
+        rate::AbstractVector{<:Real}, 
+        contingencies::AbstractVector, 
+        branches::AbstractVector, 
+        pfc, 
+        lim::Real = 0.9
+        ) = 
+    sum(calc_line_severity(pfc[l,c], rate[l], lim) for c in contingencies, l in branches)
+
+calc_severity(values::AbstractVector{<:Real}, rate::AbstractVector{<:Real}, lim::Real = 0.9) = 
+    sum(calc_line_severity.(values, rate, [lim]))
+
+" Calculate the severity index for a component based on the rating "
+calc_line_severity(value::Real, rate::Real, lim::Real = 0.9) = 
+    abs(value) > lim * rate ? (1/(1-lim)) * (abs(value) / rate - lim) : 0

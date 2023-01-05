@@ -1,177 +1,266 @@
 # CC BY 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2022
+using PowerSystems
 
-module DCPowerFlow
-using LinearAlgebra
-using DataFrames
-using Printf
+" Return the overload of a line, else return 0.0 "
+find_overload(flow::T, rate::Real) where {T<:Real} = abs(flow)-rate > 0.0 ? sign(flow)*(abs(flow)-rate) : zero(T)
 
-include("system_description.jl")
-import .SystemDescription
+" DC line flow calculation using Injection Shift Factors and Power Injection vector"
+calculate_line_flows(isf::AbstractMatrix{<:Real}, Pᵢ::AbstractVector{<:Real}) = isf*Pᵢ
 
-"""
-DC power flow calculation of a power system.
-No losses are accounted for.
-
-Input: 
-    - nodes: a table with columns of ibus (bus number), type (PV=1, PQ=2, ref=3), and Pd.
-    - branches: a table with columns of fbus (from bus number), tbus (to bus number), 
-    and x (series reactance).
-
-Output: 
-    - nodes: extended with
-        - Pd: vector of real power into each bus (and with reactive power assemed 0 pu).
-        - theta: vector of voltage angle at each bus (and with voltage magnitude assumed 1.0 pu).
-"""
-function dcpf!(nodes::DataFrame, branches::DataFrame)
-    nodes_vec, branches_vec, convert_bus = vectorize(nodes, branches)
-    P_bus, theta, branches[!, :P] = dcpf!(nodes_vec, branches_vec)
-    nodes[!, :P] = zeros(size(nodes,1))
-    nodes[!, :theta] = zeros(size(nodes,1))
-    for bus in eachrow(nodes)
-        bus.P = P_bus[convert_bus[bus.ibus]]
-        bus.theta = theta[convert_bus[bus.ibus]]
+" Calculate the power flow on the lines from the voltage angles "
+function calc_Pline(branches::Vector{<:Branch}, δ::Vector{<:Real}, idx::Dict{<:Any, <:Int})
+    P = zeros(length(branches))
+    for (i,branch) in enumerate(branches)
+        (f, t) = get_bus_idx(branch, idx)
+        P[i] = (δ[f] - δ[t]) / branch.x
     end
-    return nodes, branches
-end
-function dcpf!(nodes::Vector{Bus}, branches::Vector{Branch})
-    H = buildH(nodes, branches)
-    P = [nodes[i].Pd for i in range(1,length(nodes)-1)]
-    theta = calcangles(P, H)
-    P_bus, P_branch = calcP(theta, branches)
-    return P_bus, theta, P_branch
+    return P
 end
 
+calc_Pline2(branches::Vector{<:Branch}, δ::Vector{<:Real}, idx::Dict{<:Any, <:Int}) = 
+        calc_pl.([δ], get_bus_idx.(branches, [idx]), get_x.(branches))
 
+calc_Pline(δ::Vector{<:Real}, nodes::Tuple, x::Real) = (δ[nodes[1]] - δ[nodes[2]]) / x
+
+""" 
+Calculate the power flow on the lines from the connectivity 
+and the diagonal admittance matrices and the voltage angles 
 """
-Builds a matrix with the reactance of the lines
+calc_Pline(A::AbstractMatrix{<:Real}, D::AbstractMatrix{<:Real}, δ::Vector{<:Real}) = D * A * δ
+calc_Pline(DA::AbstractMatrix{<:Real}, δ::Vector{<:Real}) = DA * δ
 
-Input: as dcpf!().
-
-Output: an admittance matrix based on the line series reactances.
+""" 
+Calculate the power flow on the lines from the connectivity 
+and the diagonal admittance matrices and the voltage angles
+in a contingency of the branch number.
 """
-function buildH(nodes::Vector{Bus}, branches::Vector{Branch})
-    H = zeros(Float64, size(nodes,1)-1, size(nodes,1)-1)
+function calc_Pline_contingency(A::AbstractMatrix{<:Real}, D::AbstractMatrix{<:Real}, δ::Vector{<:Real}, branch::Integer)
+    P = calc_Pline(A, D, δ)
+    P[branch] = 0.0
+    return P
+end
+function calc_Pline_contingency(DA::AbstractMatrix{<:Real}, δ::Vector{<:Real}, branch::Integer)
+    P = calc_Pline(DA, δ)
+    P[branch] = 0.0
+    return P
+end
+
+# Slower than the above by 5x
+# calc_Pline_contingency(A::AbstractMatrix{<:Real}, D::AbstractMatrix{<:Real}, δ::Vector{<:Real}, branch::Integer) = 
+#         D[:, 1:end .!= branch] * A[1:end .!= branch, :] * δ
+
+" DC power flow calculation using the Admittance matrix and Power Injection vector returning the bus angles "
+run_pf(B::AbstractMatrix{<:Real}, P::AbstractVector{<:Real}) = B \ P
+
+""" Return the net power injected at each node. """
+function get_net_Pᵢ(opfm::OPFmodel, nodes::Vector{Bus}, idx::Dict{<:Any, <:Int} = get_nodes_idx(nodes), Pᵢ = get_Pᵢ(opfm, nodes))
+    p = JuMP.value.(opfm.mod[:ls0])
+    for r in get_renewables(opfm.sys)
+        Pᵢ[idx[r.bus.number]] += get_active_power(r) - p[get_name(r)]
+    end
+    for d in get_demands(opfm.sys)
+        Pᵢ[idx[d.bus.number]] -= get_active_power(d) + p[get_name(d)]
+    end
+    # @assert abs(sum(Pᵢ)) < 0.001
+    return Pᵢ
+end
+
+""" Return the power injected at each node. """
+function get_Pᵢ(opfm::OPFmodel, nodes::Vector{Bus}, idx::Dict{<:Any, <:Int} = get_nodes_idx(nodes))
+    Pᵢ = zeros(length(nodes))
+    p = JuMP.value.(opfm.mod[:pg0])
+    for g in get_ctrl_generation(opfm.sys)
+        Pᵢ[idx[g.bus.number]] += p[get_name(g)]
+    end
+    return Pᵢ
+end
+
+" Calculate the net power for each node from the voltage angles "
+function calc_Pᵢ(branches::Vector{<:Branch}, δ::Vector{<:Real}, numnodes::Int64, idx::Dict{<:Any, <:Int}, outage::Tuple = (0,0))
+    P = zeros(numnodes)
     for branch in branches
-        (f, t) = (branch.fbus, branch.tbus)
-        y = 1 / branch.x
-        if nodes[f].type != ref::TypeB # If the from bus is NOT a slack bus
-            H[f,f] += y
-            if nodes[t].type != ref::TypeB # If the to bus is NOT a slack bus
-                H[t,t] += y
-                H[f,t] = -y
-                H[t,f] = -y
-            end
-        elseif nodes[t].type != ref::TypeB
-            H[t,t] += y
+        (f, t) = get_bus_idx(branch, idx)
+        if outage != (f, t)
+            P[f] += (δ[f] - δ[t]) / branch.x
+            P[t] -= (δ[f] - δ[t]) / branch.x
         end
     end
-    return H
+    return P
+end
+
+
+" Make the PTDF matrix for using the input nodes and branches "
+function get_ptdf(branches::Vector{<:Branch}, numnodes::Integer, idx::Dict{<:Any, <:Integer}, slack::Integer)
+    B = build_B(branches, numnodes, idx)
+    B[:,slack] .= zero(Float64)
+    B[slack,:] .= zero(Float64)
+    B[slack,slack] = one(Float64)
+    return get_ptdf(LinearAlgebra.lu(B), branches, numnodes, idx, slack)
+end
+function get_ptdf(Bx, branches::Vector{<:Branch}, numnodes::Integer, idx::Dict{<:Any, <:Integer}, slack::Integer)
+    A = zeros(Float64, size(branches,1), numnodes) # Container for the distribution factors
+    for (i, branch) in enumerate(branches)
+        branch.x == 0 && continue
+        ΔP = zeros(Float64, numnodes)
+        (f, t) = get_bus_id(branch) # (f)rom and (t)o bus at this branch
+        if f != slack
+            ΔP[idx[f]] = 1 / branch.x
+        end
+        if t != slack # ∈ keys(idx)
+            ΔP[idx[t]] = -1 / branch.x
+        end
+        A[i, :] = Bx \ ΔP # append factors to matrix
+    end
+    return A
 end
 
 
 """
-Calculate voltage angles
+Build the adjecency Matrix
 
 Input:
- - Pd: vector of real power into each bus.
- - H: an admittance matrix based on the line series reactances.
-
-Output: vector of voltage angle at each bus.
+    - branches: Tuples of the from- and to-node index for each branch
+    - numnodes: The number of nodes in the system
 """
-function calcangles(P::Vector{AbstractFloat}, H::Matrix{AbstractFloat})
-    luP = lu(H)
-    return luP \ P
-end
-
-
-"""
-Calculate active power
-
-Input:
- - theta: vector of voltage angle at each bus.
- - branches: as in dcpf!().
-
-Output: 
- - P_bus: vector of real power into each bus.
- - P_branch: vector of real power in a line.
-"""
-function calcP(theta::Vector{AbstractFloat}, branches::Vector{Branch})
-    push!(theta, 0.0)
-    P_bus = zeros(size(theta,1))
-    P_branch = zeros(size(branches,1))
-    for (i, branch) in enumerate(branches)
-        (f, t) = (branch.fbus, branch.tbus)
-        P_branch[i] = (theta[f] - theta[t]) / branch.x
-        # add/subtract the power to from/to bus
-        P_bus[f] += P_branch[i]
-        P_bus[t] -= P_branch[i]
+function build_adjacency(branches::Vector{<:Tuple{Integer, Integer}}, numnodes::Integer)
+    adj = SparseArrays.spzeros(Int8, numnodes, numnodes)
+    for (f, t) in branches
+        adj[f, t] = 1
+        adj[t, f] = -1
+        adj[f, f] = 1
+        adj[t, t] = 1
     end
-    return P_bus, P_branch
+    return adj
 end
 
+build_adjacency(branches::Vector{<:Branch}, numnodes::Integer, idx::Dict{<:Any, <:Integer}) =
+    build_adjacency(get_bus_idx.(branches, [idx]), numnodes)
+
+
+" Make the branch connectivity matrix "
+function calc_A(branches::Vector{<:Tuple{Integer, Integer}}, numnodes::Integer)
+    A = SparseArrays.spzeros(Int8, length(branches), numnodes)
+    for (i, (f, t)) in enumerate(branches)
+        A[i,f] = one(Float64)
+        A[i,t] = -one(Float64)
+    end
+    return A
+end
+
+calc_A(branches::Vector{<:Branch}, numnodes::Integer, idx::Dict{<:Any, <:Integer}) =
+    calc_A(get_bus_idx.(branches, [idx]), numnodes)
+
+" Calculate the inverse of the adjecency matrix "
+function calc_X(B::AbstractMatrix{T}, slack::Integer) where T<:Real
+    B[:,slack] .= zero(T)
+    B[slack,:] .= zero(T)
+    B[slack,slack] = one(T)
+    X = inv(Matrix(B))
+    X[slack,slack] = zero(T)
+    return X
+end
+
+calc_isf(A::AbstractMatrix{<:Real}, D::AbstractMatrix{<:Real}, X::AbstractMatrix{<:Real}) = D * A * X
+
+calc_B(A::AbstractMatrix{<:Real}, D::AbstractMatrix{<:Real}) = A' * D * A
+
+" Builds an admittance matrix with the line series reactance of the lines. "
+function build_B(branches::Vector{<:Tuple{Integer, Integer}}, X::Vector{<:Real}, numnodes::Integer)
+    B = SparseArrays.spzeros(numnodes, numnodes)
+    for ((f, t), x) in zip(branches, X)
+        B[f,f] += 1 / x
+        B[t,t] += 1 / x
+        B[f,t] -= 1 / x
+        B[t,f] -= 1 / x
+    end
+    return B
+end
+
+build_B(branches::Vector{<:Branch}, numnodes::Integer, idx::Dict{<:Any, <:Integer}) =
+    build_B(get_bus_idx.(branches, [idx]), get_x.(branches), numnodes)
+
+calc_D(x::Vector{<:Real}) = LinearAlgebra.Diagonal(1 ./ x)
+calc_D(branches::Vector{<:Branch}) = calc_D(get_x.(branches))
+
+function get_isf(branches::Vector{<:Branch}, numnodes::Integer, idx::Dict{<:Any, <:Integer}, slack::Integer)
+    A = calc_A(branches, numnodes, idx)
+    D = calc_D(branches)
+    return calc_isf(A, D, calc_X(calc_B(A, D), slack))
+end
+
+" Get the isf-matrix after a line outage "
+function get_isf(A, D, B, from_bus_idx::Integer, to_bus_idx::Integer, i_branch::Integer, x::Real, slack::Integer)
+    neutralize_line(B, t, f, 1 / x)
+    #d = LinearAlgebra.diag(D)
+    isf = calc_isf(A, D, calc_X(B, slack))
+    #         A[1:end .!= i_branch,:], 
+    #         LinearAlgebra.Diagonal(d[1:end .!= i_branch]), 
+    #         calc_X(B, slack)
+    #     )
+    isf[i_branch,:] .= 0
+    neutralize_line(B, t, f, -1 / x)
+    return isf
+end
+function get_isf(A, D, B, idx::Dict{<:Any, <:Integer}, i_branch::Integer, branch::Branch, slack::Integer)
+    (f, t) = get_bus_idx(branch, idx)
+    return get_isf(A, D, B, f, t, i_branch, get_x(branch), slack)
+end
+
+function neutralize_line(B::AbstractMatrix, i::Integer, j::Integer, val::Real)
+    B[i,j] += val
+    B[j,i] += val
+    B[i,i] -= val
+    B[j,j] -= val
+end
 
 """
-Calculate and print the distribution factors of the branches
+    Calculation of voltage angles in a contingency case using IMML
 
-Input: as dcpf!().
-
-Output: a matrix of the distribution factors.
+    Input:
+        - H_inv_from_bus: A column from the inverse admittance matrix
+        - H_inv_to_bus: A column from the inverse admittance matrix
+        - H: A value from the admittance matrix
+        - δ₀: Inital voltage angles
+        - from_bus: From bus index
+        - to_bus: To bus index
+        - slack: Slack bus index
+        - change: The amount of reactance change of the line, <=1. 
+          Default is 1 and this removes the line
 """
-function distr_factors(nodes, branches)
-    nodes_vec, branches_vec, convert_bus = vectorize(nodes, branches)
-    H = lu(buildH(nodes_vec, branches_vec))
-    a = zeros(Float64, size(branches_vec,1), size(nodes_vec,1)-1) # Container for the distribution factors
-    for (i, branch) in enumerate(branches_vec)
-        if branch.x != ref::TypeB
-            deltaPd = zeros(Float64, size(nodes_vec,1)-1) # Container for the right side
-            (f, t) = (branch.fbus, branch.tbus) # (f)rom and (t)o bus at this branch
-            if nodes_vec[f].type != ref::TypeB # If the bus is NOT a slack bus
-                deltaPd[f] = 1 / branch.x
-            end
-            if nodes_vec[t].type != ref::TypeB # If the bus is NOT a slack bus
-                deltaPd[t] = -1 / branch.x
-            end
-            a[i, :] = H \ deltaPd # append factors to matrix
-        end
-    end
-    return a
+function get_changed_angles(
+            H_inv_from_bus::AbstractVector{<:Real}, 
+            H_inv_to_bus::AbstractVector{<:Real}, 
+            H::Real, 
+            δ₀::AbstractVector{<:Real}, 
+            from_bus::Integer, 
+            to_bus::Integer, 
+            slack::Integer,
+            change::Real = 1.0
+        )
+
+    x = zeros(length(δ₀))
+    # x[1:end .!= slack] = change .* (H_inv_from_bus .- H_inv_to_bus)
+    x[1:end .!= slack] = change .* (H_inv_from_bus[1:end .!= slack] .- H_inv_to_bus[1:end .!= slack])
+    c_inv = 1/H + x[from_bus] - x[to_bus]
+    delta = 1/c_inv * (δ₀[from_bus] - δ₀[to_bus])
+    return δ₀ .- x .* delta
 end
 
-function print_distr_factors(nodes, branches, a)
-    # Nicely printed distribution factors
-    print("Distribution factors\nBus  ")
-    for e in nodes
-        if e.type != ref::TypeB
-            @printf("%12d", e.ibus)
-        end
-    end
-    for (i, branch) in enumerate(branches)
-        if branch.x != ref::TypeB
-            @printf("\nLine %d-%d: ", branch.fbus, branch.tbus)
-            for e in a[i,:]
-                @printf("%10.6f  ", e)
-            end
-        end
-    end
-    print("\n")
-end
-
-
-"""
-Prints all nodes with voltage magnitude and angle
-
-Input: 
- - nodes: as dcpf!().
- - P: vector of real power into each bus.
- - theta: vector of voltage angle at each bus.
-"""
-function printsystem(nodes, Pd::Vector{AbstractFloat}, theta::Vector{AbstractFloat})
-    println("\n Bus \tVoltage ang \tActive power")
-    println("-------------------------------------")
-    for i in 1:length(Pd)
-        @printf("%4d \t%8.4f \t%8.4f\n", nodes.ibus[i], theta[i], P[i])
-    end
-    println("")
-end
-
-end
+get_changed_angles(
+        H_inv::AbstractMatrix{<:Real}, 
+        H::AbstractMatrix{<:Real}, 
+        δ₀::AbstractVector{<:Real}, 
+        from_bus::Integer, 
+        to_bus::Integer, 
+        slack::Integer,
+        change::Real = 1.0
+    ) = get_changed_angles(
+        H_inv[:,from_bus],
+        H_inv[:,to_bus],
+        H[from_bus,to_bus],
+        δ₀,
+        from_bus,
+        to_bus,
+        slack,
+        change
+    )

@@ -215,7 +215,7 @@ function get_islands(sys::System, branches::Vector{<:Branch})
     return islands
 end
 
-function get_islands(nodes::Vector{Integer}, branches::Vector{Tuple{<:Integer, <:Integer}})
+function get_islands(nodes::Vector{Integer}, branches::Vector{<:Tuple{Integer, Integer}})
     islands = Vector()
     visited_nodes = Vector{Integer}([branches[1][1]]) # start node on island 1 marked as visited
     visited_branches, new_nodes = find_connected(branches, first(visited_nodes))
@@ -264,9 +264,9 @@ function find_connected(branches::Vector{<:Branch}, node::Bus)
     return new_branches, new_nodes
 end
 
-function find_connected(branches::Vector{Tuple{<:Integer, <:Integer}}, node::Integer)
-    new_branches = Vector{Tuple{<:Integer, <:Integer}}()
-    new_nodes = Vector{Integer}()
+function find_connected(branches::Vector{<:Tuple{Integer, Integer}}, node::Integer)
+    new_branches = Vector{Tuple{Int, Int}}()
+    new_nodes = Vector{Int}()
     for branch in branches
         if branch[1] == node
             push!(new_branches, branch)
@@ -282,180 +282,3 @@ end
 " An AffExpr nicely formatted to a string "
 sprint_expr(expr::AffExpr) = join(Printf.@sprintf("%s%5.2f %s ", (x[2] > 0 ? "+" : "-"), abs(x[2]), x[1]) for x in expr.terms) * 
     Printf.@sprintf("<= %s%.2f", (expr.constant > 0 ? "-" : "+"), abs(expr.constant))
-
-" Make the PTDF matrix for using the input nodes and branches "
-function get_ptdf(branches::Vector{<:Branch}, numnodes::Integer, idx::Dict{<:Any, <:Integer}, slack::Integer)
-    B = build_B(branches, numnodes, idx)
-    B[:,slack] .= zero(Float64)
-    B[slack,:] .= zero(Float64)
-    B[slack,slack] = one(Float64)
-    return get_ptdf(LinearAlgebra.lu(B), branches, numnodes, idx, slack)
-end
-function get_ptdf(Bx, branches::Vector{<:Branch}, numnodes::Integer, idx::Dict{<:Any, <:Integer}, slack::Integer)
-    A = zeros(Float64, size(branches,1), numnodes) # Container for the distribution factors
-    for (i, branch) in enumerate(branches)
-        branch.x == 0 && continue
-        ΔP = zeros(Float64, numnodes)
-        (f, t) = get_bus_id(branch) # (f)rom and (t)o bus at this branch
-        if f != slack
-            ΔP[idx[f]] = 1 / branch.x
-        end
-        if t != slack # ∈ keys(idx)
-            ΔP[idx[t]] = -1 / branch.x
-        end
-        A[i, :] = Bx \ ΔP # append factors to matrix
-    end
-    return A
-end
-
-
-"""
-Build the adjecency Matrix
-
-Input:
-    - branches: Tuples of the from- and to-node index for each branch
-    - numnodes: The number of nodes in the system
-"""
-function build_adjacency(branches::Vector{Tuple{<:Integer, <:Integer}}, numnodes::Integer)
-    adj = SparseArrays.spzeros(Int8, numnodes, numnodes)
-    for (f, t) in branches
-        adj[f, t] = 1
-        adj[t, f] = -1
-        adj[f, f] = 1
-        adj[t, t] = 1
-    end
-    return adj
-end
-
-build_adjacency(branches::Vector{<:Branch}, numnodes::Integer, idx::Dict{<:Any, <:Integer}) =
-    build_adjacency(get_bus_idx.(branches, [idx]), numnodes)
-
-
-" Make the A matrix "
-function calc_A(branches::Vector{Tuple{<:Integer, <:Integer}}, numnodes::Integer)
-    A = zeros(length(branches), numnodes)
-    for (i, (f, t)) in enumerate(branches)
-        A[i,f] = one(Float64)
-        A[i,t] = -one(Float64)
-    end
-    return A
-end
-
-calc_A(branches::Vector{<:Branch}, numnodes::Integer, idx::Dict{<:Any, <:Integer}) =
-    calc_A(get_bus_idx.(branches, [idx]), numnodes)
-
-" Calculate the inverse of the adjecency matrix "
-function calc_X(B::AbstractMatrix{T}, slack::Integer) where T<:Real
-    B[:,slack] .= zero(T)
-    B[slack,:] .= zero(T)
-    B[slack,slack] = one(T)
-    X = inv(Matrix(B))
-    X[slack,slack] = zero(T)
-    return X
-end
-
-calc_isf(A::AbstractMatrix{<:Real}, D::AbstractMatrix{<:Real}, X::AbstractMatrix{<:Real}) = D * A * X
-
-calc_B(A::AbstractMatrix{<:Real}, D::AbstractMatrix{<:Real}) = A' * D * A
-
-"""
-Builds an admittance matrix with the line series reactance of the lines.
-"""
-function build_B(branches::Vector{Tuple{<:Integer, <:Integer}}, X::Vector{Real}, numnodes::Integer)
-    B = SparseArrays.spzeros(numnodes, numnodes)
-    for ((f, t), x) in zip(branches, X)
-        B[f,f] += 1 / x
-        B[t,t] += 1 / x
-        B[f,t] -= 1 / x
-        B[t,f] -= 1 / x
-    end
-    return B
-end
-
-build_B(branches::Vector{<:Branch}, numnodes::Integer, idx::Dict{<:Any, <:Integer}) =
-    build_B(get_bus_idx.(branches, [idx]), get_x.(branches), numnodes)
-
-calc_D(x::Vector{Real}) = LinearAlgebra.Diagonal(1 ./ x)
-calc_D(branches::Vector{<:Branch}) = calc_D(get_x.(branches))
-
-function get_isf(branches::Vector{<:Branch}, numnodes::Integer, idx::Dict{<:Any, <:Integer}, slack::Integer)
-    A = calc_A(branches, numnodes, idx)
-    D = calc_D(branches)
-    return calc_isf(A, D, calc_X(calc_B(A, D), slack))
-end
-
-" Get the isf-matrix after a line outage "
-function get_isf(A, D, B, from_bus_idx::Integer, to_bus_idx::Integer, i_branch::Integer, x::Real, slack::Integer)
-    neutralize_line(B, t, f, 1 / x)
-    #d = LinearAlgebra.diag(D)
-    isf = calc_isf(A, D, calc_X(B, slack))
-    #         A[1:end .!= i_branch,:], 
-    #         LinearAlgebra.Diagonal(d[1:end .!= i_branch]), 
-    #         calc_X(B, slack)
-    #     )
-    isf[i_branch,:] .= 0
-    neutralize_line(B, t, f, -1 / x)
-    return isf
-end
-function get_isf(A, D, B, idx::Dict{<:Any, <:Integer}, i_branch::Integer, branch::Branch, slack::Integer)
-    (f, t) = get_bus_idx(branch, idx)
-    return get_isf(A, D, B, f, t, i_branch, get_x(branch), slack)
-end
-
-function neutralize_line(B::AbstractMatrix, i::Integer, j::Integer, val::Real)
-    B[i,j] += val
-    B[j,i] += val
-    B[i,i] -= val
-    B[j,j] -= val
-end
-
-"""
-    Calculation of voltage angles in a contingency case using IMML
-
-    Input:
-        - H_inv_from_bus: A column from the inverse admittance matrix
-        - H_inv_to_bus: A column from the inverse admittance matrix
-        - H: A value from the admittance matrix
-        - δ₀: Inital voltage angles
-        - from_bus: From bus index
-        - to_bus: To bus index
-        - slack: Slack bus index
-        - change: The amount of reactance change of the line, <=1. 
-          Default is 1 and this removes the line
-"""
-function get_changed_angles(
-            H_inv_from_bus::AbstractVector{<:Real}, 
-            H_inv_to_bus::AbstractVector{<:Real}, 
-            H::Real, 
-            δ₀::AbstractVector{<:Real}, 
-            from_bus::Integer, 
-            to_bus::Integer, 
-            slack::Integer,
-            change::Real = 1.0
-        )
-
-    x = zeros(length(δ₀))
-    x[1:end .!= slack] = change .* (H_inv_from_bus .- H_inv_to_bus)
-    c_inv = 1/H + x[from_bus] - x[to_bus]
-    delta = 1/c_inv * (δ₀[from_bus] - δ₀[to_bus])
-    return δ₀ .- x .* delta
-end
-
-get_changed_angles(
-        H_inv::AbstractMatrix{<:Real}, 
-        H::AbstractMatrix{<:Real}, 
-        δ₀::AbstractVector{<:Real}, 
-        from_bus::Integer, 
-        to_bus::Integer, 
-        slack::Integer,
-        change::Real = 1.0
-    ) = get_changed_angles(
-        H_inv[:,from_bus],
-        H_inv[:,to_bus],
-        H[from_bus,to_bus],
-        δ₀,
-        from_bus,
-        to_bus,
-        slack,
-        change
-    )
