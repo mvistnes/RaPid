@@ -6,7 +6,8 @@ import Test
 include("utils.jl")
 include("N-1_SCOPF.jl")
 include("short_long_SCOPF.jl")
-include("benders_ELK14.jl")
+include("benders.jl")
+include("dc_power_flow.jl")
 include("post_process_opf.jl")
 
 function run_benders(fname::String)

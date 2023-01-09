@@ -9,9 +9,6 @@ import MathOptInterface
 const MOI = MathOptInterface
 import LinearAlgebra
 import SparseArrays
-# include("N-1_SCOPF.jl")
-# include("short_long_SCOPF.jl")
-# include("utils.jl")
 
 """ 
 Solve the optimization model using Benders decomposition.
@@ -120,14 +117,30 @@ function iterative_cont_anal(sys::System, nodes::Vector{Bus}, branches::Vector{<
 end
 
 " Get the overload of all lines "
-get_overload(contanal::IterativeDCContAnal, cont::Int, Pᵢ::Vector{<:Real}) = 
+get_overload(contanal::IterativeDCContAnal, cont::Integer, Pᵢ::Vector{<:Real}) = 
     find_overload.(
             calculate_line_flows(get_cont_ptdf(contanal, cont), Pᵢ), 
             contanal.linerating
         )
 
+get_overload(
+        DA::AbstractMatrix{<:Real}, 
+        B::AbstractMatrix{<:Real}, 
+        X::AbstractMatrix{<:Real}, 
+        δ::AbstractVector{<:Real}, 
+        branch::Integer,
+        cont::Tuple{Integer, Integer}, 
+        slack::Integer
+    ) = 
+        find_overload.(calc_Pline(
+                    DA, 
+                    get_changed_angles(X, B, δ, cont[1], cont[2], slack),
+                    branch), 
+                contanal.linerating
+            )
+
 " Get the PTDF corresponding to the contingency "
-function get_cont_ptdf(contanal::IterativeDCContAnal, cont::Int)
+function get_cont_ptdf(contanal::IterativeDCContAnal, cont::Integer)
     @assert 0 <= cont <= length(contanal.contingencies)  # "No entry in LODF matrix for the given contingency. "
     # cont+1 as first element in LODF is PTDF for base case
     return contanal.lodf[:,:, cont+1]  
@@ -168,6 +181,39 @@ function get_islands(sys::System, branches::Vector{<:Branch})
     return islands
 end
 
+function get_islands(nodes::Vector{Integer}, branches::Vector{<:Tuple{Integer, Integer}})
+    islands = Vector()
+    visited_nodes = Vector{Integer}([branches[1][1]]) # start node on island 1 marked as visited
+    visited_branches, new_nodes = find_connected(branches, first(visited_nodes))
+        # all nodes connected are set as neighouring nodes not visited,
+        # via visited branches
+
+    bus_numbers = length(nodes)
+    bus_number = 0
+    while true
+
+        # Visit new nodes until there are no neighouring nodes connected
+        while !isempty(new_nodes)
+            node = pop!(new_nodes)
+            push!(visited_nodes, node)
+            bn = find_connected(branches, node)
+            union!(visited_branches, bn[1])
+            union!(new_nodes, setdiff(bn[2], visited_nodes))
+        end
+
+        push!(islands, (sort_nodes!(visited_nodes), sort_branches!(visited_branches)))
+        bus_number += length(visited_nodes)
+
+        bus_numbers == bus_number && break # all nodes are visited 
+        bus_numbers < bus_number && @error "More nodes counted, $(bus_number), than nodes in the system, $(bus_numbers)!"
+
+        visited_nodes = Vector([setdiff(nodes, visited_nodes) |> first])
+                    # a random node not visited yet starts a new island
+        visited_branches, new_nodes = find_connected(branches, first(visited_nodes))
+    end
+    return islands
+end
+
 " Find nodes connected to a node "
 function find_connected(branches::Vector{<:Branch}, node::Bus)
     new_branches = Vector{Branch}()
@@ -184,9 +230,67 @@ function find_connected(branches::Vector{<:Branch}, node::Bus)
     return new_branches, new_nodes
 end
 
+function find_connected(branches::Vector{<:Tuple{Integer, Integer}}, node::Integer)
+    new_branches = Vector{Tuple{Int, Int}}()
+    new_nodes = Vector{Int}()
+    for branch in branches
+        if branch[1] == node
+            push!(new_branches, branch)
+            push!(new_nodes, branch[2])
+        elseif branch[2] == node
+            push!(new_branches, branch)
+            push!(new_nodes, branch[1])
+        end
+    end
+    return new_branches, new_nodes
+end
+
 " An AffExpr nicely formatted to a string "
 sprint_expr(expr::AffExpr, lim = 1e-6) = 
     join(Printf.@sprintf("%s%5.2f %s ", (x[2] > 0 ? "+" : "-"), abs(x[2]), x[1]) 
             for x in expr.terms if abs(x[2]) > lim) * 
         Printf.@sprintf("<= %s%.2f", (expr.constant > 0 ? "-" : "+"), abs(expr.constant)
     )
+
+function calc_all_line_flows(
+            DA::AbstractMatrix{<:Real}, 
+            X::AbstractMatrix{<:Real}, 
+            B::AbstractMatrix{<:Real}, 
+            δ::AbstractVector{<:Real}, 
+            branches::AbstractVector{<:Branch}, 
+            idx::Dict{<:Any, <:Integer},
+            slack::Integer
+        )
+    branches_idx = get_bus_idx.(branches, [idx])
+    duplex = ones(length(branches))
+    b1 = 0
+    for (i,b2) in enumerate(branches_idx)
+        if b1 == b2
+            if duplex[i] < 1.0
+                x = _distribute!(branches_idx, i)
+                duplex[i-x:i] .= 1.0 / x
+            else
+                duplex[i-1:i] .= 0.5
+            end
+        end
+        b1 = b2
+    end
+    return [
+            calc_Pline(DA, get_changed_angles(X, B, δ, x[1], x[2], slack, duplex[i]), i) 
+            for (i,x) in enumerate(branches_idx)
+        ]
+end
+
+function _distribute!(branches_idx::Tuple{<:Integer, <:Integer}, i::Integer)
+    x = 0
+    branch = branches_idx[i]
+    while i > 1
+        i -= 1
+        if branches_idx[i] == branch
+            x += 1
+        else
+            break
+        end
+    end
+    return x
+end
