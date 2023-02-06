@@ -7,17 +7,9 @@ include("utils.jl")
 include("N-1_SCOPF.jl")
 include("short_long_SCOPF.jl")
 include("benders.jl")
+include("imml.jl")
 include("dc_power_flow.jl")
 include("post_process_opf.jl")
-
-function run_benders(fname::String)
-    system = get_system(fname)
-    voll, prob, contingencies = setup(system)
-    opfm, contanal = run_benders(system, voll, contingencies, prob)
-    print_active_power(opfm)
-    print_power_flow(opfm)
-    return opfm, contanal
-end
 
 function setup(system::System)
     voll = JuMP.Containers.DenseAxisArray(
@@ -33,3 +25,9 @@ function setup(system::System)
     # contingencies = ["2-3-i_3"]
     return voll, prob, contingencies
 end
+
+system = get_system("ELK14.json")
+voll, prob, contingencies = setup(system)
+opfm, contanal = run_benders2(system, voll, prob)
+print_active_power(opfm)
+print_power_flow(opfm)

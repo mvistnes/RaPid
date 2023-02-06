@@ -70,6 +70,76 @@ function run_benders(system::System, voll, contingencies, prob, lim = 1e-6)
     return opfm, contanal
 end
 
+function run_benders2(system::System, voll, prob, lim = 1e-6)
+
+    opfm = scopf(SC, system, Gurobi.Optimizer, voll=voll)
+    solve_model!(opfm.mod)
+    lower_bound = objective_value(opfm.mod)
+
+    # Set global variables
+    nodes = get_sorted_nodes(opfm.sys)
+    branches = get_sorted_branches(opfm.sys)
+    list_gen = make_list(opfm, get_ctrl_generation)
+    idx = get_nodes_idx(nodes)
+    imml = IMML(nodes, branches, idx, branches)
+
+    # Get initial state
+    Pᵢ = get_net_Pᵢ(opfm, nodes, idx)
+    angles = run_pf(imml.B, Pᵢ)
+    Pl0 = calc_Pline(imml.DA, angles)
+
+    it = enumerate(get_bus_idx.(branches, [idx]))
+    next = iterate(it)
+    cut_added = false
+    while next !== nothing || cut_added # loops until no new cuts are added for the contingencies
+        if next === nothing
+            next = iterate(it)
+            cut_added = false
+        end
+        (c, cont), state = next
+        overloads = get_overload(Pl0, angles, imml, c, cont)
+        overloads = [(i,ol) for (i,ol) in enumerate(overloads) if abs(ol) > lim]
+        if length(overloads) > 0
+            # sort!(overloads, rev = true, by = x -> abs(x[2]))
+            (i,ol) = first(overloads)
+            P = get_Pᵢ(opfm, nodes)
+            ptdf = 0 # lodf, ptdf after the contingency
+            
+            expr = sum(
+                    ptdf[i, in] * (P[in] - sum((opfm.mod[:pg0][g.name] for g in list_gen[n.name]), init=0.0)) 
+                    for (in, n) in enumerate(nodes) if abs(ptdf[i, in]) > lim
+                )
+            # @info "Contingency on $(cont) resulted in overload on $(branches[i].name) of $(ol) \nCut added: $(sprint_expr(expr,lim))\n"
+            set_warm_start!(opfm.mod, :pg0) # query of information then edit of model, else OptimizeNotCalled errors
+            if ol < 0
+                JuMP.@constraint(opfm.mod, expr <= ol)
+            else
+                JuMP.@constraint(opfm.mod, expr >= ol)
+            end
+            add_to_expression!(objective_function(opfm.mod), opfm.prob[c] * 
+                sum(opfm.voll[d] * (ramp_minutes / 60 * opfm.mod[:lsc][d,c] + # extract these from the for loop in N-1 too 
+                    repair_time * opfm.mod[:lscc][d,c])
+                        for d in get_name.(get_nonctrl_generation(opfm.sys))
+                    ) +
+                sum(opfm.cost[g] * repair_time * opfm.mod[:pgu][g,c] 
+                        for g in get_name.(get_ctrl_generation(opfm.sys))
+                    )
+                )
+
+            MOI.set(opfm.mod, MOI.Silent(), true) # supress output from the solver
+            opfm.mod = solve_model!(opfm.mod)
+            termination_status(opfm.mod) != MOI.OPTIMAL && return
+            cut_added = true
+            Pᵢ = get_net_Pᵢ(opfm, nodes, idx)
+            angles = run_pf(imml.B, Pᵢ)
+            Pl0 = calc_Pline(imml.DA, angles)
+        else
+            next = iterate(it, state)
+        end
+    end
+    return opfm, imml
+end
+
 mutable struct IterativeDCContAnal
     lodf::Array{<:Real, 3}
     contingencies::Vector{String}

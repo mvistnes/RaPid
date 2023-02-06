@@ -17,10 +17,6 @@ function calc_Pline(branches::AbstractVector{<:Branch}, δ::AbstractVector{<:Rea
     return P
 end
 
-calc_Pline2(branches::AbstractVector{<:Branch}, δ::AbstractVector{<:Real}, idx::Dict{<:Any, <:Int}) = 
-        calc_Pline.([δ], get_bus_idx.(branches, [idx]), get_x.(branches))
-
-calc_Pline(δ::AbstractVector{<:Real}, nodes::Tuple, x::Real) = (δ[nodes[1]] - δ[nodes[2]]) / x
 
 """ 
 Calculate the power flow on the lines from the connectivity 
@@ -157,11 +153,13 @@ function calc_X(B::AbstractMatrix{T}, slack::Integer) where T<:Real
 end
 
 calc_isf(A::AbstractMatrix{<:Real}, D::AbstractMatrix{<:Real}, X::AbstractMatrix{<:Real}) = D * A * X
+calc_isf(DA::AbstractMatrix{<:Real}, X::AbstractMatrix{<:Real}) = DA * X
 
 calc_B(A::AbstractMatrix{<:Real}, D::AbstractMatrix{<:Real}) = A' * D * A
+fast_calc_B(A::AbstractMatrix{<:Real}, DA::AbstractMatrix{<:Real}) = A' * DA
 
 " Builds an admittance matrix with the line series reactance of the lines. "
-function build_B(branches::AbstractVector{<:Tuple{Integer, Integer}}, X::AbstractVector{<:Real}, numnodes::Integer)
+function calc_B(branches::AbstractVector{<:Tuple{Integer, Integer}}, X::AbstractVector{<:Real}, numnodes::Integer)
     B = SparseArrays.spzeros(numnodes, numnodes)
     for ((f, t), x) in zip(branches, X)
         B[f,f] += 1 / x
@@ -172,8 +170,8 @@ function build_B(branches::AbstractVector{<:Tuple{Integer, Integer}}, X::Abstrac
     return B
 end
 
-build_B(branches::AbstractVector{<:Branch}, numnodes::Integer, idx::Dict{<:Any, <:Integer}) =
-    build_B(get_bus_idx.(branches, [idx]), get_x.(branches), numnodes)
+calc_B(branches::AbstractVector{<:Branch}, numnodes::Integer, idx::Dict{<:Any, <:Integer}) =
+    calc_B(get_bus_idx.(branches, [idx]), get_x.(branches), numnodes)
 
 calc_D(x::AbstractVector{<:Real}) = LinearAlgebra.Diagonal(1 ./ x)
 calc_D(branches::AbstractVector{<:Branch}) = calc_D(get_x.(branches))
@@ -186,7 +184,7 @@ end
 
 " Get the isf-matrix after a line outage "
 function get_isf(A, D, B, from_bus_idx::Integer, to_bus_idx::Integer, i_branch::Integer, x::Real, slack::Integer)
-    neutralize_line(B, t, f, 1 / x)
+    neutralize_line!(B, from_bus_idx, to_bus_idx, 1 / x)
     #d = LinearAlgebra.diag(D)
     isf = calc_isf(A, D, calc_X(B, slack))
     #         A[1:end .!= i_branch,:], 
@@ -194,7 +192,7 @@ function get_isf(A, D, B, from_bus_idx::Integer, to_bus_idx::Integer, i_branch::
     #         calc_X(B, slack)
     #     )
     isf[i_branch,:] .= 0
-    neutralize_line(B, t, f, -1 / x)
+    neutralize_line!(B, from_bus_idx, to_bus_idx, -1 / x)
     return isf
 end
 function get_isf(A, D, B, idx::Dict{<:Any, <:Integer}, i_branch::Integer, branch::Branch, slack::Integer)
@@ -202,39 +200,9 @@ function get_isf(A, D, B, idx::Dict{<:Any, <:Integer}, i_branch::Integer, branch
     return get_isf(A, D, B, f, t, i_branch, get_x(branch), slack)
 end
 
-function neutralize_line(B::AbstractMatrix, i::Integer, j::Integer, val::Real)
+function neutralize_line!(B::AbstractMatrix, i::Integer, j::Integer, val::Real)
     B[i,j] += val
     B[j,i] += val
     B[i,i] -= val
     B[j,j] -= val
-end
-
-"""
-    Calculation of voltage angles in a contingency case using IMML
-
-    Input:
-        - X: The inverse admittance matrix
-        - B: The admittance matrix
-        - δ₀: Inital voltage angles
-        - from_bus: From bus index
-        - to_bus: To bus index
-        - slack: Slack bus index
-        - change: The amount of reactance change between the buses, <=1. 
-          Default is 1 and this removes all lines
-"""
-function get_changed_angles(
-            X::AbstractMatrix{<:Real}, 
-            B::AbstractMatrix{<:Real}, 
-            δ₀::AbstractVector{<:Real}, 
-            from_bus::Integer, 
-            to_bus::Integer, 
-            slack::Integer,
-            change::Real = 1.0
-        )
-
-    x = change .* (X[:,from_bus] .- X[:,to_bus])
-    x[slack] = 0.0
-    c⁻¹ = 1/B[from_bus,to_bus] + x[from_bus] - x[to_bus]
-    delta = 1/c⁻¹ * (δ₀[from_bus] - δ₀[to_bus])
-    return δ₀ .- x .* delta
 end
