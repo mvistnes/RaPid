@@ -1,15 +1,6 @@
 # CC BY 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2022
-using PowerSystems
-import JuMP
-import Gurobi # LP, SOCP, Integer
-import Test
-include("utils.jl")
-include("N-1_SCOPF.jl")
-include("short_long_SCOPF.jl")
-include("benders.jl")
-include("imml.jl")
-include("dc_power_flow.jl")
-include("post_process_opf.jl")
+include("SCOPF.jl")
+import .SCOPF
 
 function setup(system::System)
     voll = JuMP.Containers.DenseAxisArray(
@@ -26,8 +17,8 @@ function setup(system::System)
     return voll, prob, contingencies
 end
 
-system = get_system("ELK14.json")
+system = SCOPF.get_system("ELK14.json")
 voll, prob, contingencies = setup(system)
-opfm, contanal = run_benders2(system, voll, prob)
-print_active_power(opfm)
-print_power_flow(opfm)
+opfm, imml = SCOPF.run_benders2(system, voll, prob)
+# print_active_power(opfm)
+# print_power_flow(opfm)

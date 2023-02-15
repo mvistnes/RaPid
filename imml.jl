@@ -1,10 +1,12 @@
 # CC BY 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2022
 
 mutable struct IMML
-    ptdf::AbstractMatrix{<:Real}
+    A::AbstractMatrix{<:Real}
+    D::AbstractMatrix{<:Real}
     DA::AbstractMatrix{<:Real}
-    X::AbstractMatrix{<:Real}
     B::AbstractMatrix{<:Real}
+    X::AbstractMatrix{<:Real}
+    ptdf::AbstractMatrix{<:Real}
     contingencies::Vector
     linerating::Vector{<:Real}
 end
@@ -18,7 +20,7 @@ function IMML(nodes, branches, idx, contingencies)
     slack = find_slack(nodes)[1]
     X = calc_X(B, slack)
     ptdf = calc_isf(DA, X)
-    return IMML(ptdf, DA, X, B, contingencies, get_rate.(branches))
+    return IMML(A, D, DA, B, X, ptdf, contingencies, get_rate.(branches))
 end
 
 """
@@ -41,12 +43,16 @@ function get_changed_angles(
         from_bus::Integer, 
         to_bus::Integer, 
         slack::Integer,
-        change::Real = 1.0
+        change::Real = 1.0; 
+        atol=1e-5
     )
 
     x = change .* (X[:,from_bus] .- X[:,to_bus])
     x[slack] = 0.0
-    c⁻¹ = 1/B[from_bus,to_bus] + x[from_bus] - x[to_bus]
+    c⁻¹ = 1/B[from_bus,to_bus] + x[from_bus] - x[to_bus] # Sjekk om dette blir ~inf ved øyer
+    if isapprox(c⁻¹, inf; atol=atol)
+        throw(DivideError())
+    end
     delta = 1/c⁻¹ * (δ₀[from_bus] - δ₀[to_bus])
     # return .- x .* delta
     return δ₀ .- x .* delta
@@ -126,13 +132,25 @@ get_overload(
                 imml.linerating
             )
 
-" LODF value for a contingency at line l_mn change in line k_pq "
-lodf(x_l::Real, m::Integer, n::Integer, x_k::Real, p::Integer, q::Integer, X::AbstractMatrix) = 
+""" LODF value for a contingency at line l_mn change in line k_pq 
+    From the book Optimization of power system operation """
+@views get_lodf(x_l::Real, m::Integer, n::Integer, x_k::Real, p::Integer, q::Integer, X::AbstractMatrix) = 
     (x_l / x_k) * (X[p,m] - X[q,m] - X[p,n] + X[q,n]) / 
     (x_l - (X[m,m] + X[n,n] - 2 * X[m,n]))
+@views get_lodf(x_l::Real, m::Integer, n::Integer, x_k::AbstractVector{<:Real}, A::AbstractMatrix, X::AbstractMatrix) = 
+    (x_l ./ x_k) .* A * (X[:,m] - X[:,n]) ./ 
+    (x_l - (X[m,m] + X[n,n] - 2 * X[m,n]))
 
-function lodf(branch_l::Branch, branch_k::Branch, X::AbstractMatrix, idx::Dict{<:Any, <:Int}) 
+function get_lodf(branch_l::Branch, branch_k::Branch, X::AbstractMatrix, idx::Dict{<:Any, <:Int}) 
     (m, n) = get_bus_idx(branch_l, idx)
     (p, q) = get_bus_idx(branch_k, idx)
-    return lodf(get_x(branch_l), m, n, get_x(branch_k), p, q, X)
+    return get_lodf(get_x(branch_l), m, n, get_x(branch_k), p, q, X)
+end
+function get_lodf(branch_l::Branch, branches::AbstractVector{<:Branch}, A::AbstractMatrix, X::AbstractMatrix, idx::Dict{<:Any, <:Int}) 
+    (m, n) = get_bus_idx(branch_l, idx)
+    return get_lodf(get_x(branch_l), m, n, get_x.(branches), A, X)
+end
+function get_lodf(from_bus, to_bus, x::AbstractVector{<:Real}, A::AbstractMatrix, X::AbstractMatrix)
+    mx = reshape(reduce(vcat, get_lodf.(x, from_bus, to_bus, [x], [A], [X])), (length(x),length(x)))
+    return mx - LinearAlgebra.Diagonal(mx) - LinearAlgebra.I
 end

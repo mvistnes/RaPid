@@ -43,6 +43,7 @@ end
 """ Constructor for OPFmodel """
 function opfmodel(sys::System, optimizer, time_limit_sec, voll=nothing, contingencies=nothing, prob=nothing)
     mod = Model(optimizer)
+    set_string_names_on_creation(model, false)
     # if GLPK.Optimizer == optimizer 
     #     set_optimizer_attribute(mod, "msg_lev", GLPK.GLP_MSG_ON)
     # end
@@ -174,6 +175,11 @@ get_nodes_idx(nodes::Vector{Bus}) = PowerSystems._make_ax_ref(nodes)
 " Get the number of the from-bus and to-bus from a branch "
 get_bus_id(branch::ACBranch) = (branch.arc.from.number, branch.arc.to.number)
 get_bus_idx(branch::ACBranch, idx::Dict{<:Any, <:Int}) = (idx[branch.arc.from.number], idx[branch.arc.to.number])
+get_bus_idx(branches::AbstractVector{<:Branch}, idx::Dict{<:Any, <:Int}) =
+    split_pair(get_bus_idx.(branches, [idx]))
+
+" Split a Vector{Pair} into a Pair{Vector}"
+split_pair(val) = map(first, val), map(last, val)
 
 " Get dual value (upper or lower bound) from model reference "
 get_low_dual(varref::VariableRef) = dual(LowerBoundRef(varref))

@@ -79,9 +79,12 @@ function run_benders2(system::System, voll, prob, lim = 1e-6)
     # Set global variables
     nodes = get_sorted_nodes(opfm.sys)
     branches = get_sorted_branches(opfm.sys)
+    # cgen = connectivitymatrix(opfm.sys, length(nodes), idx)
     list_gen = make_list(opfm, get_ctrl_generation)
     idx = get_nodes_idx(nodes)
     imml = IMML(nodes, branches, idx, branches)
+    bbus = get_bus_idx(branches, idx)
+    lodf = get_lodf(bbus[1], bbus[2], get_x.(branches), imml.A, imml.X)
 
     # Get initial state
     Pᵢ = get_net_Pᵢ(opfm, nodes, idx)
@@ -99,32 +102,46 @@ function run_benders2(system::System, voll, prob, lim = 1e-6)
         (c, cont), state = next
         overloads = get_overload(Pl0, angles, imml, c, cont)
         overloads = [(i,ol) for (i,ol) in enumerate(overloads) if abs(ol) > lim]
+        # Skjekk om det er øyer i nettet
         if length(overloads) > 0
             # sort!(overloads, rev = true, by = x -> abs(x[2]))
             (i,ol) = first(overloads)
             P = get_Pᵢ(opfm, nodes)
-            ptdf = 0 # lodf, ptdf after the contingency
+            # ptdf = 0 # lodf, ptdf after the contingency
             
+            pgu = @variable(opfm.mod, [g in get_name.(get_ctrl_generation(opfm.sys))], lower_bound = 0)
+                # active power variables for the generators in contingencies ramp up 
+            pgd = @variable(opfm.mod, [g in get_name.(get_ctrl_generation(opfm.sys))], lower_bound = 0)
+                    # and ramp down
+                # pfcc[l in get_name.(get_branches(opfm.sys))]
+                #     # power flow on get_branches in in contingencies after corrective actions
+                # vacc[b in get_name.(get_nodes(opfm.sys))]
+                #     # voltage angle at a node in in contingencies after corrective actions
+            lscc = @variable(opfm.mod, [d in get_name.(get_nonctrl_generation(opfm.sys))], lower_bound = 0)
+                    # load curtailment variables in in contingencies
             expr = sum(
-                    ptdf[i, in] * (P[in] - sum((opfm.mod[:pg0][g.name] for g in list_gen[n.name]), init=0.0)) 
-                    for (in, n) in enumerate(nodes) if abs(ptdf[i, in]) > lim
+                    (lodf[i, in] * (P[in] - 
+                    sum((opfm.mod[:pg0][g.name] - pgu[g.name] + pgd[g.name] for g in list_gen[n.name]), init=0.0) +
+                    opfm.mod[:ls0][in] + lscc[in]) for (in, n) in enumerate(nodes) if abs(lodf[i, in]) > lim), init=0.0
                 )
-            # @info "Contingency on $(cont) resulted in overload on $(branches[i].name) of $(ol) \nCut added: $(sprint_expr(expr,lim))\n"
-            set_warm_start!(opfm.mod, :pg0) # query of information then edit of model, else OptimizeNotCalled errors
-            if ol < 0
-                JuMP.@constraint(opfm.mod, expr <= ol)
-            else
-                JuMP.@constraint(opfm.mod, expr >= ol)
-            end
-            add_to_expression!(objective_function(opfm.mod), opfm.prob[c] * 
-                sum(opfm.voll[d] * (ramp_minutes / 60 * opfm.mod[:lsc][d,c] + # extract these from the for loop in N-1 too 
-                    repair_time * opfm.mod[:lscc][d,c])
-                        for d in get_name.(get_nonctrl_generation(opfm.sys))
-                    ) +
-                sum(opfm.cost[g] * repair_time * opfm.mod[:pgu][g,c] 
-                        for g in get_name.(get_ctrl_generation(opfm.sys))
+            if expr != 0.0
+                # @info "Contingency on $(cont) resulted in overload on $(branches[i].name) of $(ol) \nCut added: $(sprint_expr(expr,lim))\n"
+                set_warm_start!(opfm.mod, :pg0) # query of information then edit of model, else OptimizeNotCalled errors
+                if ol < 0
+                    JuMP.@constraint(opfm.mod, expr <= ol)
+                else
+                    JuMP.@constraint(opfm.mod, expr >= ol)
+                end
+                add_to_expression!(objective_function(opfm.mod), prob[c] * 
+                    sum(opfm.voll[d] * (ramp_minutes / 60 * opfm.mod[:lsc][d,c] + # extract these from the for loop in N-1 too 
+                        repair_time * lscc[d])
+                            for d in get_name.(get_nonctrl_generation(opfm.sys))
+                        ) +
+                    sum(opfm.cost[g] * repair_time * pgu[g]
+                            for g in get_name.(get_ctrl_generation(opfm.sys))
+                        )
                     )
-                )
+            end
 
             MOI.set(opfm.mod, MOI.Silent(), true) # supress output from the solver
             opfm.mod = solve_model!(opfm.mod)

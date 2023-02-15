@@ -1,49 +1,6 @@
 # CC BY 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2022
 using PowerSystems
 
-" Return the overload of a line, else return 0.0 "
-find_overload(flow::T, rate::Real) where {T<:Real} = abs(flow)-rate > 0.0 ? sign(flow)*(abs(flow)-rate) : zero(T)
-
-" DC line flow calculation using Injection Shift Factors and Power Injection vector"
-calculate_line_flows(isf::AbstractMatrix{<:Real}, Pᵢ::AbstractVector{<:Real}) = isf*Pᵢ
-
-" Calculate the power flow on the lines from the voltage angles "
-function calc_Pline(branches::AbstractVector{<:Branch}, δ::AbstractVector{<:Real}, idx::Dict{<:Any, <:Int})
-    P = zeros(length(branches))
-    for (i,branch) in enumerate(branches)
-        (f, t) = get_bus_idx(branch, idx)
-        P[i] = (δ[f] - δ[t]) / branch.x
-    end
-    return P
-end
-
-
-""" 
-Calculate the power flow on the lines from the connectivity 
-and the diagonal admittance matrices and the voltage angles 
-"""
-calc_Pline(A::AbstractMatrix{<:Real}, D::AbstractMatrix{<:Real}, δ::AbstractVector{<:Real}) = D * A * δ
-calc_Pline(DA::AbstractMatrix{<:Real}, δ::AbstractVector{<:Real}) = DA * δ
-
-""" 
-Calculate the power flow on the lines from the connectivity 
-and the diagonal admittance matrices and the voltage angles
-in a contingency of the branch number.
-"""
-function calc_Pline(A::AbstractMatrix{<:Real}, D::AbstractMatrix{<:Real}, δ::AbstractVector{<:Real}, branch::Integer)
-    P = calc_Pline(A, D, δ)
-    P[branch] = 0.0
-    return P
-end
-function calc_Pline(DA::AbstractMatrix{<:Real}, δ::AbstractVector{<:Real}, branch::Integer)
-    P = calc_Pline(DA, δ)
-    P[branch] = 0.0
-    return P
-end
-
-" DC power flow calculation using the Admittance matrix and Power Injection vector returning the bus angles "
-run_pf(B::AbstractMatrix{<:Real}, P::AbstractVector{<:Real}) = B \ P
-
 """ Return the net power injected at each node. """
 function get_net_Pᵢ(opfm::OPFmodel, nodes::AbstractVector{Bus}, idx::Dict{<:Any, <:Int} = get_nodes_idx(nodes), Pᵢ = get_Pᵢ(opfm, nodes))
     p = JuMP.value.(opfm.mod[:ls0])
@@ -80,33 +37,6 @@ function calc_Pᵢ(branches::AbstractVector{<:Branch}, δ::AbstractVector{<:Real
     return P
 end
 
-
-" Make the PTDF matrix for using the input nodes and branches "
-function get_ptdf(branches::AbstractVector{<:Branch}, numnodes::Integer, idx::Dict{<:Any, <:Integer}, slack::Integer)
-    B = build_B(branches, numnodes, idx)
-    B[:,slack] .= zero(Float64)
-    B[slack,:] .= zero(Float64)
-    B[slack,slack] = one(Float64)
-    return get_ptdf(LinearAlgebra.lu(B), branches, numnodes, idx, slack)
-end
-function get_ptdf(Bx, branches::AbstractVector{<:Branch}, numnodes::Integer, idx::Dict{<:Any, <:Integer}, slack::Integer)
-    A = zeros(Float64, size(branches,1), numnodes) # Container for the distribution factors
-    for (i, branch) in enumerate(branches)
-        branch.x == 0 && continue
-        ΔP = zeros(Float64, numnodes)
-        (f, t) = get_bus_id(branch) # (f)rom and (t)o bus at this branch
-        if f != slack
-            ΔP[idx[f]] = 1 / branch.x
-        end
-        if t != slack # ∈ keys(idx)
-            ΔP[idx[t]] = -1 / branch.x
-        end
-        A[i, :] = Bx \ ΔP # append factors to matrix
-    end
-    return A
-end
-
-
 """
 Build the adjecency Matrix
 
@@ -128,13 +58,23 @@ end
 build_adjacency(branches::AbstractVector{<:Branch}, numnodes::Integer, idx::Dict{<:Any, <:Integer}) =
     build_adjacency(get_bus_idx.(branches, [idx]), numnodes)
 
+function connectivitymatrix(gens::AbstractVector{<:Integer}, numnodes::Integer) 
+    mx = SparseArrays.spzeros(Int8, length(gens), numnodes)
+    for (i, g) in enumerate(gens)
+        mx[i, g] = 1
+    end
+    return mx
+end
+
+connectivitymatrix(system, numnodes::Integer, idx::Dict{<:Any, <:Integer}) =
+    connectivitymatrix(getindex.([idx], get_number.(get_bus.(get_components(Generator, system)))), numnodes)
 
 " Make the branch connectivity matrix "
 function calc_A(branches::AbstractVector{<:Tuple{Integer, Integer}}, numnodes::Integer)
     A = SparseArrays.spzeros(Int8, length(branches), numnodes)
     for (i, (f, t)) in enumerate(branches)
-        A[i,f] = one(Float64)
-        A[i,t] = -one(Float64)
+        A[i,f] = one(Int8)
+        A[i,t] = -one(Int8)
     end
     return A
 end
@@ -206,3 +146,72 @@ function neutralize_line!(B::AbstractMatrix, i::Integer, j::Integer, val::Real)
     B[i,i] -= val
     B[j,j] -= val
 end
+
+
+" Make the PTDF matrix for using the input nodes and branches "
+function get_ptdf(branches::AbstractVector{<:Branch}, numnodes::Integer, idx::Dict{<:Any, <:Integer}, slack::Integer)
+    B = calc_B(branches, numnodes, idx)
+    B[:,slack] .= zero(Float64)
+    B[slack,:] .= zero(Float64)
+    B[slack,slack] = one(Float64)
+    return get_ptdf(LinearAlgebra.lu(B), branches, numnodes, idx, slack)
+end
+function get_ptdf(Bx, branches::AbstractVector{<:Branch}, numnodes::Integer, idx::Dict{<:Any, <:Integer}, slack::Integer)
+    A = zeros(Float64, size(branches,1), numnodes) # Container for the distribution factors
+    for (i, branch) in enumerate(branches)
+        branch.x == 0 && continue
+        ΔP = zeros(Float64, numnodes)
+        (f, t) = get_bus_id(branch) # (f)rom and (t)o bus at this branch
+        if f != slack
+            ΔP[idx[f]] = 1 / branch.x
+        end
+        if t != slack # ∈ keys(idx)
+            ΔP[idx[t]] = -1 / branch.x
+        end
+        A[i, :] = Bx \ ΔP # append factors to matrix
+    end
+    return A
+end
+
+" Return the overload of a line, else return 0.0 "
+find_overload(flow::T, rate::Real) where {T<:Real} = abs(flow)-rate > 0.0 ? sign(flow)*(abs(flow)-rate) : zero(T)
+
+" DC line flow calculation using Injection Shift Factors and Power Injection vector"
+calculate_line_flows(isf::AbstractMatrix{<:Real}, Pᵢ::AbstractVector{<:Real}) = isf*Pᵢ
+
+" Calculate the power flow on the lines from the voltage angles "
+function calc_Pline(branches::AbstractVector{<:Branch}, δ::AbstractVector{<:Real}, idx::Dict{<:Any, <:Int})
+    P = zeros(length(branches))
+    for (i,branch) in enumerate(branches)
+        (f, t) = get_bus_idx(branch, idx)
+        P[i] = (δ[f] - δ[t]) / branch.x
+    end
+    return P
+end
+
+""" 
+Calculate the power flow on the lines from the connectivity 
+and the diagonal admittance matrices and the voltage angles 
+"""
+calc_Pline(A::AbstractMatrix{<:Real}, D::AbstractMatrix{<:Real}, δ::AbstractVector{<:Real}) = D * A * δ
+calc_Pline(DA::AbstractMatrix{<:Real}, δ::AbstractVector{<:Real}) = DA * δ
+
+""" 
+Calculate the power flow on the lines from the connectivity 
+and the diagonal admittance matrices and the voltage angles
+in a contingency of the branch number.
+"""
+function calc_Pline(A::AbstractMatrix{<:Real}, D::AbstractMatrix{<:Real}, δ::AbstractVector{<:Real}, branch::Integer)
+    P = calc_Pline(A, D, δ)
+    P[branch] = 0.0
+    return P
+end
+function calc_Pline(DA::AbstractMatrix{<:Real}, δ::AbstractVector{<:Real}, branch::Integer)
+    P = calc_Pline(DA, δ)
+    P[branch] = 0.0
+    return P
+end
+
+" DC power flow calculation using the Admittance matrix and Power Injection vector returning the bus angles "
+run_pf(B::AbstractMatrix{<:Real}, P::AbstractVector{<:Real}) = B \ P
+
