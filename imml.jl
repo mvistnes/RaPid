@@ -50,10 +50,10 @@ function get_changed_angles(
     x = change .* (X[:,from_bus] .- X[:,to_bus])
     x[slack] = 0.0
     c⁻¹ = 1/B[from_bus,to_bus] + x[from_bus] - x[to_bus] # Sjekk om dette blir ~inf ved øyer
-    if isapprox(c⁻¹, inf; atol=atol)
+    delta = 1/c⁻¹ * (δ₀[from_bus] - δ₀[to_bus])
+    if isapprox(delta, 0.0; atol=atol)
         throw(DivideError())
     end
-    delta = 1/c⁻¹ * (δ₀[from_bus] - δ₀[to_bus])
     # return .- x .* delta
     return δ₀ .- x .* delta
 end
@@ -86,6 +86,9 @@ end
     x = change .* (X[:,from_bus] .- X[:,to_bus])
     c⁻¹ = 1/B[from_bus,to_bus] + x[from_bus] - x[to_bus]
     delta = 1/c⁻¹ * (δ₀[from_bus] - δ₀[to_bus])
+    if isapprox(delta, 0.0; atol=atol)
+        throw(DivideError())
+    end
     Pl = (ptdf[:, from_bus] .- ptdf[:, to_bus]) .* change .* delta
     # Pl[branch] = 0.0 # OBS: double check!!
     return Pl

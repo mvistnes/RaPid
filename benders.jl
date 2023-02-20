@@ -1,5 +1,4 @@
 # CC BY 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2022 
-# Based on code by Sigurd Hofsmo Jakobsen, SINTEF Energy Research, 2022
 
 using PowerSystems
 import JuMP
@@ -51,7 +50,7 @@ function run_benders(system::System, voll, contingencies, prob, lim = 1e-6)
                     (Pᵢ[in] - sum((opfm.mod[:pg0][g.name] for g in list_gen[n.name]), init=0.0)) 
                     for (in, n) in enumerate(nodes) if abs(ptdf[i, in]) > lim
                 )
-            # @info "Contingency on $(cont) resulted in overload on $(branches[i].name) of $(ol) \nCut added: $(sprint_expr(expr,lim))\n"
+            @info "Contingency on $(cont) resulted in overload on $(branches[i].name) of $(ol) \nCut added: $(sprint_expr(expr,lim))\n"
             set_warm_start!(opfm.mod, :pg0) # query of information then edit of model, else OptimizeNotCalled errors
             if ol < 0
                 JuMP.@constraint(opfm.mod, expr <= ol)
@@ -85,6 +84,7 @@ function run_benders2(system::System, voll, prob, lim = 1e-6)
     imml = IMML(nodes, branches, idx, branches)
     bbus = get_bus_idx(branches, idx)
     lodf = get_lodf(bbus[1], bbus[2], get_x.(branches), imml.A, imml.X)
+    slack = find_slack(nodes)
 
     # Get initial state
     Pᵢ = get_net_Pᵢ(opfm, nodes, idx)
@@ -107,7 +107,7 @@ function run_benders2(system::System, voll, prob, lim = 1e-6)
             # sort!(overloads, rev = true, by = x -> abs(x[2]))
             (i,ol) = first(overloads)
             P = get_Pᵢ(opfm, nodes)
-            # ptdf = 0 # lodf, ptdf after the contingency
+            ptdf = get_isf(imml.A, imml.D, imml.B, idx, i, branches[i], slack[1])
             
             pgu = @variable(opfm.mod, [g in get_name.(get_ctrl_generation(opfm.sys))], lower_bound = 0)
                 # active power variables for the generators in contingencies ramp up 
@@ -120,9 +120,9 @@ function run_benders2(system::System, voll, prob, lim = 1e-6)
             lscc = @variable(opfm.mod, [d in get_name.(get_nonctrl_generation(opfm.sys))], lower_bound = 0)
                     # load curtailment variables in in contingencies
             expr = sum(
-                    (lodf[i, in] * (P[in] - 
+                    (ptdf[i, in] * (P[in] - 
                     sum((opfm.mod[:pg0][g.name] - pgu[g.name] + pgd[g.name] for g in list_gen[n.name]), init=0.0) +
-                    opfm.mod[:ls0][in] + lscc[in]) for (in, n) in enumerate(nodes) if abs(lodf[i, in]) > lim), init=0.0
+                    opfm.mod[:ls0][in] + lscc[in]) for (in, n) in enumerate(nodes) if abs(ptdf[i, in]) > lim), init=0.0
                 )
             if expr != 0.0
                 # @info "Contingency on $(cont) resulted in overload on $(branches[i].name) of $(ol) \nCut added: $(sprint_expr(expr,lim))\n"
@@ -157,180 +157,6 @@ function run_benders2(system::System, voll, prob, lim = 1e-6)
     return opfm, imml
 end
 
-mutable struct IterativeDCContAnal
-    lodf::Array{<:Real, 3}
-    contingencies::Vector{String}
-    linerating::Vector{<:Real}
-end
-
-""" Note about LODF / PTDF:
-In our current implementation we will store the PTDF for the base case (i.e. no outages) in LODF[:,:,1], while 
-for all contingencies we will store the N first order contingencies at indices LODF[:,:,i] for i in 2:N. 
-    Second/third order contingencies are not yet covered but will likely be indexed in a similar fashion. 
-
-It is worth noting the terminology use of LODF / PTDF. The LODF for e.g.  branch 1 is the same as the PTDF when 
-branch 1 is outaged. As such, it may not make sense that, in the code below, the LODF[:,:,1] calculated as the 
-PTDF of the base case is not accurate use of this terminology, but rather a simplification for us to avoid 
-having to create a separate PTDF variable for the base case (and thus increase the number of variables...).
-
-"""
-function iterative_cont_anal(sys::System, nodes::Vector{Bus}, branches::Vector{<:Branch}, contingencies::Vector{String})
-    lodf = zeros(length(branches), length(nodes), length(contingencies)+1)
-    i_slack, slack = find_slack(nodes)
-    lodf[:,:,1], _ = PowerSystems._buildptdf(branches, nodes, [0.1])
-    
-    for (i,cont) in enumerate(contingencies)
-        branches_cont = [b for b in branches if b.name != cont]
-        islands = get_islands(sys, branches_cont)
-        if length(islands) == 1
-            drop_cont = [j for (j,b) in enumerate(branches) if b.name != cont]
-            lodf[drop_cont, :, i+1], _ = PowerSystems._buildptdf(branches_cont, nodes, [0.1])
-                # The B-matrix can be altered instead of rebuilt from the ground up
-        else
-            # only the island with the slack bus is assumed stable
-            for island in islands
-                if slack.number ∈ get_number.(island[1]) # Nodes in island 1
-                    drop_id = sort!(collect(values(get_nodes_idx(island[1]))))
-                    drop_cont = [j for (j,b) in enumerate(branches) if b.name != cont && b.name ∈ get_name.(island[2])]
-                    if length(drop_id) != 0 && length(drop_cont) != 0
-                        lodf[drop_cont, drop_id, i+1], _ = PowerSystems._buildptdf(island[2], island[1], [0.1])
-                    end
-                    break
-                end
-            end
-        end
-    end
-    return IterativeDCContAnal(lodf, contingencies, get_rate.(branches))
-end
-
-" Get the overload of all lines "
-get_overload(contanal::IterativeDCContAnal, cont::Integer, Pᵢ::Vector{<:Real}) = 
-    find_overload.(
-            calculate_line_flows(get_cont_ptdf(contanal, cont), Pᵢ), 
-            contanal.linerating
-        )
-
-get_overload(
-        DA::AbstractMatrix{<:Real}, 
-        B::AbstractMatrix{<:Real}, 
-        X::AbstractMatrix{<:Real}, 
-        δ::AbstractVector{<:Real}, 
-        branch::Integer,
-        cont::Tuple{Integer, Integer}, 
-        slack::Integer
-    ) = 
-        find_overload.(calc_Pline(
-                    DA, 
-                    get_changed_angles(X, B, δ, cont[1], cont[2], slack),
-                    branch), 
-                contanal.linerating
-            )
-
-" Get the PTDF corresponding to the contingency "
-function get_cont_ptdf(contanal::IterativeDCContAnal, cont::Integer)
-    @assert 0 <= cont <= length(contanal.contingencies)  # "No entry in LODF matrix for the given contingency. "
-    # cont+1 as first element in LODF is PTDF for base case
-    return contanal.lodf[:,:, cont+1]  
-end
-
-""" Find island(s) in the system returned in a nested Vector.
-Each element of the Vector consists of two lists, nodes and branches, in that island. """
-function get_islands(sys::System, branches::Vector{<:Branch})
-    islands = Vector()
-    visited_nodes = Vector{Bus}([branches[1].arc.from]) # start node on island 1 marked as visited
-    visited_branches, new_nodes = find_connected(branches, first(visited_nodes))
-        # all nodes connected are set as neighouring nodes not visited,
-        # via visited branches
-
-    bus_numbers = length(sys.bus_numbers)
-    bus_number = 0
-    while true
-
-        # Visit new nodes until there are no neighouring nodes connected
-        while !isempty(new_nodes)
-            node = pop!(new_nodes)
-            push!(visited_nodes, node)
-            bn = find_connected(branches, node)
-            union!(visited_branches, bn[1])
-            union!(new_nodes, setdiff(bn[2], visited_nodes))
-        end
-
-        push!(islands, (sort_nodes!(visited_nodes), sort_branches!(visited_branches)))
-        bus_number += length(visited_nodes)
-
-        bus_numbers == bus_number && break # all nodes are visited 
-        bus_numbers < bus_number && @error "More nodes counted, $(bus_number), than nodes in the system, $(bus_numbers)!"
-
-        visited_nodes = Vector([setdiff(get_components(Bus, sys), visited_nodes) |> first])
-                    # a random node not visited yet starts a new island
-        visited_branches, new_nodes = find_connected(branches, first(visited_nodes))
-    end
-    return islands
-end
-
-function get_islands(nodes::Vector{Integer}, branches::Vector{<:Tuple{Integer, Integer}})
-    islands = Vector()
-    visited_nodes = Vector{Integer}([branches[1][1]]) # start node on island 1 marked as visited
-    visited_branches, new_nodes = find_connected(branches, first(visited_nodes))
-        # all nodes connected are set as neighouring nodes not visited,
-        # via visited branches
-
-    bus_numbers = length(nodes)
-    bus_number = 0
-    while true
-
-        # Visit new nodes until there are no neighouring nodes connected
-        while !isempty(new_nodes)
-            node = pop!(new_nodes)
-            push!(visited_nodes, node)
-            bn = find_connected(branches, node)
-            union!(visited_branches, bn[1])
-            union!(new_nodes, setdiff(bn[2], visited_nodes))
-        end
-
-        push!(islands, (sort_nodes!(visited_nodes), sort_branches!(visited_branches)))
-        bus_number += length(visited_nodes)
-
-        bus_numbers == bus_number && break # all nodes are visited 
-        bus_numbers < bus_number && @error "More nodes counted, $(bus_number), than nodes in the system, $(bus_numbers)!"
-
-        visited_nodes = Vector([setdiff(nodes, visited_nodes) |> first])
-                    # a random node not visited yet starts a new island
-        visited_branches, new_nodes = find_connected(branches, first(visited_nodes))
-    end
-    return islands
-end
-
-" Find nodes connected to a node "
-function find_connected(branches::Vector{<:Branch}, node::Bus)
-    new_branches = Vector{Branch}()
-    new_nodes = Vector{Bus}()
-    for branch in branches
-        if branch.arc.from.number === node.number
-            push!(new_branches, branch)
-            push!(new_nodes, branch.arc.to)
-        elseif branch.arc.to.number === node.number
-            push!(new_branches, branch)
-            push!(new_nodes, branch.arc.from)
-        end
-    end
-    return new_branches, new_nodes
-end
-
-function find_connected(branches::Vector{<:Tuple{Integer, Integer}}, node::Integer)
-    new_branches = Vector{Tuple{Int, Int}}()
-    new_nodes = Vector{Int}()
-    for branch in branches
-        if branch[1] == node
-            push!(new_branches, branch)
-            push!(new_nodes, branch[2])
-        elseif branch[2] == node
-            push!(new_branches, branch)
-            push!(new_nodes, branch[1])
-        end
-    end
-    return new_branches, new_nodes
-end
 
 " An AffExpr nicely formatted to a string "
 sprint_expr(expr::AffExpr, lim = 1e-6) = 

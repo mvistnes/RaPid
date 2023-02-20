@@ -12,13 +12,15 @@ function setup(system::System)
         get_name.(get_components(ACBranch, system))
     )
     prob /= 8760
-    contingencies = get_name.(get_branches(system))
+    contingencies = get_name.(SCOPF.get_branches(system))
     # contingencies = ["2-3-i_3"]
     return voll, prob, contingencies
 end
 
-system = SCOPF.get_system("ELK14.json")
-voll, prob, contingencies = setup(system)
-opfm, imml = SCOPF.run_benders2(system, voll, prob)
-# print_active_power(opfm)
-# print_power_flow(opfm)
+function test()
+    system = SCOPF.get_system("ELK14.json")
+    voll, prob, contingencies = setup(system)
+    opfm, imml = SCOPF.run_benders2(system, voll, prob)
+    # print_active_power(opfm)
+    # print_power_flow(opfm)
+end

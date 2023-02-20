@@ -43,7 +43,9 @@ end
 """ Constructor for OPFmodel """
 function opfmodel(sys::System, optimizer, time_limit_sec, voll=nothing, contingencies=nothing, prob=nothing)
     mod = Model(optimizer)
-    set_string_names_on_creation(model, false)
+    # mod = Model(optimizer; add_bridges = false)
+    set_string_names_on_creation(mod, false)
+    
     # if GLPK.Optimizer == optimizer 
     #     set_optimizer_attribute(mod, "msg_lev", GLPK.GLP_MSG_ON)
     # end
@@ -127,7 +129,9 @@ function make_list(opfm::OPFmodel, type_func, nodes = get_nodes(opfm.sys))
     return list
 end
 
-""" Return the (first) slack bus in the system. """
+""" Return the (first) slack bus in the system. 
+Return: slack bus number in nodes. The slack bus.
+"""
 function find_slack(nodes::Vector{Bus})
     for (i,x) in enumerate(nodes)
         x.bustype == BusTypes.REF && return i,x

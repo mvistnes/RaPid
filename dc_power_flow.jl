@@ -84,10 +84,11 @@ calc_A(branches::AbstractVector{<:Branch}, numnodes::Integer, idx::Dict{<:Any, <
 
 " Calculate the inverse of the adjecency matrix "
 function calc_X(B::AbstractMatrix{T}, slack::Integer) where T<:Real
-    B[:,slack] .= zero(T)
-    B[slack,:] .= zero(T)
-    B[slack,slack] = one(T)
-    X = inv(Matrix(B))
+    X = Matrix(B)
+    X[:,slack] .= zero(T)
+    X[slack,:] .= zero(T)
+    X[slack,slack] = one(T)
+    X = inv(X)
     X[slack,slack] = zero(T)
     return X
 end
