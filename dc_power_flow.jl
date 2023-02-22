@@ -124,21 +124,16 @@ function get_isf(branches::AbstractVector{<:Branch}, numnodes::Integer, idx::Dic
 end
 
 " Get the isf-matrix after a line outage "
-function get_isf(A, D, B, from_bus_idx::Integer, to_bus_idx::Integer, i_branch::Integer, x::Real, slack::Integer)
-    neutralize_line!(B, from_bus_idx, to_bus_idx, 1 / x)
-    #d = LinearAlgebra.diag(D)
-    isf = calc_isf(A, D, calc_X(B, slack))
-    #         A[1:end .!= i_branch,:], 
-    #         LinearAlgebra.Diagonal(d[1:end .!= i_branch]), 
-    #         calc_X(B, slack)
-    #     )
+function get_isf(DA, B, from_bus_idx::Integer, to_bus_idx::Integer, i_branch::Integer, slack::Integer)
+    neutralize_line!(B, from_bus_idx, to_bus_idx, -B[from_bus_idx, to_bus_idx])
+    isf = calc_isf(DA, calc_X(B, slack))
+    neutralize_line!(B, from_bus_idx, to_bus_idx, B[from_bus_idx, to_bus_idx])
     isf[i_branch,:] .= 0
-    neutralize_line!(B, from_bus_idx, to_bus_idx, -1 / x)
     return isf
 end
-function get_isf(A, D, B, idx::Dict{<:Any, <:Integer}, i_branch::Integer, branch::Branch, slack::Integer)
+function get_isf(DA, B, idx::Dict{<:Any, <:Integer}, i_branch::Integer, branch::Branch, slack::Integer)
     (f, t) = get_bus_idx(branch, idx)
-    return get_isf(A, D, B, f, t, i_branch, get_x(branch), slack)
+    return get_isf(DA, B, f, t, i_branch, slack)
 end
 
 function neutralize_line!(B::AbstractMatrix, i::Integer, j::Integer, val::Real)

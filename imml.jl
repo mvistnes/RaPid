@@ -36,7 +36,7 @@ end
         - change: The amount of reactance change between the buses, <=1. 
           Default is 1 and this removes all lines
 """
-function get_changed_angles(
+@views function get_changed_angles(
         X::AbstractMatrix{<:Real}, 
         B::AbstractMatrix{<:Real}, 
         δ₀::AbstractVector{<:Real}, 
@@ -49,13 +49,46 @@ function get_changed_angles(
 
     x = change .* (X[:,from_bus] .- X[:,to_bus])
     x[slack] = 0.0
-    c⁻¹ = 1/B[from_bus,to_bus] + x[from_bus] - x[to_bus] # Sjekk om dette blir ~inf ved øyer
+    c⁻¹ = 1/B[from_bus,to_bus] + x[from_bus] - x[to_bus] 
     delta = 1/c⁻¹ * (δ₀[from_bus] - δ₀[to_bus])
     if isapprox(delta, 0.0; atol=atol)
         throw(DivideError())
     end
     # return .- x .* delta
     return δ₀ .- x .* delta
+end
+
+
+"""
+    Calculation of the inverse admittance matrix in a contingency case using IMML
+
+    Input:
+        - X: The inverse admittance matrix
+        - B: The admittance matrix
+        - from_bus: From bus index
+        - to_bus: To bus index
+        - slack: Slack bus index
+        - change: The amount of reactance change between the buses, <=1. 
+          Default is 1 and this removes all lines
+"""
+@views function get_changed_X(
+    X::AbstractMatrix{<:Real}, 
+    B::AbstractMatrix{<:Real},
+    from_bus::Integer, 
+    to_bus::Integer, 
+    slack::Integer,
+    change::Real = 1.0; 
+    atol=1e-5
+)
+
+    # X_new = X - (X*A[from_bus,:]*B[from_bus,to_bus]*x)/(1+B[from_bus,to_bus]*x*A[from_bus,:])
+    x = X[:,from_bus] .- X[:,to_bus]
+    c⁻¹ = 1/B[from_bus,to_bus] + change * (x[from_bus] - x[to_bus])
+    delta = 1/c⁻¹ .* x
+    # if isapprox(delta, 0.0; atol=atol)
+    #     throw(DivideError())
+    # end
+    return X - change .* x .* delta'
 end
 
 """
@@ -73,7 +106,8 @@ end
         - change: The amount of reactance change between the buses, <=1. 
           Default is 1 and this removes all lines
 """
-@views function calculate_delta_line_flows(
+@views function calculate_line_flows(
+        Pl0::AbstractVector{<:Real},
         ptdf::AbstractMatrix{<:Real},
         X::AbstractMatrix{<:Real}, 
         B::AbstractMatrix{<:Real}, # could be changed to D-matrix, need only the negative admittance of the line
@@ -81,7 +115,8 @@ end
         from_bus::Integer, 
         to_bus::Integer, 
         branch::Integer,
-        change::Real = 1.0
+        change::Real = 1.0; 
+        atol=1e-5
     )
     x = change .* (X[:,from_bus] .- X[:,to_bus])
     c⁻¹ = 1/B[from_bus,to_bus] + x[from_bus] - x[to_bus]
@@ -89,23 +124,16 @@ end
     if isapprox(delta, 0.0; atol=atol)
         throw(DivideError())
     end
-    Pl = (ptdf[:, from_bus] .- ptdf[:, to_bus]) .* change .* delta
-    # Pl[branch] = 0.0 # OBS: double check!!
+    Pl = Pl0 .- (ptdf[:, from_bus] .- ptdf[:, to_bus]) .* change .* delta
+    Pl[branch] = 0.0
     return Pl
 end
 
-function calculate_line_flows(
-        Pl0::AbstractVector{<:Real},
-        ptdf::AbstractMatrix{<:Real},
-        X::AbstractMatrix{<:Real}, 
-        B::AbstractMatrix{<:Real}, # could be changed to D-matrix, need only the negative admittance of the line
-        δ₀::AbstractVector{<:Real}, 
-        from_bus, to_bus, branch
-    )
-    @assert length(from_bus) == length(to_bus) == length(branch)
-    Pl = Pl0 .- sum(calculate_delta_line_flows(ptdf, X, B, δ₀, f, t, b, 1.0) 
-                    for (f,t,b) in zip(from_bus, to_bus, branch))
-    return Pl
+" Get the isf-matrix after a line outage using IMML "
+function get_isf(DA, X, B, from_bus_idx::Integer, to_bus_idx::Integer, i_branch::Integer, slack::Integer, change::Real = 1.0)
+    isf = calc_isf(DA, get_changed_X(X, B, from_bus_idx, to_bus_idx, slack, change))
+    isf[i_branch,:] .= 0
+    return isf
 end
 
 get_overload(

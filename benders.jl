@@ -107,7 +107,7 @@ function run_benders2(system::System, voll, prob, lim = 1e-6)
             # sort!(overloads, rev = true, by = x -> abs(x[2]))
             (i,ol) = first(overloads)
             P = get_Pᵢ(opfm, nodes)
-            ptdf = get_isf(imml.A, imml.D, imml.B, idx, i, branches[i], slack[1])
+            ptdf = get_isf(imml.DA, imml.X, imml.B, cont[1], cont[2], i, slack[1], change)
             
             pgu = @variable(opfm.mod, [g in get_name.(get_ctrl_generation(opfm.sys))], lower_bound = 0)
                 # active power variables for the generators in contingencies ramp up 

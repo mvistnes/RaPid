@@ -1,6 +1,6 @@
 # CC BY 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2022
 include("SCOPF.jl")
-import .SCOPF
+using .SCOPF
 
 function setup(system::System)
     voll = JuMP.Containers.DenseAxisArray(
