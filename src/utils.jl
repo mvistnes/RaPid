@@ -27,6 +27,21 @@ function add_system_data_to_json(;
     to_json(system_data, joinpath(DATA_DIR, file_name), force=true)
 end
 
+function setup(system::System)
+    voll = JuMP.Containers.DenseAxisArray(
+        [rand(1000:3000, length(get_components(StaticLoad, system))); rand(1:30, length(get_components(RenewableGen, system)))], 
+        [get_name.(get_components(StaticLoad, system)); get_name.(get_components(RenewableGen, system))]
+    )
+
+    prob = JuMP.Containers.DenseAxisArray(rand(length(get_components(ACBranch, system))) .* 0.3 .+ 0.1,
+        get_name.(get_components(ACBranch, system))
+    )
+    prob /= 8760
+    contingencies = get_name.(SCOPF.get_branches(system))
+    # contingencies = ["2-3-i_3"]
+    return voll, prob, contingencies
+end
+
 get_system(fname::String) = System(joinpath("data",fname))
 
 """ OPF model type """
@@ -174,7 +189,21 @@ function set_warm_start!(model::JuMP.Model, symbs::Vector{Symbol})
 end
 
 " Get a dict of bus-number-keys and vector-position-values "
-get_nodes_idx(nodes::Vector{Bus}) = PowerSystems._make_ax_ref(nodes)
+get_nodes_idx(nodes::Vector{Bus}) = _make_ax_ref(nodes)
+
+""" Deprecated in PowerSystems """
+_make_ax_ref(buses::AbstractVector{Bus}) = _make_ax_ref(get_number.(buses))
+
+function _make_ax_ref(ax::AbstractVector)
+    ref = Dict{eltype(ax), Int}()
+    for (ix, el) in enumerate(ax)
+        if haskey(ref, el)
+            @error("Repeated index element $el. Index sets must have unique elements.")
+        end
+        ref[el] = ix
+    end
+    return ref
+end
 
 " Get the number of the from-bus and to-bus from a branch "
 get_bus_id(branch::ACBranch) = (branch.arc.from.number, branch.arc.to.number)
@@ -188,6 +217,29 @@ split_pair(val) = map(first, val), map(last, val)
 " Get dual value (upper or lower bound) from model reference "
 get_low_dual(varref::VariableRef) = dual(LowerBoundRef(varref))
 get_high_dual(varref::VariableRef) = dual(UpperBoundRef(varref))
+
+""" Return the net power injected at each node. """
+function get_net_Pᵢ(opfm::OPFmodel, nodes::AbstractVector{Bus}, idx::Dict{<:Any, <:Int} = get_nodes_idx(nodes), Pᵢ = get_Pᵢ(opfm, nodes))
+    p = JuMP.value.(opfm.mod[:ls0])
+    for r in get_renewables(opfm.sys)
+        Pᵢ[idx[r.bus.number]] += get_active_power(r) - p[get_name(r)]
+    end
+    for d in get_demands(opfm.sys)
+        Pᵢ[idx[d.bus.number]] -= get_active_power(d) + p[get_name(d)]
+    end
+    # @assert abs(sum(Pᵢ)) < 0.001
+    return Pᵢ
+end
+
+""" Return the power injected at each node. """
+function get_Pᵢ(opfm::OPFmodel, nodes::AbstractVector{Bus}, idx::Dict{<:Any, <:Int} = get_nodes_idx(nodes))
+    Pᵢ = zeros(length(nodes))
+    p = JuMP.value.(opfm.mod[:pg0])
+    for g in get_ctrl_generation(opfm.sys)
+        Pᵢ[idx[g.bus.number]] += p[get_name(g)]
+    end
+    return Pᵢ
+end
 
 
 " Calculate the severity index for the system based on line loading "

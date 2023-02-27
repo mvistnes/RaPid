@@ -73,7 +73,7 @@ function run_benders2(system::System, voll, prob, lim = 1e-6)
 
     opfm = scopf(SC, system, Gurobi.Optimizer, voll=voll)
     solve_model!(opfm.mod)
-    lower_bound = objective_value(opfm.mod)
+    # lower_bound = objective_value(opfm.mod)
 
     # Set global variables
     nodes = get_sorted_nodes(opfm.sys)
@@ -82,13 +82,14 @@ function run_benders2(system::System, voll, prob, lim = 1e-6)
     list_gen = make_list(opfm, get_ctrl_generation)
     idx = get_nodes_idx(nodes)
     imml = IMML(nodes, branches, idx, branches)
-    bbus = get_bus_idx(branches, idx)
-    lodf = get_lodf(bbus[1], bbus[2], get_x.(branches), imml.A, imml.X)
+    lu = LinearAlgebra.factorize(imml.B)
+    # bbus = get_bus_idx(branches, idx)
+    # lodf = get_lodf(bbus[1], bbus[2], get_x.(branches), imml.A, imml.X)
     slack = find_slack(nodes)
 
     # Get initial state
     Pᵢ = get_net_Pᵢ(opfm, nodes, idx)
-    angles = run_pf(imml.B, Pᵢ)
+    angles = run_pf(lu, Pᵢ)
     Pl0 = calc_Pline(imml.DA, angles)
 
     it = enumerate(get_bus_idx.(branches, [idx]))
@@ -148,7 +149,7 @@ function run_benders2(system::System, voll, prob, lim = 1e-6)
             termination_status(opfm.mod) != MOI.OPTIMAL && return
             cut_added = true
             Pᵢ = get_net_Pᵢ(opfm, nodes, idx)
-            angles = run_pf(imml.B, Pᵢ)
+            angles = run_pf(lu, Pᵢ)
             Pl0 = calc_Pline(imml.DA, angles)
         else
             next = iterate(it, state)

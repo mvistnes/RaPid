@@ -1,0 +1,14 @@
+using Test
+using .SCOPF
+
+@testset "Test dc power flow" begin
+    include("test_dc_power_flow.jl")
+end
+
+@testset "Test IMML" begin
+    include("test_imml.jl")
+end
+
+@testset "Test Benders" begin
+    include("test_benders.jl")
+end
