@@ -219,7 +219,9 @@ get_low_dual(varref::VariableRef) = dual(LowerBoundRef(varref))
 get_high_dual(varref::VariableRef) = dual(UpperBoundRef(varref))
 
 """ Return the net power injected at each node. """
-function get_net_Pᵢ(opfm::OPFmodel, nodes::AbstractVector{Bus}, idx::Dict{<:Any, <:Int} = get_nodes_idx(nodes), Pᵢ = get_Pᵢ(opfm, nodes))
+function get_net_Pᵢ(opfm::OPFmodel, nodes::AbstractVector{Bus}, 
+        idx::Dict{<:Any, <:Int} = get_nodes_idx(nodes), Pᵢ = get_Pᵢ(opfm, nodes)
+    )
     p = JuMP.value.(opfm.mod[:ls0])
     for r in get_renewables(opfm.sys)
         Pᵢ[idx[r.bus.number]] += get_active_power(r) - p[get_name(r)]
@@ -232,7 +234,9 @@ function get_net_Pᵢ(opfm::OPFmodel, nodes::AbstractVector{Bus}, idx::Dict{<:An
 end
 
 """ Return the power injected at each node. """
-function get_Pᵢ(opfm::OPFmodel, nodes::AbstractVector{Bus}, idx::Dict{<:Any, <:Int} = get_nodes_idx(nodes))
+function get_Pᵢ(opfm::OPFmodel, nodes::AbstractVector{Bus}, 
+        idx::Dict{<:Any, <:Int} = get_nodes_idx(nodes)
+    )
     Pᵢ = zeros(length(nodes))
     p = JuMP.value.(opfm.mod[:pg0])
     for g in get_ctrl_generation(opfm.sys)

@@ -50,6 +50,17 @@ Input:
     return θ₀ .- x .* delta
 end
 
+""" 
+Calculate the power flow on the lines from the connectivity 
+and the diagonal admittance matrices and the voltage angles
+in a contingency of the branch number.
+"""
+function calc_Pline(pf::DCPowerFlow, from_bus_idx::Integer, to_bus_idx::Integer, branch::Integer)
+    θ = get_changed_angles(pf.X, pf.B, pf.DA, pf.θ, from_bus_idx, to_bus_idx, branch)
+    P = calc_Pline(pf.DA, θ)
+    P[branch] = 0.0
+    return P
+end
 
 """
 Calculation of the inverse admittance matrix in a contingency case using IMML
@@ -85,10 +96,29 @@ Input:
 end
 
 " Get the isf-matrix after a line outage using IMML "
-function get_isf(pf::DCPowerFlow, from_bus_idx::Integer, to_bus_idx::Integer, i_branch::Integer)
-    isf = calc_isf(pf.DA, get_changed_X(pf.X, pf.B, pf.DA, from_bus_idx, to_bus_idx, i_branch))
-    isf[i_branch,:] .= 0
+function get_isf(pf::DCPowerFlow, from_bus_idx::Integer, to_bus_idx::Integer, branch::Integer)
+    isf = calc_isf(pf.DA, get_changed_X(pf.X, pf.B, pf.DA, from_bus_idx, to_bus_idx, branch))
+    isf[branch,:] .= 0
     return isf
+end
+
+function calculate_line_flows(
+        pf::DCPowerFlow, 
+        cont::Tuple{Integer, Integer},
+        branch::Integer, 
+        Pᵢ::AbstractVector{<:Real}
+    ) 
+    get_isf(pf, cont[1], cont[2], branch)*Pᵢ
+end
+
+function get_overload(
+        pf::DCPowerFlow,
+        branch::Integer,
+        cont::Tuple{Integer, Integer}, 
+        Pᵢ::AbstractVector{<:Real},
+        linerating::AbstractVector{<:Real}
+    )
+    find_overload.(calculate_line_flows(pf, cont, branch, Pᵢ), linerating)
 end
 
 """
@@ -131,6 +161,14 @@ Input:
     return Pl
 end
 
+function calculate_line_flows(
+        pf::DCPowerFlow,
+        cont::Tuple{Integer, Integer},
+        branch::Integer
+    )
+    calculate_line_flows(pf.F, pf.ϕ, pf.B, pf.DA, pf.X, pf.θ, cont[1], cont[2], branch)
+end
+
 function get_overload(
         Pl0::AbstractVector{<:Real}, 
         ptdf::AbstractMatrix{<:Real}, 
@@ -149,16 +187,12 @@ function get_overload(
 end
 
 function get_overload(
-        Pl0::AbstractVector{<:Real}, 
         pf::DCPowerFlow,
         branch::Integer,
         cont::Tuple{Integer, Integer},
         linerating::AbstractVector{<:Real}
     )
-    find_overload.(
-                calculate_line_flows(Pl0, pf.ptdf, pf.B, pf.DA, pf.X, pf.θ, cont[1], cont[2], branch), 
-                linerating
-            )
+    find_overload.(calculate_line_flows(pf, cont, branch), linerating)
 end
 
 """ 

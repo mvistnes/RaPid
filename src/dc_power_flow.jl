@@ -4,14 +4,15 @@ using PowerSystems
 abstract type PowerFlow end
 
 mutable struct DCPowerFlow <: PowerFlow
-    DA::AbstractMatrix{<:Real}
-    B::AbstractMatrix{<:Real}
-    fact_B
-    X::AbstractMatrix{<:Real}
-    ϕ::AbstractMatrix{<:Real}
-    Pᵢ::AbstractVector{<:Real}
-    θ::AbstractVector{<:Real}
-    slack::Integer
+    DA::AbstractMatrix{<:Real} # Diagonal admittance matrix times the connectivity matrix
+    B::AbstractMatrix{<:Real} # The admittance matrix
+    fact_B # A factorization of the admittance matrix
+    X::AbstractMatrix{<:Real} # Inverse of the admittance matrix
+    ϕ::AbstractMatrix{<:Real} # PTDF matrix
+    Pᵢ::AbstractVector{<:Real} # Net power vector
+    θ::AbstractVector{<:Real} # Bus voltage angles
+    F::AbstractVector{<:Real} # Line power flow
+    slack::Integer # Reference bus
 end
 
 function DCPowerFlow(nodes::AbstractVector{<:Bus}, branches::AbstractVector{<:Branch}, idx::Dict{<:Any, <:Int}, Pᵢ::AbstractVector{<:Real})
@@ -24,7 +25,8 @@ function DCPowerFlow(nodes::AbstractVector{<:Bus}, branches::AbstractVector{<:Br
     ϕ = calc_isf(DA, X)
     fact_B = LinearAlgebra.factorize(B)
     θ = fact_B \ Pᵢ
-    return DCPowerFlow(DA, B, fact_B, X, ϕ, Pᵢ, θ, slack)
+    F = calc_Pline(DA, θ)
+    return DCPowerFlow(DA, B, fact_B, X, ϕ, copy(Pᵢ), θ, F, slack)
 end
 
 get_slack(pf::DCPowerFlow) = pf.slack
@@ -71,16 +73,17 @@ build_adjacency(branches::AbstractVector{<:Branch}, numnodes::Integer, idx::Dict
     build_adjacency(get_bus_idx.(branches, [idx]), numnodes)
 
 """ Make the generator connectivity matrix """
-function connectivitymatrix(gens::AbstractVector{<:Integer}, numnodes::Integer) 
-    mx = SparseArrays.spzeros(Int8, length(gens), numnodes)
-    for (i, g) in enumerate(gens)
-        mx[i, g] = 1
+function connectivitymatrix(gens, numnodes::Integer, idx::Dict{<:Any, <:Integer})
+    bus = getindex.([idx], get_number.(get_bus.(gens)))
+    mx = SparseArrays.spzeros(String, length(gens), numnodes)
+    for (i, (g, b)) in enumerate(zip(gens, bus))
+        mx[i, b] = g.name
     end
     return mx
 end
 
-connectivitymatrix(system, numnodes::Integer, idx::Dict{<:Any, <:Integer}) =
-    connectivitymatrix(getindex.([idx], get_number.(get_bus.(get_components(Generator, system)))), numnodes)
+connectivitymatrix(system::System, numnodes::Integer, idx::Dict{<:Any, <:Integer}) =
+    connectivitymatrix(get_components(Generator, system), numnodes, idx)
 
 """ Make the branch connectivity matrix """
 function calc_A(branches::AbstractVector{<:Tuple{Integer, Integer}}, numnodes::Integer)
@@ -95,7 +98,7 @@ end
 calc_A(branches::AbstractVector{<:Branch}, numnodes::Integer, idx::Dict{<:Any, <:Integer}) =
     calc_A(get_bus_idx.(branches, [idx]), numnodes)
 
-""" Calculate the inverse of the adjecency matrix """
+""" Calculate the inverse of the admittance matrix """
 function calc_X(B::AbstractMatrix{T}, slack::Integer) where T<:Real
     X = Matrix(B)
     X[:,slack] .= zero(T)
@@ -203,28 +206,19 @@ and the diagonal admittance matrices and the voltage angles
 """
 calc_Pline(A::AbstractMatrix{<:Real}, D::AbstractMatrix{<:Real}, θ::AbstractVector{<:Real}) = D * A * θ
 calc_Pline(DA::AbstractMatrix{<:Real}, θ::AbstractVector{<:Real}) = DA * θ
+function calc_Pline!(pf::DCPowerFlow) 
+    pf.F = pf.DA * pf.θ
+end
 
 """ DC line flow calculation using Injection Shift Factors and Power Injection vector"""
 calculate_line_flows(isf::AbstractMatrix{<:Real}, Pᵢ::AbstractVector{<:Real}) = isf*Pᵢ
-calculate_line_flows(pf::DCPowerFlow) = pf.ϕ*pf.Pᵢ
-
-""" 
-Calculate the power flow on the lines from the connectivity 
-and the diagonal admittance matrices and the voltage angles
-in a contingency of the branch number.
-"""
-function calc_Pline(A::AbstractMatrix{<:Real}, D::AbstractMatrix{<:Real}, θ::AbstractVector{<:Real}, branch::Integer)
-    P = calc_Pline(A, D, θ)
-    P[branch] = 0.0
-    return P
-end
-function calc_Pline(DA::AbstractMatrix{<:Real}, θ::AbstractVector{<:Real}, branch::Integer)
-    P = calc_Pline(DA, θ)
-    P[branch] = 0.0
-    return P
+function calculate_line_flows(pf::DCPowerFlow) 
+    pf.F = pf.ϕ*pf.Pᵢ
 end
 
 """ DC power flow calculation using the Admittance matrix and Power Injection vector returning the bus angles """
 run_pf(B::AbstractMatrix{<:Real}, P::AbstractVector{<:Real}) = B \ P
-run_pf(pf::DCPowerFlow) = pf.fact_B \ pf.Pᵢ
+function run_pf!(pf::DCPowerFlow) 
+    pf.θ = pf.fact_B \ pf.Pᵢ
+end
 

@@ -25,8 +25,9 @@ function run_benders(system::System, voll, contingencies, prob, lim = 1e-6)
     # Set global variables
     nodes = get_sorted_nodes(opfm.sys)
     branches = get_sorted_branches(opfm.sys)
-    list_gen = make_list(opfm, get_ctrl_generation)
-    contanal = iterative_cont_anal(opfm.sys, nodes, branches, contingencies)
+    idx = get_nodes_idx(nodes)
+    list_ctrl = make_list(opfm, get_ctrl_generation)
+    contanal = iterative_cont_anal(opfm.sys, nodes, branches, contingencies, idx)
 
     it = enumerate(contingencies)
     next = iterate(it)
@@ -47,7 +48,7 @@ function run_benders(system::System, voll, contingencies, prob, lim = 1e-6)
             
             expr = sum(
                     ptdf[i, in] * 
-                    (Pᵢ[in] - sum((opfm.mod[:pg0][g.name] for g in list_gen[n.name]), init=0.0)) 
+                    (Pᵢ[in] - sum((opfm.mod[:pg0][g.name] for g in list_ctrl[n.name]), init=0.0)) 
                     for (in, n) in enumerate(nodes) if abs(ptdf[i, in]) > lim
                 )
             @info "Contingency on $(cont) resulted in overload on $(branches[i].name) of $(ol) \nCut added: $(sprint_expr(expr,lim))\n"
@@ -69,28 +70,27 @@ function run_benders(system::System, voll, contingencies, prob, lim = 1e-6)
     return opfm, contanal
 end
 
-function run_benders2(system::System, voll, prob, lim = 1e-6)
+function run_benders2(system::System, voll, prob, ramp_minutes = 10, repair_time = 4, lim = 1e-6)
 
     opfm = scopf(SC, system, Gurobi.Optimizer, voll=voll)
     solve_model!(opfm.mod)
     # lower_bound = objective_value(opfm.mod)
 
-    # Set global variables
+    # Set variables
     nodes = get_sorted_nodes(opfm.sys)
     branches = get_sorted_branches(opfm.sys)
-    # cgen = connectivitymatrix(opfm.sys, length(nodes), idx)
-    list_gen = make_list(opfm, get_ctrl_generation)
     idx = get_nodes_idx(nodes)
-    imml = IMML(nodes, branches, idx, branches)
-    lu = LinearAlgebra.factorize(imml.B)
-    # bbus = get_bus_idx(branches, idx)
-    # lodf = get_lodf(bbus[1], bbus[2], get_x.(branches), imml.A, imml.X)
-    slack = find_slack(nodes)
+    list_ctrl = make_list(opfm, get_ctrl_generation)
+    list_nonctrl = make_list(opfm, get_nonctrl_generation)
+    # cgen = connectivitymatrix(opfm.sys, length(nodes), idx)
+    ctrl_generation = get_name.(get_ctrl_generation(opfm.sys))
+    non_ctrl_generation = get_name.(get_nonctrl_generation(opfm.sys))
+    linerating = get_rate.(branches)
+    ΔP = Dict() # Holds the ramp up and down for contingencies that need
+    overloads = []
 
     # Get initial state
-    Pᵢ = get_net_Pᵢ(opfm, nodes, idx)
-    angles = run_pf(lu, Pᵢ)
-    Pl0 = calc_Pline(imml.DA, angles)
+    pf = SCOPF.DCPowerFlow(nodes, branches, idx, get_net_Pᵢ(opfm, nodes, idx))
 
     it = enumerate(get_bus_idx.(branches, [idx]))
     next = iterate(it)
@@ -101,61 +101,88 @@ function run_benders2(system::System, voll, prob, lim = 1e-6)
             cut_added = false
         end
         (c, cont), state = next
-        overloads = get_overload(Pl0, angles, imml, c, cont)
-        overloads = [(i,ol) for (i,ol) in enumerate(overloads) if abs(ol) > lim]
-        # Skjekk om det er øyer i nettet
+        try
+            overloads = get_overload(pf, c, cont, (pf.Pᵢ .+ get_ΔP(opfm, length(nodes), idx, ΔP, c)), linerating)
+            overloads = [(i,ol) for (i,ol) in enumerate(overloads) if abs(ol) > lim]
+        catch DivideError
+            @warn "Contingency on line $(cont[1])-$(cont[2]) resulted in islands forming"
+            overloads = []
+        end
         if length(overloads) > 0
             # sort!(overloads, rev = true, by = x -> abs(x[2]))
             (i,ol) = first(overloads)
             P = get_Pᵢ(opfm, nodes)
-            ptdf = get_isf(imml.DA, imml.X, imml.B, cont[1], cont[2], i, slack[1], change)
+            ptdf = get_isf(pf, cont[1], cont[2], c)
             
-            pgu = @variable(opfm.mod, [g in get_name.(get_ctrl_generation(opfm.sys))], lower_bound = 0)
+            pgu = JuMP.@variable(opfm.mod, [g in ctrl_generation], lower_bound = 0)
                 # active power variables for the generators in contingencies ramp up 
-            pgd = @variable(opfm.mod, [g in get_name.(get_ctrl_generation(opfm.sys))], lower_bound = 0)
+            pgd = JuMP.@variable(opfm.mod, [g in ctrl_generation], lower_bound = 0)
                     # and ramp down
+            ΔP[c] = (pgu, pgd)
+            for g in get_ctrl_generation(system)
+                set_upper_bound(pgu[get_name(g)], get_ramp_limits(g).up * ramp_minutes)
+                set_upper_bound(pgd[get_name(g)], get_ramp_limits(g).down * ramp_minutes)
+            end
                 # pfcc[l in get_name.(get_branches(opfm.sys))]
                 #     # power flow on get_branches in in contingencies after corrective actions
                 # vacc[b in get_name.(get_nodes(opfm.sys))]
                 #     # voltage angle at a node in in contingencies after corrective actions
-            lscc = @variable(opfm.mod, [d in get_name.(get_nonctrl_generation(opfm.sys))], lower_bound = 0)
+            #lscc = JuMP.@variable(opfm.mod, [d in non_ctrl_generation], lower_bound = 0)
                     # load curtailment variables in in contingencies
-            expr = sum(
+            expr = JuMP.@expression(opfm.mod, sum(
                     (ptdf[i, in] * (P[in] - 
-                    sum((opfm.mod[:pg0][g.name] - pgu[g.name] + pgd[g.name] for g in list_gen[n.name]), init=0.0) +
-                    opfm.mod[:ls0][in] + lscc[in]) for (in, n) in enumerate(nodes) if abs(ptdf[i, in]) > lim), init=0.0
-                )
+                    sum((opfm.mod[:pg0][ctrl.name] + pgu[ctrl.name] - pgd[ctrl.name] 
+                        for ctrl in list_ctrl[n.name]), init=0.0) #+
+                    #sum((opfm.mod[:ls0][nonctrl.name] + lscc[nonctrl.name] 
+                    #=    for nonctrl in list_nonctrl[n.name]), init=0.0)=#)
+                    for (in, n) in enumerate(nodes) if abs(ptdf[i, in]) > lim), init=0.0
+                ) )
             if expr != 0.0
-                # @info "Contingency on $(cont) resulted in overload on $(branches[i].name) of $(ol) \nCut added: $(sprint_expr(expr,lim))\n"
-                set_warm_start!(opfm.mod, :pg0) # query of information then edit of model, else OptimizeNotCalled errors
+                @info "Contingency on line $(cont[1])-$(cont[2]) resulted in overload on $(branches[i].name) of $(ol) \nCut added: $(sprint_expr(expr,lim))\n"
+                # set_warm_start!(opfm.mod, :pg0) # query of information then edit of model, else OptimizeNotCalled errors
                 if ol < 0
                     JuMP.@constraint(opfm.mod, expr <= ol)
                 else
                     JuMP.@constraint(opfm.mod, expr >= ol)
                 end
-                add_to_expression!(objective_function(opfm.mod), prob[c] * 
-                    sum(opfm.voll[d] * (ramp_minutes / 60 * opfm.mod[:lsc][d,c] + # extract these from the for loop in N-1 too 
-                        repair_time * lscc[d])
-                            for d in get_name.(get_nonctrl_generation(opfm.sys))
-                        ) +
+                c_name = branches[c].name
+                @objective(opfm.mod, Min, objective_function(opfm.mod) + prob[c_name] * 
+                    #(sum(opfm.voll[d] * (# ramp_minutes / 60 * opfm.mod[:lsc][d,c] + # extract these from the for loop in N-1 too 
+                    #    repair_time * lscc[d]) for d in non_ctrl_generation
+                    #    ) +
                     sum(opfm.cost[g] * repair_time * pgu[g]
-                            for g in get_name.(get_ctrl_generation(opfm.sys))
-                        )
+                            for g in ctrl_generation
+                        )#)
                     )
+                JuMP.@constraint(opfm.mod, sum(pgu) == sum(pgd))
             end
 
             MOI.set(opfm.mod, MOI.Silent(), true) # supress output from the solver
             opfm.mod = solve_model!(opfm.mod)
-            termination_status(opfm.mod) != MOI.OPTIMAL && return
+            termination_status(opfm.mod) != MOI.OPTIMAL && return opfm, pf
             cut_added = true
-            Pᵢ = get_net_Pᵢ(opfm, nodes, idx)
-            angles = run_pf(lu, Pᵢ)
-            Pl0 = calc_Pline(imml.DA, angles)
+            pf.Pᵢ = get_net_Pᵢ(opfm, nodes, idx)
+            run_pf!(pf)
+            calc_Pline!(pf)
         else
             next = iterate(it, state)
         end
     end
-    return opfm, imml
+    return opfm, pf, ΔP
+end         
+
+""" Return the power injected at each node. """
+function get_ΔP(opfm::OPFmodel, numnodes::Integer, idx::Dict{<:Any, <:Int}, ΔP, c)
+    Pᵢ = zeros(numnodes)
+    x = get(ΔP, c, 0)
+    if x != 0
+        pgu = JuMP.value.(x[1])
+        pgd = JuMP.value.(x[2])
+        for g in get_ctrl_generation(opfm.sys)
+            Pᵢ[idx[g.bus.number]] += pgu[get_name(g)] - pgd[get_name(g)]
+        end
+    end
+    return Pᵢ
 end
 
 

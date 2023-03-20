@@ -35,8 +35,9 @@ export sl_scopf, c_scopf
     DC power flow functions.
 =#
 include("dc_power_flow.jl")
-export get_net_Pᵢ, get_Pᵢ, calc_Pᵢ, build_adjacency, connectivitymatrix, calc_A, calc_X, calc_isf, calc_B, 
-    fast_calc_B, calc_D, get_isf, get_ptdf, find_overload, calculate_line_flows, calc_Pline, run_pf
+export get_net_Pᵢ, get_Pᵢ, calc_Pᵢ, build_adjacency, connectivitymatrix, calc_A, calc_X, calc_isf, 
+    calc_B, fast_calc_B, calc_D, get_isf, get_ptdf, find_overload, calculate_line_flows, 
+    calc_Pline, run_pf
 
 #=
     Functions for handling islands in the system.
@@ -54,7 +55,8 @@ export run_benders, run_benders2, get_overload, get_islands, find_connected, cal
     Functions using the Inverse Matrix Modification Lemma.
 =#
 include("imml.jl")
-export IMML, get_changed_angles, get_changed_X, get_isf, calculate_line_flows, get_overload, get_lodf
+export IMML, get_changed_angles, calc_Pline, get_changed_X, get_isf, calculate_line_flows, 
+    get_overload, get_lodf
 
 #=
     Functions for printing and plotting SCOPF results.

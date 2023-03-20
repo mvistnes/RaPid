@@ -116,35 +116,39 @@ function print_power_flow(names::Vector{String}, flow::Vector{<:Real}, rate::Vec
     end
 end
 
-function print_contingency_power_flow(opfm::OPFmodel, contanal)
+function print_contingency_power_flow(opfm::OPFmodel, pf, ΔP)
     branches = get_sorted_branches(opfm.sys)
-    Pᵢ = get_net_Pᵢ(opfm, get_sorted_nodes(opfm.sys))
+    nodes = get_sorted_nodes(opfm.sys)
+    idx = get_nodes_idx(nodes)
+    b_names = get_name.(branches)
+    linerates = get_rate.(branches)
     println("Base case")
-    print_power_flow(
-            get_name.(branches), 
-            calculate_line_flows(contanal.lodf[:,:,1], Pᵢ), 
-            get_rate.(branches)
-        )
-    for (i,cont) in enumerate(contanal.contingencies)
-        println("Contingency ", cont)
-        print_power_flow(
-                get_name.(branches), 
-                calculate_line_flows(get_cont_ptdf(contanal, i), Pᵢ), 
-                get_rate.(branches)
-            )
+    print_power_flow(b_names, pf.F, linerates)
+    for (c,cont) in enumerate(branches)
+        println("Contingency ", cont.name)
+        (f, t) = get_bus_idx(cont, idx)
+        try
+            print_power_flow(
+                    b_names, 
+                    calculate_line_flows(pf, (f, t), c, 
+                        (pf.Pᵢ .+ get_ΔP(opfm, length(nodes), idx, ΔP, c))), 
+                    linerates
+                )
+        catch DivideError
+            println("Contingency on line $(cont.name) resulted in islands forming")
+        end
     end
 end
 
-function print_contingency_overflow(opfm::OPFmodel, contanal)
+function print_contingency_overflow(opfm::OPFmodel, pf)
     branches = get_sorted_branches(opfm.sys)
-    Pᵢ = get_net_Pᵢ(opfm, get_sorted_nodes(opfm.sys))
     string_line(c, n, f, r) = @sprintf("%15s %15s  %6.2f  %6.2f\n", c, n, f, r)
     println("    Contingency        Branch    Flow  Rating")
-    for (i,cont) in enumerate(contanal.contingencies)
-        names = get_name.(branches)
-        flow = calculate_line_flows(get_cont_ptdf(contanal, i), Pᵢ)
-        rate = get_rate.(branches)
-        for (n,f,r) in zip(names, flow, rate)
+    b_names = get_name.(branches)
+    linerates = get_rate.(branches)
+    for (i,cont) in enumerate(branches)
+        flow = calculate_line_flows(pf, cont, i)
+        for (n,f,r) in zip(b_names, flow, linerates)
             if abs(f) > r + 0.0001
                 print(string_line(cont, n, f, r))
             end

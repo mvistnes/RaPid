@@ -17,17 +17,17 @@ PTDF of the base case is not accurate use of this terminology, but rather a simp
 having to create a separate PTDF variable for the base case (and thus increase the number of variables...).
 
 """
-function iterative_cont_anal(sys::System, nodes::Vector{Bus}, branches::Vector{<:Branch}, contingencies::Vector{String})
+function iterative_cont_anal(sys::System, nodes::Vector{Bus}, branches::Vector{<:Branch}, contingencies::Vector{String}, idx::Dict{<:Any, <:Integer})
     lodf = zeros(length(branches), length(nodes), length(contingencies)+1)
     i_slack, slack = find_slack(nodes)
-    lodf[:,:,1], _ = PowerSystems._buildptdf(branches, nodes, [0.1])
+    lodf[:,:,1] = get_ptdf(branches, length(nodes), idx, i_slack)
     
     for (i,cont) in enumerate(contingencies)
         branches_cont = [b for b in branches if b.name != cont]
         islands = get_islands(sys, branches_cont)
         if length(islands) == 1
             drop_cont = [j for (j,b) in enumerate(branches) if b.name != cont]
-            lodf[drop_cont, :, i+1], _ = PowerSystems._buildptdf(branches_cont, nodes, [0.1])
+            lodf[drop_cont, :, i+1] = get_ptdf(branches_cont, length(nodes), idx, i_slack)
                 # The B-matrix can be altered instead of rebuilt from the ground up
         else
             # only the island with the slack bus is assumed stable
@@ -36,7 +36,7 @@ function iterative_cont_anal(sys::System, nodes::Vector{Bus}, branches::Vector{<
                     drop_id = sort!(collect(values(get_nodes_idx(island[1]))))
                     drop_cont = [j for (j,b) in enumerate(branches) if b.name != cont && b.name ∈ get_name.(island[2])]
                     if length(drop_id) != 0 && length(drop_cont) != 0
-                        lodf[drop_cont, drop_id, i+1], _ = PowerSystems._buildptdf(island[2], island[1], [0.1])
+                        lodf[drop_cont, drop_id, i+1] = get_ptdf(island[2], length(island[1]), idx, i_slack)
                     end
                     break
                 end
