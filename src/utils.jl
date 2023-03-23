@@ -27,13 +27,13 @@ function add_system_data_to_json(;
     to_json(system_data, joinpath(DATA_DIR, file_name), force=true)
 end
 
-function setup(system::System)
+function setup(system::System, prob_min = 0.1, prob_max = 0.4)
     voll = JuMP.Containers.DenseAxisArray(
         [rand(1000:3000, length(get_components(StaticLoad, system))); rand(1:30, length(get_components(RenewableGen, system)))], 
         [get_name.(get_components(StaticLoad, system)); get_name.(get_components(RenewableGen, system))]
     )
 
-    prob = JuMP.Containers.DenseAxisArray(rand(length(get_components(ACBranch, system))) .* 0.3 .+ 0.1,
+    prob = JuMP.Containers.DenseAxisArray(rand(length(get_components(ACBranch, system))) .* (prob_max - prob_min) .+ prob_min,
         get_name.(get_components(ACBranch, system))
     )
     prob /= 8760
@@ -60,7 +60,11 @@ function opfmodel(sys::System, optimizer, time_limit_sec, voll=nothing, continge
     mod = Model(optimizer)
     # mod = Model(optimizer; add_bridges = false)
     set_string_names_on_creation(mod, false)
-    
+    # @debug begin
+    #     set_string_names_on_creation(mod, true)
+    #     "Variable names is on."
+    # end
+
     # if GLPK.Optimizer == optimizer 
     #     set_optimizer_attribute(mod, "msg_lev", GLPK.GLP_MSG_ON)
     # end
@@ -92,7 +96,7 @@ end
 a(line::String,contingency::String) = line != contingency ? 1 : 0
 
 get_generator_cost(gen) = get_operation_cost(gen) |> get_variable |> get_cost |> _get_g_value
-_get_g_value(x::Vector{Tuple{<:Real, <:Real}}) = x[1]
+_get_g_value(x::Vector{<:Tuple{Real, Real}}) = x[1]
 _get_g_value(x::Tuple{<:Real, <:Real}) = x
 
 """ An iterator to a type of power system component """
@@ -167,7 +171,7 @@ end
 function solve_model!(model::Model)
     optimize!(model)
     if termination_status(model) != MOI.OPTIMAL 
-        @warn "Model not optimally solved with status $(termination_status(model))!"
+        @error "Model not optimally solved with status $(termination_status(model))!"
     else
         @info @sprintf "Model solved in %.6f seconds with an objective value of %.4f" solve_time(model) objective_value(model)
     end
@@ -191,7 +195,7 @@ end
 " Get a dict of bus-number-keys and vector-position-values "
 get_nodes_idx(nodes::Vector{Bus}) = _make_ax_ref(nodes)
 
-""" Deprecated in PowerSystems """
+""" Return a Dict of bus name number to index. Deprecated in PowerSystems """
 _make_ax_ref(buses::AbstractVector{Bus}) = _make_ax_ref(get_number.(buses))
 
 function _make_ax_ref(ax::AbstractVector)
@@ -205,7 +209,9 @@ function _make_ax_ref(ax::AbstractVector)
     return ref
 end
 
-" Get the number of the from-bus and to-bus from a branch "
+# TODO: remove the need for idx in most functions, use array
+
+" Get the bus number of the from-bus and to-bus from a branch "
 get_bus_id(branch::ACBranch) = (branch.arc.from.number, branch.arc.to.number)
 get_bus_idx(branch::ACBranch, idx::Dict{<:Any, <:Int}) = (idx[branch.arc.from.number], idx[branch.arc.to.number])
 get_bus_idx(branches::AbstractVector{<:Branch}, idx::Dict{<:Any, <:Int}) =
@@ -217,6 +223,9 @@ split_pair(val) = map(first, val), map(last, val)
 " Get dual value (upper or lower bound) from model reference "
 get_low_dual(varref::VariableRef) = dual(LowerBoundRef(varref))
 get_high_dual(varref::VariableRef) = dual(UpperBoundRef(varref))
+
+" Fix for name difference in StandardLoad "
+PowerSystems.get_active_power(value::StandardLoad) = value.current_active_power
 
 """ Return the net power injected at each node. """
 function get_net_Pᵢ(opfm::OPFmodel, nodes::AbstractVector{Bus}, 
@@ -233,7 +242,7 @@ function get_net_Pᵢ(opfm::OPFmodel, nodes::AbstractVector{Bus},
     return Pᵢ
 end
 
-""" Return the power injected at each node. """
+""" Return the power injected by controlled generation at each node. """
 function get_Pᵢ(opfm::OPFmodel, nodes::AbstractVector{Bus}, 
         idx::Dict{<:Any, <:Int} = get_nodes_idx(nodes)
     )

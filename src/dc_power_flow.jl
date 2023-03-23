@@ -212,7 +212,7 @@ end
 
 """ DC line flow calculation using Injection Shift Factors and Power Injection vector"""
 calculate_line_flows(isf::AbstractMatrix{<:Real}, Pᵢ::AbstractVector{<:Real}) = isf*Pᵢ
-function calculate_line_flows(pf::DCPowerFlow) 
+function calculate_line_flows!(pf::DCPowerFlow) 
     pf.F = pf.ϕ*pf.Pᵢ
 end
 

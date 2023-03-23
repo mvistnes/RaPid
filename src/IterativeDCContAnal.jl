@@ -76,3 +76,57 @@ function get_cont_ptdf(contanal::IterativeDCContAnal, cont::Integer)
 # cont+1 as first element in LODF is PTDF for base case
 return contanal.lodf[:,:, cont+1]  
 end
+
+function run_benders_cont_anal(system::System, voll, contingencies, prob, lim = 1e-6)
+
+    opfm = scopf(SC, system, Gurobi.Optimizer, voll=voll)
+    solve_model!(opfm.mod)
+    lower_bound = objective_value(opfm.mod)
+
+    # Set global variables
+    nodes = get_sorted_nodes(opfm.sys)
+    branches = get_sorted_branches(opfm.sys)
+    idx = get_nodes_idx(nodes)
+    list_ctrl = make_list(opfm, get_ctrl_generation)
+    contanal = iterative_cont_anal(opfm.sys, nodes, branches, contingencies, idx)
+
+    it = enumerate(contingencies)
+    next = iterate(it)
+    cut_added = false
+    while next !== nothing || cut_added # loops until no new cuts are added for the contingencies
+        if next === nothing
+            next = iterate(it)
+            cut_added = false
+        end
+        (c, cont), state = next
+        overloads = get_overload(contanal, c, get_net_Pᵢ(opfm, nodes))
+        overloads = [(i,ol) for (i,ol) in enumerate(overloads) if abs(ol) > lim]
+        if length(overloads) > 0
+            # sort!(overloads, rev = true, by = x -> abs(x[2]))
+            (i,ol) = first(overloads)
+            Pᵢ = get_Pᵢ(opfm, nodes)
+            ptdf = get_cont_ptdf(contanal, c)
+            
+            expr = sum(
+                    ptdf[i, in] * 
+                    (Pᵢ[in] - sum((opfm.mod[:pg0][g.name] for g in list_ctrl[n.name]), init=0.0)) 
+                    for (in, n) in enumerate(nodes) if abs(ptdf[i, in]) > lim
+                )
+            @info "Contingency on $(cont) resulted in overload on $(branches[i].name) of $(ol) \nCut added: $(sprint_expr(expr,lim))\n"
+            set_warm_start!(opfm.mod, :pg0) # query of information then edit of model, else OptimizeNotCalled errors
+            if ol < 0
+                JuMP.@constraint(opfm.mod, expr <= ol)
+            else
+                JuMP.@constraint(opfm.mod, expr >= ol)
+            end
+
+            MOI.set(opfm.mod, MOI.Silent(), true) # supress output from the solver
+            opfm.mod = solve_model!(opfm.mod)
+            termination_status(opfm.mod) != MOI.OPTIMAL && return
+            cut_added = true
+        else
+            next = iterate(it, state)
+        end
+    end
+    return opfm, contanal
+end

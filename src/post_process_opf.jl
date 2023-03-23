@@ -106,7 +106,7 @@ function print_power_flow(names::Vector{String}, flow::Vector{<:Real}, rate::Vec
     println("         Branch    Flow  Rating")
     string_line(n, f, r) = @sprintf("%15s  %6.2f  %6.2f\n", n, f, r)
     for (n,f,r) in zip(names, flow, rate)
-        if abs(f) > r - 0.0001
+        if abs(f) > r + 0.0001
             printstyled(string_line(n, f, r), color = :red)
         elseif abs(f) > r * 0.9
             printstyled(string_line(n, f, r), color = :yellow)
@@ -140,21 +140,72 @@ function print_contingency_power_flow(opfm::OPFmodel, pf, ΔP)
     end
 end
 
-function print_contingency_overflow(opfm::OPFmodel, pf)
+function print_contingency_power_flow(opfm::OPFmodel)
     branches = get_sorted_branches(opfm.sys)
-    string_line(c, n, f, r) = @sprintf("%15s %15s  %6.2f  %6.2f\n", c, n, f, r)
-    println("    Contingency        Branch    Flow  Rating")
+    nodes = get_sorted_nodes(opfm.sys)
+    idx = get_nodes_idx(nodes)
+    slack = find_slack(nodes)
     b_names = get_name.(branches)
     linerates = get_rate.(branches)
-    for (i,cont) in enumerate(branches)
-        flow = calculate_line_flows(pf, cont, i)
-        for (n,f,r) in zip(b_names, flow, linerates)
-            if abs(f) > r + 0.0001
-                print(string_line(cont, n, f, r))
+    P = get_net_Pᵢ(opfm, nodes, idx)
+    println("Base case")
+    print_power_flow(b_names, value.(opfm.mod[:pf0][get_name.(branches)]).data, linerates)
+    for (c,cont) in enumerate(branches)
+        println("Contingency ", cont.name)
+        flow = get_ptdf(branches[1:end .!= c], length(nodes), idx, slack[1]) * P
+        print_power_flow(b_names[1:end .!= c], flow, linerates[1:end .!= c])
+    end
+end
+
+function print_contingency_overflow(opfm::OPFmodel, pf, ΔP)
+    string_line(c, n, f, r) = @sprintf("%15s %15s  %6.2f  %6.2f\n", c, n, f, r)
+    println("    Contingency        Branch    Flow  Rating")
+    branches = get_sorted_branches(opfm.sys)
+    nodes = get_sorted_nodes(opfm.sys)
+    idx = get_nodes_idx(nodes)
+    b_names = get_name.(branches)
+    linerates = get_rate.(branches)
+    for (c,cont) in enumerate(branches)
+        (f, t) = get_bus_idx(cont, idx)
+        try
+            flow = calculate_line_flows(pf, (f, t), c, 
+                (pf.Pᵢ .+ get_ΔP(opfm, length(nodes), idx, ΔP, c)))
+            for (n,f,r) in zip(b_names, flow, linerates)
+                if abs(f) > r + 0.0001
+                    print(string_line(cont.name, n, f, r))
+                end
             end
+        catch DivideError
+            println("Contingency on line $(cont.name) resulted in islands forming")
         end
     end
 end
+
+function print_contingency_overflow(opfm::OPFmodel)
+    string_line(c, n, f, r) = @sprintf("%15s %15s  %6.2f  %6.2f\n", c, n, f, r)
+    println("    Contingency          Branch    Flow  Rating")
+    branches = get_sorted_branches(opfm.sys)
+    nodes = get_sorted_nodes(opfm.sys)
+    idx = get_nodes_idx(nodes)
+    slack = find_slack(nodes)
+    b_names = get_name.(branches)
+    linerates = get_rate.(branches)
+    P = get_net_Pᵢ(opfm, nodes, idx)
+    for (c,cont) in enumerate(branches)
+        try
+            flow = get_ptdf(branches[1:end .!= c], length(nodes), idx, slack[1]) * P
+            for (n,f,r) in zip(b_names[1:end .!= c], flow, linerates[1:end .!= c])
+                if abs(f) > r + 0.0001
+                    print(string_line(cont.name, n, f, r))
+                end
+            end
+        catch SingularException
+            continue
+        end
+    end
+end
+
+
 # # corrective control failure probability
 # phi(p, n) = sum((-1)^k * p^k * binomial(n,k) for k in 1:n)
 

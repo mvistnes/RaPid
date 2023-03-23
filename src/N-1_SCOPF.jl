@@ -163,7 +163,7 @@ end
 """ Objective with base case and contingency generation and load shedding """
 function add_obj_cont!(opfm::OPFmodel, ramp_minutes)
     opfm = add_obj!(opfm)
-    add_to_expression!(objective_function(opfm.mod),
+    @objective(opfm.mod, Min, objective_function(opfm.mod) + 
             sum(opfm.voll[d] * ramp_minutes / 60 * sum(opfm.prob[c] * opfm.mod[:lsc][d,c] for c in opfm.contingencies)
                     for d in get_name.(get_nonctrl_generation(opfm.sys))
                 )
@@ -174,7 +174,7 @@ end
 """ Objective with base case and contingency generation and load shedding """
 function add_obj_ccont!(opfm::OPFmodel, ramp_minutes, repair_time = 1.0)
     opfm = add_obj_cont!(opfm, ramp_minutes)
-    add_to_expression!(objective_function(opfm.mod),
+    @objective(opfm.mod, Min, objective_function(opfm.mod) + 
             sum(opfm.cost[g] * repair_time * sum(opfm.prob[c] * (opfm.mod[:pgu][g,c] #=+ opfm.mod[:pgd][g,c]*0.1=#) 
                 for c in opfm.contingencies) for g in get_name.(get_ctrl_generation(opfm.sys))
             ) +
