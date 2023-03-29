@@ -1,6 +1,7 @@
 # CC BY 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2022 
 
 using PowerSystems
+import SparseArrays
 
 
 """ Find island(s) in the system returned in a nested Vector.
@@ -38,9 +39,9 @@ function get_islands(sys::System, branches::Vector{<:Branch})
     return islands
 end
 
-function get_islands(nodes::Vector{Integer}, branches::Vector{<:Tuple{Integer, Integer}})
-    islands = Vector()
-    visited_nodes = Vector{Integer}([branches[1][1]]) # start node on island 1 marked as visited
+function get_islands(nodes::Vector{T}, branches::Vector{T2}) where {T<:Integer, T2<:Tuple{Integer, Integer}}
+    islands = Vector{Tuple{Vector{T}, Vector{T2}}}()
+    visited_nodes = Vector{T}([branches[1][1]]) # start node on island 1 marked as visited
     visited_branches, new_nodes = find_connected(branches, first(visited_nodes))
         # all nodes connected are set as neighouring nodes not visited,
         # via visited branches
@@ -58,7 +59,8 @@ function get_islands(nodes::Vector{Integer}, branches::Vector{<:Tuple{Integer, I
             union!(new_nodes, setdiff(bn[2], visited_nodes))
         end
 
-        push!(islands, (sort_nodes!(visited_nodes), sort_branches!(visited_branches)))
+        push!(islands, (visited_nodes, visited_branches))
+        # push!(islands, (sort!(visited_nodes), sort!(visited_branches)))
         bus_number += length(visited_nodes)
 
         bus_numbers == bus_number && break # all nodes are visited 
@@ -100,4 +102,10 @@ function find_connected(branches::Vector{<:Tuple{Integer, Integer}}, node::Integ
         end
     end
     return new_branches, new_nodes
+end
+
+function find_connected(A::SparseArrays.SparseMatrixCSC{<:Integer, <:Integer}, branches::Vector{<:Branch}, node::Integer)
+    (n, b) = SparseArrays.findnz(A[:,node])
+    new_branches = branches[n]
+    return new_branches, union!(get_to.(get_arc.(new_branches)), get_from.(get_arc.(new_branches)))
 end

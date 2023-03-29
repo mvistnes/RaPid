@@ -96,6 +96,14 @@ Input:
 end
 
 " Get the isf-matrix after a line outage using IMML "
+function get_isf(X::AbstractMatrix{<:Real}, B::AbstractMatrix{<:Real}, DA::AbstractMatrix{<:Real}, 
+        from_bus_idx::Integer, to_bus_idx::Integer, branch::Integer
+    )
+    isf = calc_isf(DA, get_changed_X(X, B, DA, from_bus_idx, to_bus_idx, branch))
+    isf[branch,:] .= 0
+    return isf
+end
+
 function get_isf(pf::DCPowerFlow, from_bus_idx::Integer, to_bus_idx::Integer, branch::Integer)
     isf = calc_isf(pf.DA, get_changed_X(pf.X, pf.B, pf.DA, from_bus_idx, to_bus_idx, branch))
     isf[branch,:] .= 0

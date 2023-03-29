@@ -124,18 +124,21 @@ function print_contingency_power_flow(opfm::OPFmodel, pf, ΔP)
     linerates = get_rate.(branches)
     println("Base case")
     print_power_flow(b_names, pf.F, linerates)
+    flow = Vector{Float64}()
     for (c,cont) in enumerate(branches)
         println("Contingency ", cont.name)
         (f, t) = get_bus_idx(cont, idx)
+        δP = get_ΔP(opfm, length(nodes), idx, ΔP, c)
         try
-            print_power_flow(
-                    b_names, 
-                    calculate_line_flows(pf, (f, t), c, 
-                        (pf.Pᵢ .+ get_ΔP(opfm, length(nodes), idx, ΔP, c))), 
-                    linerates
-                )
+            flow = calculate_line_flows(pf, (f, t), c, 
+                        (pf.Pᵢ .+ get_ΔP(opfm, length(nodes), idx, ΔP, c)))
         catch DivideError
-            println("Contingency on line $(cont.name) resulted in islands forming")
+            flow = handle_islands(opfm.sys, pf, branches, δP, (c, get_bus_idx(cont, idx)))
+        end
+        if isempty(flow)
+            println("Contingency ", cont.name, " resulted in a disconnected reference bus.")
+        else
+            print_power_flow(b_names, flow, linerates)
         end
     end
 end
@@ -157,7 +160,7 @@ function print_contingency_power_flow(opfm::OPFmodel)
     end
 end
 
-function print_contingency_overflow(opfm::OPFmodel, pf, ΔP)
+function print_contingency_overflow(opfm::OPFmodel, pf, ΔP, short_term_limit_multi::Float64 = 1.5)
     string_line(c, n, f, r) = @sprintf("%15s %15s  %6.2f  %6.2f\n", c, n, f, r)
     println("    Contingency        Branch    Flow  Rating")
     branches = get_sorted_branches(opfm.sys)
@@ -165,18 +168,19 @@ function print_contingency_overflow(opfm::OPFmodel, pf, ΔP)
     idx = get_nodes_idx(nodes)
     b_names = get_name.(branches)
     linerates = get_rate.(branches)
+    flow = Vector{Float64}()
     for (c,cont) in enumerate(branches)
         (f, t) = get_bus_idx(cont, idx)
+        δP = get_ΔP(opfm, length(nodes), idx, ΔP, c)
         try
-            flow = calculate_line_flows(pf, (f, t), c, 
-                (pf.Pᵢ .+ get_ΔP(opfm, length(nodes), idx, ΔP, c)))
-            for (n,f,r) in zip(b_names, flow, linerates)
-                if abs(f) > r + 0.0001
-                    print(string_line(cont.name, n, f, r))
-                end
-            end
+            flow = calculate_line_flows(pf, (f, t), c, (pf.Pᵢ .+ δP))
         catch DivideError
-            println("Contingency on line $(cont.name) resulted in islands forming")
+            flow = handle_islands(opfm.sys, pf, branches, δP, (c, get_bus_idx(cont, idx)))
+        end
+        for (n,f,r) in zip(b_names, flow, linerates.*short_term_limit_multi)
+            if abs(f) > r + 0.0001
+                print(string_line(cont.name, n, f, r))
+            end
         end
     end
 end

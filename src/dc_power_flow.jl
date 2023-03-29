@@ -190,6 +190,9 @@ end
 """ Return the overload of a line, else return 0.0 """
 find_overload(flow::T, rate::Real) where {T<:Real} = abs(flow)-rate > 0.0 ? sign(flow)*(abs(flow)-rate) : zero(T)
 
+filter_overload(flow::AbstractVector{<:Real}, linerating::AbstractVector{<:Real}, lim::Real = 1e-6) = 
+    [(i,ol) for (i,ol) in enumerate(find_overload.(flow, linerating)) if abs(ol) > lim]
+
 """ Calculate the power flow on the lines from the voltage angles """
 function calc_Pline(branches::AbstractVector{<:Branch}, θ::AbstractVector{<:Real}, idx::Dict{<:Any, <:Int})
     P = zeros(length(branches))

@@ -28,19 +28,24 @@ function add_system_data_to_json(;
 end
 
 function setup(system::System, prob_min = 0.1, prob_max = 0.4)
-    voll = JuMP.Containers.DenseAxisArray(
-        [rand(1000:3000, length(get_components(StaticLoad, system))); rand(1:30, length(get_components(RenewableGen, system)))], 
-        [get_name.(get_components(StaticLoad, system)); get_name.(get_components(RenewableGen, system))]
-    )
-
-    prob = JuMP.Containers.DenseAxisArray(rand(length(get_components(ACBranch, system))) .* (prob_max - prob_min) .+ prob_min,
-        get_name.(get_components(ACBranch, system))
-    )
-    prob /= 8760
+    voll = make_voll(system)
     contingencies = get_name.(SCOPF.get_branches(system))
+    prob = make_prob(contingencies, prob_min, prob_max)
     # contingencies = ["2-3-i_3"]
     return voll, prob, contingencies
 end
+
+""" An array of the Value Of Lost Load for the demand and get_renewables """
+make_voll(sys::System) = JuMP.Containers.DenseAxisArray(
+        [rand(1000:3000, length(get_demands(sys))); rand(1:30, length(get_renewables(sys)))], 
+        [get_name.(get_demands(sys)); get_name.(get_renewables(sys))]
+    )
+
+""" An array of the outage probability of the contingencies """
+make_prob(contingencies::Vector{String}, prob_min = 0.1, prob_max = 0.4) = JuMP.Containers.DenseAxisArray(
+        (rand(length(contingencies)).*(prob_max - prob_min) .+ prob_min)./8760, 
+        contingencies
+    )
 
 get_system(fname::String) = System(joinpath("data",fname))
 
@@ -124,18 +129,6 @@ sort_branches!(branches::Vector{<:Branch}) = sort!(branches,
 make_named_array(value_func, list) = JuMP.Containers.DenseAxisArray(
     [value_func(x) for x in list], get_name.(list) 
 )
-
-""" An array of the Value Of Lost Load for the demand and get_renewables """
-make_voll(sys::System) = JuMP.Containers.DenseAxisArray(
-        [rand(1000:3000, length(get_demands(sys))); rand(1:30, length(get_renewables(sys)))], 
-        [get_name.(get_demands(sys)); get_name.(get_renewables(sys))]
-    )
-
-""" An array of the outage probability of the contingencies """
-make_prob(contingencies::Vector{String}) = JuMP.Containers.DenseAxisArray(
-        (rand(length(contingencies)).*(0.5-0.02).+0.02)./8760, 
-        contingencies
-    )
 
 """ A list with type_func componentes distributed on their node """
 function make_list(opfm::OPFmodel, type_func, nodes = get_nodes(opfm.sys)) 

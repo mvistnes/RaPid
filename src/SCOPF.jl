@@ -36,7 +36,7 @@ export sl_scopf, c_scopf
 =#
 include("dc_power_flow.jl")
 export get_net_Pᵢ, get_Pᵢ, calc_Pᵢ, build_adjacency, connectivitymatrix, calc_A, calc_X, calc_isf, 
-    calc_B, fast_calc_B, calc_D, get_isf, get_ptdf, find_overload, calculate_line_flows, 
+    calc_B, fast_calc_B, calc_D, get_isf, get_ptdf, find_overload, filter_overload, calculate_line_flows, 
     calc_Pline, run_pf
 
 #=
