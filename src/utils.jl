@@ -42,7 +42,7 @@ make_voll(sys::System) = JuMP.Containers.DenseAxisArray(
     )
 
 """ An array of the outage probability of the contingencies """
-make_prob(contingencies::Vector{String}, prob_min = 0.1, prob_max = 0.4) = JuMP.Containers.DenseAxisArray(
+make_prob(contingencies::AbstractVector{String}, prob_min = 0.1, prob_max = 0.4) = JuMP.Containers.DenseAxisArray(
         (rand(length(contingencies)).*(prob_max - prob_min) .+ prob_min)./8760, 
         contingencies
     )
@@ -101,7 +101,7 @@ end
 a(line::String,contingency::String) = line != contingency ? 1 : 0
 
 get_generator_cost(gen) = get_operation_cost(gen) |> get_variable |> get_cost |> _get_g_value
-_get_g_value(x::Vector{<:Tuple{Real, Real}}) = x[1]
+_get_g_value(x::AbstractVector{<:Tuple{Real, Real}}) = x[1]
 _get_g_value(x::Tuple{<:Real, <:Real}) = x
 
 """ An iterator to a type of power system component """
@@ -117,8 +117,8 @@ get_nonctrl_generation(sys::System) = Iterators.flatten((get_demands(sys), get_r
 """ A sorted vector to a type of power system component """
 get_sorted_nodes(sys::System) = sort_nodes!(collect(get_components(Bus, sys)))
 get_sorted_branches(sys::System) = sort_branches!(collect(get_components(ACBranch, sys)))
-sort_nodes!(nodes::Vector{Bus}) = sort!(nodes,by = x -> x.number)
-sort_branches!(branches::Vector{<:Branch}) = sort!(branches,
+sort_nodes!(nodes::AbstractVector{Bus}) = sort!(nodes,by = x -> x.number)
+sort_branches!(branches::AbstractVector{<:Branch}) = sort!(branches,
         by = x -> (get_number(get_arc(x).from), get_number(get_arc(x).to))
     )
 
@@ -144,7 +144,7 @@ end
 """ Return the (first) slack bus in the system. 
 Return: slack bus number in nodes. The slack bus.
 """
-function find_slack(nodes::Vector{Bus})
+function find_slack(nodes::AbstractVector{Bus})
     for (i,x) in enumerate(nodes)
         x.bustype == BusTypes.REF && return i,x
     end
@@ -164,9 +164,9 @@ end
 function solve_model!(model::Model)
     optimize!(model)
     if termination_status(model) != MOI.OPTIMAL 
-        @error "Model not optimally solved with status $(termination_status(model))!"
+        @warn "Model not optimally solved with status $(termination_status(model))!"
     else
-        @info @sprintf "Model solved in %.6f seconds with an objective value of %.4f" solve_time(model) objective_value(model)
+        @info @sprintf "Model solved in %.6fs with objective value %.4f" solve_time(model) objective_value(model)
     end
     return model
 end
@@ -177,7 +177,7 @@ function set_warm_start!(model::JuMP.Model, symb::Symbol)
     JuMP.set_start_value.(model[symb], x_sol)
     return model
 end
-function set_warm_start!(model::JuMP.Model, symbs::Vector{Symbol}) 
+function set_warm_start!(model::JuMP.Model, symbs::AbstractVector{Symbol}) 
     x_sol = [JuMP.value.(model[symb]) for symb in symbs]
     for symb in symbs
         JuMP.set_start_value.(model[symb], x_sol)
@@ -186,7 +186,7 @@ function set_warm_start!(model::JuMP.Model, symbs::Vector{Symbol})
 end
 
 " Get a dict of bus-number-keys and vector-position-values "
-get_nodes_idx(nodes::Vector{Bus}) = _make_ax_ref(nodes)
+get_nodes_idx(nodes::AbstractVector{Bus}) = _make_ax_ref(nodes)
 
 """ Return a Dict of bus name number to index. Deprecated in PowerSystems """
 _make_ax_ref(buses::AbstractVector{Bus}) = _make_ax_ref(get_number.(buses))
@@ -209,6 +209,22 @@ get_bus_id(branch::ACBranch) = (branch.arc.from.number, branch.arc.to.number)
 get_bus_idx(branch::ACBranch, idx::Dict{<:Any, <:Int}) = (idx[branch.arc.from.number], idx[branch.arc.to.number])
 get_bus_idx(branches::AbstractVector{<:Branch}, idx::Dict{<:Any, <:Int}) =
     split_pair(get_bus_idx.(branches, [idx]))
+function get_bus_idx(A::AbstractMatrix)
+    m, n = size(A)
+    ix = [[0,0] for _ in 1:m]
+    rows = SparseArrays.rowvals(A)
+    for j = 1:n
+        for i in SparseArrays.nzrange(A, j)
+            row = rows[i]
+            if iszero(ix[row][1])
+                ix[row][1] = j
+            else
+                ix[row][2] = j
+            end
+        end
+    end
+    return ix
+end
 
 " Split a Vector{Pair} into a Pair{Vector}"
 split_pair(val) = map(first, val), map(last, val)
@@ -222,8 +238,9 @@ PowerSystems.get_active_power(value::StandardLoad) = value.current_active_power
 
 """ Return the net power injected at each node. """
 function get_net_Pᵢ(opfm::OPFmodel, nodes::AbstractVector{Bus}, 
-        idx::Dict{<:Any, <:Int} = get_nodes_idx(nodes), Pᵢ = get_Pᵢ(opfm, nodes)
+        idx::Dict{<:Any, <:Int} = get_nodes_idx(nodes), P = get_Pᵢ(opfm, nodes)
     )
+    Pᵢ = copy(P)
     p = JuMP.value.(opfm.mod[:ls0])
     for r in get_renewables(opfm.sys)
         Pᵢ[idx[r.bus.number]] += get_active_power(r) - p[get_name(r)]

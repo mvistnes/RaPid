@@ -15,7 +15,7 @@ mutable struct DCPowerFlow <: PowerFlow
     slack::Integer # Reference bus
 end
 
-function DCPowerFlow(nodes::AbstractVector{<:Bus}, branches::AbstractVector{<:Branch}, idx::Dict{<:Any, <:Int}, Pᵢ::AbstractVector{<:Real})
+function DCPowerFlow(nodes::AbstractVector{<:Bus}, branches::AbstractVector{<:Branch}, idx::Dict{<:Any, <:Int})
     slack = find_slack(nodes)[1]
     A = calc_A(branches, length(nodes), idx)
     D = calc_D(branches)
@@ -24,9 +24,15 @@ function DCPowerFlow(nodes::AbstractVector{<:Bus}, branches::AbstractVector{<:Br
     X = calc_X(B, slack)
     ϕ = calc_isf(DA, X)
     fact_B = LinearAlgebra.factorize(B)
-    θ = fact_B \ Pᵢ
-    F = calc_Pline(DA, θ)
-    return DCPowerFlow(DA, B, fact_B, X, ϕ, copy(Pᵢ), θ, F, slack)
+    return DCPowerFlow(DA, B, fact_B, X, ϕ, Vector{typeof(first(B))}(), Vector{typeof(first(B))}(), Vector{typeof(first(B))}(), slack)
+end
+
+function DCPowerFlow(nodes::AbstractVector{<:Bus}, branches::AbstractVector{<:Branch}, idx::Dict{<:Any, <:Int}, Pᵢ::AbstractVector{<:Real})
+    pf = DCPowerFlow(nodes, branches, idx)
+    pf.Pᵢ = Pᵢ
+    run_pf!(pf)
+    calc_Pline!(pf)
+    return pf
 end
 
 get_slack(pf::DCPowerFlow) = pf.slack
@@ -51,28 +57,7 @@ function calc_Pᵢ(branches::AbstractVector{<:Branch}, θ::AbstractVector{<:Real
     return P
 end
 
-"""
-Build the adjecency Matrix
-
-Input:
-    - branches: Tuples of the from- and to-node index for each branch
-    - numnodes: The number of nodes in the system
-"""
-function build_adjacency(branches::AbstractVector{<:Tuple{Integer, Integer}}, numnodes::Integer)
-    adj = SparseArrays.spzeros(Int8, numnodes, numnodes)
-    for (f, t) in branches
-        adj[f, t] = 1
-        adj[t, f] = -1
-        adj[f, f] = 1
-        adj[t, t] = 1
-    end
-    return adj
-end
-
-build_adjacency(branches::AbstractVector{<:Branch}, numnodes::Integer, idx::Dict{<:Any, <:Integer}) =
-    build_adjacency(get_bus_idx.(branches, [idx]), numnodes)
-
-""" Make the generator connectivity matrix """
+""" Make the generator connectivity matrix """ # TODO: Fix
 function connectivitymatrix(gens, numnodes::Integer, idx::Dict{<:Any, <:Integer})
     bus = getindex.([idx], get_number.(get_bus.(gens)))
     mx = SparseArrays.spzeros(String, length(gens), numnodes)
@@ -98,19 +83,9 @@ end
 calc_A(branches::AbstractVector{<:Branch}, numnodes::Integer, idx::Dict{<:Any, <:Integer}) =
     calc_A(get_bus_idx.(branches, [idx]), numnodes)
 
-""" Calculate the inverse of the admittance matrix """
-function calc_X(B::AbstractMatrix{T}, slack::Integer) where T<:Real
-    X = Matrix(B)
-    X[:,slack] .= zero(T)
-    X[slack,:] .= zero(T)
-    X[slack,slack] = one(T)
-    X = inv(X)
-    X[slack,slack] = zero(T)
-    return X
-end
-
-calc_isf(A::AbstractMatrix{<:Real}, D::AbstractMatrix{<:Real}, X::AbstractMatrix{<:Real}) = D * A * X
-calc_isf(DA::AbstractMatrix{<:Real}, X::AbstractMatrix{<:Real}) = DA * X
+""" Make the diagonal suseptance matrix """
+calc_D(x::AbstractVector{<:Real}) = LinearAlgebra.Diagonal(1 ./ x)
+calc_D(branches::AbstractVector{<:Branch}) = calc_D(get_x.(branches))
 
 calc_B(A::AbstractMatrix{<:Real}, D::AbstractMatrix{<:Real}) = A' * D * A
 fast_calc_B(A::AbstractMatrix{<:Real}, DA::AbstractMatrix{<:Real}) = A' * DA
@@ -130,9 +105,19 @@ end
 calc_B(branches::AbstractVector{<:Branch}, numnodes::Integer, idx::Dict{<:Any, <:Integer}) =
     calc_B(get_bus_idx.(branches, [idx]), get_x.(branches), numnodes)
 
-""" Make the diagonal suseptance matrix """
-calc_D(x::AbstractVector{<:Real}) = LinearAlgebra.Diagonal(1 ./ x)
-calc_D(branches::AbstractVector{<:Branch}) = calc_D(get_x.(branches))
+""" Calculate the inverse of the admittance matrix """
+function calc_X(B::AbstractMatrix{T}, slack::Integer) where T<:Real
+    X = Matrix(B)
+    X[:,slack] .= zero(T)
+    X[slack,:] .= zero(T)
+    X[slack,slack] = one(T)
+    X = inv(X)
+    X[slack,slack] = zero(T)
+    return X
+end
+
+calc_isf(A::AbstractMatrix{<:Real}, D::AbstractMatrix{<:Real}, X::AbstractMatrix{<:Real}) = D * A * X
+calc_isf(DA::AbstractMatrix{<:Real}, X::AbstractMatrix{<:Real}) = DA * X
 
 """ Make the isf-matrix """
 function get_isf(branches::AbstractVector{<:Branch}, numnodes::Integer, idx::Dict{<:Any, <:Integer}, slack::Integer)
@@ -143,9 +128,10 @@ end
 
 """ Make the isf-matrix after a line outage """
 function get_isf(DA, B, from_bus_idx::Integer, to_bus_idx::Integer, i_branch::Integer, slack::Integer)
-    neutralize_line!(B, from_bus_idx, to_bus_idx, -B[from_bus_idx, to_bus_idx])
+    x = B[from_bus_idx, to_bus_idx] * DA[i_branch, to_bus_idx] / B[from_bus_idx, to_bus_idx]
+    neutralize_line!(B, from_bus_idx, to_bus_idx, -x)
     isf = calc_isf(DA, calc_X(B, slack))
-    neutralize_line!(B, from_bus_idx, to_bus_idx, B[from_bus_idx, to_bus_idx])
+    neutralize_line!(B, from_bus_idx, to_bus_idx, x)
     isf[i_branch,:] .= 0
     return isf
 end
@@ -188,10 +174,14 @@ function get_ptdf(Bx, branches::AbstractVector{<:Branch}, numnodes::Integer, idx
 end
 
 """ Return the overload of a line, else return 0.0 """
-find_overload(flow::T, rate::Real) where {T<:Real} = abs(flow)-rate > 0.0 ? sign(flow)*(abs(flow)-rate) : zero(T)
+find_overload(flow::T, rate::Real, atol::Real = 1e-6) where {T<:Real} = 
+    abs(flow)-rate > atol ? sign(flow)*(abs(flow)-rate) : zero(T)
 
-filter_overload(flow::AbstractVector{<:Real}, linerating::AbstractVector{<:Real}, lim::Real = 1e-6) = 
-    [(i,ol) for (i,ol) in enumerate(find_overload.(flow, linerating)) if abs(ol) > lim]
+filter_overload(flow::AbstractVector{<:Real}, linerating::AbstractVector{<:Real}, atol::Real = 1e-6) = 
+    [(i,ol) for (i,ol) in enumerate(find_overload.(flow, linerating)) if abs(ol) > atol]
+
+filter_overload(Δflow::AbstractVector{<:Tuple}, linerating::AbstractVector{<:Real}, atol::Real = 1e-6) = 
+[(i,find_overload(ol, linerating[i])) for (i,ol) in Δflow if abs(find_overload(ol, linerating[i])) > atol]
 
 """ Calculate the power flow on the lines from the voltage angles """
 function calc_Pline(branches::AbstractVector{<:Branch}, θ::AbstractVector{<:Real}, idx::Dict{<:Any, <:Int})

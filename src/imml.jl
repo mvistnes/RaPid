@@ -1,31 +1,16 @@
 # CC BY 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2022
-# using ReusePatterns
-
-# mutable struct IMML
-#     pf::DCPowerFlow
-#     contingencies::Vector
-#     linerating::Vector{<:Real}
-# end
-
-# function IMML(nodes::AbstractVector{<:Bus}, branches::AbstractVector{<:Branch}, 
-#         idx::Dict{<:Any, <:Int}, Pᵢ::AbstractVector{<:Real}, contingencies
-#     )
-#     return IMML(DCPowerFlow(nodes, branches, idx, Pᵢ), contingencies, get_rate.(branches))
-# end
-# @forward((IMML, :pf), DCPowerFlow)
-# contingencies(imml::IMML) = imml.contingencies
-# linerating(imml::IMML) = imml.linerating
 
 """
 Calculation of voltage angles in a contingency case using IMML
 
 Input:
     - X: The inverse admittance matrix
+    - B: Suseptance matrix
     - DA: Diagonal suseptance matrix times the connectivity matrix
     - θ₀: Inital voltage angles
     - from_bus: From bus index
     - to_bus: To bus index
-    - slack: Slack bus index
+    - branch: Branch index
     - change: The amount of reactance change between the buses, <=1. 
         Default is 1 and this removes all lines
 """
@@ -40,14 +25,14 @@ Input:
         atol=1e-5
     )
     change = DA[branch, to_bus] / B[from_bus, to_bus]
-    x = change .* (X[:,from_bus] .- X[:,to_bus])
+    x = change * (X[:,from_bus] - X[:,to_bus])
     # x[slack] = 0.0
     c⁻¹ = 1/B[from_bus,to_bus] + x[from_bus] - x[to_bus] 
-    delta = 1/c⁻¹ * (θ₀[from_bus] - θ₀[to_bus])
-    if isapprox(delta, 0.0; atol=atol)
+    if isapprox(c⁻¹, zero(typeof(c⁻¹)); atol=atol)
         throw(DivideError())
     end
-    return θ₀ .- x .* delta
+    delta = 1/c⁻¹ * (θ₀[from_bus] - θ₀[to_bus])
+    return θ₀ - x * delta
 end
 
 """ 
@@ -67,10 +52,11 @@ Calculation of the inverse admittance matrix in a contingency case using IMML
 
 Input:
     - X: The inverse admittance matrix
+    - B: Suseptance matrix
     - DA: Diagonal suseptance matrix times the connectivity matrix
     - from_bus: From bus index
     - to_bus: To bus index
-    - slack: Slack bus index
+    - branch: Branch index
     - change: The amount of reactance change between the buses, <=1. 
         Default is 1 and this removes all lines
 """
@@ -86,13 +72,13 @@ Input:
 
     # X_new = X - (X*A[from_bus,:]*DA[from_bus,to_bus]*x)/(1+DA[from_bus,to_bus]*x*A[from_bus,:])
     change = DA[branch, to_bus] / B[from_bus, to_bus]
-    x = X[:,from_bus] .- X[:,to_bus]
-    c⁻¹ = 1/B[from_bus,to_bus] + change * (x[from_bus] - x[to_bus])
-    if isapprox(c⁻¹, 0.0; atol=atol)
+    x = change * (X[:,from_bus] - X[:,to_bus])
+    c⁻¹ = 1/B[from_bus,to_bus] + x[from_bus] - x[to_bus]
+    if isapprox(c⁻¹, zero(typeof(c⁻¹)); atol=atol)
         throw(DivideError())
     end
-    delta = 1/c⁻¹ .* x
-    return X - change .* x .* delta'
+    delta = 1/c⁻¹ * x
+    return X - x * delta'
 end
 
 " Get the isf-matrix after a line outage using IMML "
@@ -104,11 +90,13 @@ function get_isf(X::AbstractMatrix{<:Real}, B::AbstractMatrix{<:Real}, DA::Abstr
     return isf
 end
 
-function get_isf(pf::DCPowerFlow, from_bus_idx::Integer, to_bus_idx::Integer, branch::Integer)
-    isf = calc_isf(pf.DA, get_changed_X(pf.X, pf.B, pf.DA, from_bus_idx, to_bus_idx, branch))
-    isf[branch,:] .= 0
-    return isf
-end
+get_isf(X::AbstractMatrix{<:Real}, B::AbstractMatrix{<:Real}, DA::AbstractMatrix{<:Real}, 
+    from_bus_idx::Integer, to_bus_idx::Integer, branch::Integer, nodes::AbstractVector{<:Integer}, branches::AbstractVector{<:Integer}) =
+    get_isf(view(X, nodes, nodes), view(B, nodes, nodes), view(DA, branches, nodes), 
+                    from_bus_idx, to_bus_idx, branch)
+
+get_isf(pf::DCPowerFlow, from_bus_idx::Integer, to_bus_idx::Integer, branch::Integer) = 
+    get_isf(pf.X, pf.B, pf.DA, from_bus_idx, to_bus_idx, branch)
 
 function calculate_line_flows(
         pf::DCPowerFlow, 
@@ -158,13 +146,13 @@ Input:
         atol=1e-5
     )
     change = DA[branch, to_bus] / B[from_bus, to_bus]
-    x = change .* (X[:,from_bus] .- X[:,to_bus])
+    x = change * (X[:,from_bus] - X[:,to_bus])
     c⁻¹ = 1/B[from_bus,to_bus] + x[from_bus] - x[to_bus]
-    delta = 1/c⁻¹ * (θ₀[from_bus] - θ₀[to_bus])
-    if isapprox(delta, 0.0; atol=atol)
+    if isapprox(c⁻¹, zero(typeof(c⁻¹)); atol=atol)
         throw(DivideError())
     end
-    Pl = Pl0 .- (ptdf[:, from_bus] .- ptdf[:, to_bus]) .* change .* delta
+    delta = 1/c⁻¹ * (θ₀[from_bus] - θ₀[to_bus])
+    Pl = Pl0 - (ptdf[:, from_bus] - ptdf[:, to_bus]) * change * delta
     Pl[branch] = 0.0
     return Pl
 end
@@ -202,6 +190,15 @@ function get_overload(
     )
     find_overload.(calculate_line_flows(pf, cont, branch), linerating)
 end
+
+calculate_line_flows(
+        pf::DCPowerFlow, 
+        branch::Integer,
+        cont::Tuple{Integer, Integer},
+        nodes::AbstractVector{<:Integer}, 
+        branches::AbstractVector{<:Integer}) =
+    calculate_line_flows(view(pf.F, branches), view(pf.ϕ, branches, nodes), view(pf.B, nodes, nodes), 
+        view(pf.DA, branches, nodes), view(pf.X, nodes, nodes),  view(pf.θ, nodes), cont[1], cont[2], branch)
 
 """ 
 LODF value for a contingency at line l_mn change in line k_pq 

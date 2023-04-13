@@ -102,7 +102,7 @@ function print_power_flow(opfm::OPFmodel)
             get_rate.(branches)
         )
 end
-function print_power_flow(names::Vector{String}, flow::Vector{<:Real}, rate::Vector{<:Real})
+function print_power_flow(names::AbstractVector{String}, flow::AbstractVector{<:Real}, rate::AbstractVector{<:Real})
     println("         Branch    Flow  Rating")
     string_line(n, f, r) = @sprintf("%15s  %6.2f  %6.2f\n", n, f, r)
     for (n,f,r) in zip(names, flow, rate)
@@ -116,12 +116,12 @@ function print_power_flow(names::Vector{String}, flow::Vector{<:Real}, rate::Vec
     end
 end
 
-function print_contingency_power_flow(opfm::OPFmodel, pf, ΔP)
+function print_contingency_power_flow(opfm::OPFmodel, pf, ΔP, short_term_limit_multi::Float64 = 1.5)
     branches = get_sorted_branches(opfm.sys)
     nodes = get_sorted_nodes(opfm.sys)
     idx = get_nodes_idx(nodes)
     b_names = get_name.(branches)
-    linerates = get_rate.(branches)
+    linerates = get_rate.(branches) * short_term_limit_multi
     println("Base case")
     print_power_flow(b_names, pf.F, linerates)
     flow = Vector{Float64}()
@@ -133,7 +133,10 @@ function print_contingency_power_flow(opfm::OPFmodel, pf, ΔP)
             flow = calculate_line_flows(pf, (f, t), c, 
                         (pf.Pᵢ .+ get_ΔP(opfm, length(nodes), idx, ΔP, c)))
         catch DivideError
-            flow = handle_islands(opfm.sys, pf, branches, δP, (c, get_bus_idx(cont, idx)))
+            island, island_b = handle_islands(pf, (c, get_bus_idx(cont, idx)))
+            ptdf = zeros(eltype(pf.ϕ), size(pf.ϕ))
+            ptdf[island_b, island] = get_isf(pf.X, pf.B, pf.DA, f, t, c, island, island_b)
+            flow = ptdf * (pf.Pᵢ .+ δP)
         end
         if isempty(flow)
             println("Contingency ", cont.name, " resulted in a disconnected reference bus.")
@@ -143,13 +146,13 @@ function print_contingency_power_flow(opfm::OPFmodel, pf, ΔP)
     end
 end
 
-function print_contingency_power_flow(opfm::OPFmodel)
+function print_contingency_power_flow(opfm::OPFmodel, short_term_limit_multi::Float64 = 1.5)
     branches = get_sorted_branches(opfm.sys)
     nodes = get_sorted_nodes(opfm.sys)
     idx = get_nodes_idx(nodes)
     slack = find_slack(nodes)
     b_names = get_name.(branches)
-    linerates = get_rate.(branches)
+    linerates = get_rate.(branches) * short_term_limit_multi
     P = get_net_Pᵢ(opfm, nodes, idx)
     println("Base case")
     print_power_flow(b_names, value.(opfm.mod[:pf0][get_name.(branches)]).data, linerates)
@@ -167,7 +170,7 @@ function print_contingency_overflow(opfm::OPFmodel, pf, ΔP, short_term_limit_mu
     nodes = get_sorted_nodes(opfm.sys)
     idx = get_nodes_idx(nodes)
     b_names = get_name.(branches)
-    linerates = get_rate.(branches)
+    linerates = get_rate.(branches) * short_term_limit_multi
     flow = Vector{Float64}()
     for (c,cont) in enumerate(branches)
         (f, t) = get_bus_idx(cont, idx)
@@ -175,9 +178,17 @@ function print_contingency_overflow(opfm::OPFmodel, pf, ΔP, short_term_limit_mu
         try
             flow = calculate_line_flows(pf, (f, t), c, (pf.Pᵢ .+ δP))
         catch DivideError
-            flow = handle_islands(opfm.sys, pf, branches, δP, (c, get_bus_idx(cont, idx)))
+            island, island_b = handle_islands(pf, (c, get_bus_idx(cont, idx)))
+            ptdf = zeros(eltype(pf.ϕ), size(pf.ϕ))
+            try
+                ptdf[island_b, island] = get_isf(pf.X, pf.B, pf.DA, f, t, c, island, island_b)
+                flow = ptdf * (pf.Pᵢ .+ δP)
+                catch DivideError
+                    @warn "Islands forming due to contingency on line $(f)-$(t)-i_$c."
+                    continue
+                end
         end
-        for (n,f,r) in zip(b_names, flow, linerates.*short_term_limit_multi)
+        for (n,f,r) in zip(b_names, flow, linerates)
             if abs(f) > r + 0.0001
                 print(string_line(cont.name, n, f, r))
             end
@@ -185,7 +196,7 @@ function print_contingency_overflow(opfm::OPFmodel, pf, ΔP, short_term_limit_mu
     end
 end
 
-function print_contingency_overflow(opfm::OPFmodel)
+function print_contingency_overflow(opfm::OPFmodel, short_term_limit_multi::Float64 = 1.5)
     string_line(c, n, f, r) = @sprintf("%15s %15s  %6.2f  %6.2f\n", c, n, f, r)
     println("    Contingency          Branch    Flow  Rating")
     branches = get_sorted_branches(opfm.sys)
@@ -193,7 +204,7 @@ function print_contingency_overflow(opfm::OPFmodel)
     idx = get_nodes_idx(nodes)
     slack = find_slack(nodes)
     b_names = get_name.(branches)
-    linerates = get_rate.(branches)
+    linerates = get_rate.(branches) * short_term_limit_multi
     P = get_net_Pᵢ(opfm, nodes, idx)
     for (c,cont) in enumerate(branches)
         try
