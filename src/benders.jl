@@ -18,7 +18,7 @@ system.
 """
 function run_benders(type::OPF, system::System, voll, prob; ramp_minutes = 10, ramp_mult = 10, max_shed = 0.1, lim = 1e-6, short_term_limit_multi::Float64 = 1.5)
     # set_rate!.(get_branches(system), get_rate.(get_branches(system))*0.9)
-    opfm = scopf(SC, system, Gurobi.Optimizer, voll=voll, ramp_minutes=ramp_minutes, max_shed=max_shed, short_term_limit_multi=short_term_limit_multi)
+    opfm = scopf(SC, system, Gurobi.Optimizer, voll=voll, ramp_minutes=ramp_minutes, max_shed=max_shed, short_term_limit_multi=short_term_limit_multi,renewable_prod = 1.0)
     MOI.set(opfm.mod, MOI.Silent(), true) # supress output from the solver
     solve_model!(opfm.mod)
     total_solve_time = solve_time(opfm.mod)
@@ -73,14 +73,14 @@ function run_benders(type::OPF, system::System, voll, prob; ramp_minutes = 10, r
         (c, cont), state = next
         island = Vector{Vector{Int64}}() 
         island_b = Vector{Vector{Int64}}()
-        try
+        # try
             try
                 flow = calculate_line_flows(pf, cont, c)
                 overloads = filter_overload(flow, linerating)
             catch DivideError
-                island, island_b = handle_islands(pf, (c, cont))
+                island, island_b = handle_islands(pf, cont, c)
                 try
-                    flow = calculate_line_flows(pf, c, cont, island, island_b)
+                    flow = calculate_line_flows(pf, cont, c, island, island_b)
                     if isempty(flow)
                         @debug "Reference node isolated due to contingency on line $(cont[1])-$(cont[2])-i_$c."
                         overloads = [] # the reference node is not connected to any other nodes
@@ -94,27 +94,37 @@ function run_benders(type::OPF, system::System, voll, prob; ramp_minutes = 10, r
             end
             if !isempty(overloads) # ptdf calculation is more expensive than line flow
                 δP = get_ΔP(opfm, length(nodes), idx, ΔP, c)
-                if overloads == [1]
-                    ptdf = get_isf(pf.DA, pf.B, cont[1], cont[2], c, pf.slack)
-                    overloads = filter_overload(ptdf * (pf.Pᵢ .+ δP), linerating)
-                elseif isempty(island)
-                    ptdf = get_isf(pf, cont[1], cont[2], c)
-                    overloads = filter_overload(ptdf * (pf.Pᵢ .+ δP), linerating)
-                    # print(c)
-                    # println(pf.Pᵢ)
+                # if overloads == [1] 
+                if isempty(island)
+                    ptdf = get_isf(pf.DA, pf.B, cont, c, pf.slack)
                 else
                     fill!(ptdf, zero(eltype(ptdf)))
-                    ptdf[island_b, island] = get_isf(pf.X, pf.B, pf.DA, cont[1], cont[2], c, island, island_b)
-                    flow = ptdf * (pf.Pᵢ .+ δP)
-                    overloads = filter_overload(flow, linerating)
+                    DA = pf.DA[island_b, island]
+                    cn = searchsortedfirst(island_b, c)
+                    ptdf[island_b, island] = get_isf(DA, pf.B[island, island], Tuple(DA[cn,:].nzind), cn,
+                        searchsortedfirst(island, pf.slack) # searchsorted(island, pf.slack)
+                    )
                 end
+                overloads = filter_overload(ptdf * (pf.Pᵢ .+ δP), linerating)
+                # elseif isempty(island)
+                #     ptdf = get_isf(pf, cont, c)
+                #     overloads = filter_overload(ptdf * (pf.Pᵢ .+ δP), linerating)
+                #     # print(c)
+                #     # println(pf.Pᵢ)
+                # else
+                #     fill!(ptdf, zero(eltype(ptdf)))
+                #     ptdf[island_b, island] = get_isf(pf.X, pf.B, pf.DA, cont, c, island)
+                #     flow = ptdf * (pf.Pᵢ .+ δP)
+                #     overloads = filter_overload(flow, linerating)
+                # end
             end
-        catch e
-            overloads = []
-            @warn "Contingency on line $(cont[1])-$(cont[2])-i_$c resulted in $e."
-        end
+        # catch e
+        #     overloads = []
+        #     @warn "Contingency on line $(cont[1])-$(cont[2])-i_$c resulted in $e."
+        # end
         if !isempty(overloads)
-            # add_contingency(opfm, prob, branches[c].name, ramp_minutes=ramp_minutes, ramp_mult=ramp_mult, max_shed=max_shed, lim=lim, short_term_limit_multi=short_term_limit_multi)
+            # add_contingency(opfm, prob, branches[c].name, ramp_minutes=ramp_minutes, ramp_mult=ramp_mult, 
+            #     max_shed=max_shed, lim=lim, short_term_limit_multi=short_term_limit_multi)
             overloads_st = filter_overload(overloads, linerating * (short_term_limit_multi - 1.0))
             
             # Add preventive actions
@@ -259,39 +269,6 @@ function get_ΔP(opfm::OPFmodel, numnodes::Integer, idx::Dict{<:Any, <:Int}, ΔP
     return δP
 end
 
-function handle_islands(pf::DCPowerFlow, contingency::Tuple{Integer, Tuple{Integer, Integer}})
-    islands = island_detection(pf.B, contingency[2][1], contingency[2][2])
-    for island in islands
-        if pf.slack ∈ island
-            island_b = sort!(unique!(pf.DA[:,island].rowval))[1:end .!= contingency[1]]
-            if length(island) > 1 && length(island_b) > 1
-                return island, island_b
-            end
-            return [], []
-        end
-    end
-    return [], []
-end
-
-# function handle_islands(system::System, pf::DCPowerFlow, branches::AbstractVector{<:ACBranch},
-#         δP::AbstractVector{<:Real}, contingency::Tuple{Integer, Tuple{Integer, Integer}})
-#     islands = get_islands(system, branches[1:end .!= contingency[1]])
-#     for island in islands
-#         if pf.slack ∈ get_number.(island[1]) # Nodes in island 1
-#             island_idx = get_nodes_idx(island[1])
-#             drop_id = sort!(collect(values(island_idx)))
-#             drop_cont = [j for (j,b) in enumerate(branches) if b.name != branches[contingency[1]].name && b.name ∈ get_name.(island[2])]
-#             if length(drop_id) > 1 && length(drop_cont) > 1
-#                 ptdf = get_isf(view(pf.X, drop_id, drop_id), view(pf.B, drop_id, drop_id), view(pf.DA, drop_cont, drop_id), 
-#                     contingency[2][1], contingency[2][1], contingency[1])
-#                 return ptdf * getindex((pf.Pᵢ .+ δP), drop_id)
-#             end
-#             return []
-#         end
-#     end
-#     return []
-# end
-
 " An AffExpr nicely formatted to a string "
 sprint_expr(expr::AffExpr, lim = 1e-6) = 
     join(Printf.@sprintf("%s%5.2f %s ", (x[2] > 0 ? "+" : "-"), abs(x[2]), x[1]) 
@@ -335,7 +312,7 @@ function findall_overloads(pf, idx, branches, linerating)
             ol = filter_overload(flow, linerating)
         catch DivideError
             @info "Islands forming due to contingency on line $c $(cont[1])-$(cont[2])."
-            island, island_b = handle_islands(pf, (c, cont))
+            island, island_b = handle_islands(pf, cont, c)
             flow = calculate_line_flows(pf, c, cont, island, island_b)
             ol = filter_overload(flow, view(linerating, island_b))
         end

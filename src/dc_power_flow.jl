@@ -116,6 +116,19 @@ function calc_X(B::AbstractMatrix{T}, slack::Integer) where T<:Real
     return X
 end
 
+""" 
+    Calculate the inverse of the admittance matrix after a line outage. 
+    cont[1] (from_bus), cont[2] (to_bus), and i_branch are index numbers 
+"""
+function calc_X(DA, B, cont::Tuple{Integer, Integer}, i_branch::Integer, slack::Integer)
+    x = B[cont[1], cont[2]] * DA[i_branch, cont[2]] / B[cont[1], cont[2]]
+    neutralize_line!(B, cont[1], cont[2], -x)
+    X = calc_X(B, slack)
+    neutralize_line!(B, cont[1], cont[2], x)
+    # X[i_branch,:] .= 0
+    return X
+end
+
 calc_isf(A::AbstractMatrix{<:Real}, D::AbstractMatrix{<:Real}, X::AbstractMatrix{<:Real}) = D * A * X
 calc_isf(DA::AbstractMatrix{<:Real}, X::AbstractMatrix{<:Real}) = DA * X
 
@@ -126,19 +139,18 @@ function get_isf(branches::AbstractVector{<:Branch}, numnodes::Integer, idx::Dic
     return calc_isf(A, D, calc_X(calc_B(A, D), slack))
 end
 
-""" Make the isf-matrix after a line outage """
-function get_isf(DA, B, from_bus_idx::Integer, to_bus_idx::Integer, i_branch::Integer, slack::Integer)
-    x = B[from_bus_idx, to_bus_idx] * DA[i_branch, to_bus_idx] / B[from_bus_idx, to_bus_idx]
-    neutralize_line!(B, from_bus_idx, to_bus_idx, -x)
-    isf = calc_isf(DA, calc_X(B, slack))
-    neutralize_line!(B, from_bus_idx, to_bus_idx, x)
+""" 
+    Make the isf-matrix after a line outage using base case D*A and B. 
+    cont[1] (from_bus), cont[2] (to_bus), and i_branch are index numbers 
+"""
+function get_isf(DA, B, cont::Tuple{Integer, Integer}, i_branch::Integer, slack::Integer)
+    X = calc_X(DA, B, cont, i_branch, slack)
+    isf = calc_isf(DA, X)
     isf[i_branch,:] .= 0
     return isf
 end
-function get_isf(DA, B, idx::Dict{<:Any, <:Integer}, i_branch::Integer, branch::Branch, slack::Integer)
-    (f, t) = get_bus_idx(branch, idx)
-    return get_isf(DA, B, f, t, i_branch, slack)
-end
+get_isf(DA, B, idx::Dict{<:Any, <:Integer}, i_branch::Integer, branch::Branch, slack::Integer) = 
+    get_isf(DA, B, get_bus_idx(branch, idx), i_branch, slack)
 
 function neutralize_line!(B::AbstractMatrix, i::Integer, j::Integer, val::Real)
     B[i,j] += val
@@ -181,7 +193,7 @@ filter_overload(flow::AbstractVector{<:Real}, linerating::AbstractVector{<:Real}
     [(i,ol) for (i,ol) in enumerate(find_overload.(flow, linerating)) if abs(ol) > atol]
 
 filter_overload(Δflow::AbstractVector{<:Tuple}, linerating::AbstractVector{<:Real}, atol::Real = 1e-6) = 
-[(i,find_overload(ol, linerating[i])) for (i,ol) in Δflow if abs(find_overload(ol, linerating[i])) > atol]
+    [(i,find_overload(ol, linerating[i])) for (i,ol) in Δflow if abs(find_overload(ol, linerating[i])) > atol]
 
 """ Calculate the power flow on the lines from the voltage angles """
 function calc_Pline(branches::AbstractVector{<:Branch}, θ::AbstractVector{<:Real}, idx::Dict{<:Any, <:Int})

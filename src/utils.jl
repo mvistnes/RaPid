@@ -98,7 +98,7 @@ function beta(sys::System, branch::String)
     return [beta(b, l) for b in get_nodes(sys)]
 end
 
-a(line::String,contingency::String) = line != contingency ? 1 : 0
+a(line::String,contingency::String) = ifelse(line != contingency, 1, 0)
 
 get_generator_cost(gen) = get_operation_cost(gen) |> get_variable |> get_cost |> _get_g_value
 _get_g_value(x::AbstractVector{<:Tuple{Real, Real}}) = x[1]
@@ -107,7 +107,8 @@ _get_g_value(x::Tuple{<:Real, <:Real}) = x
 """ An iterator to a type of power system component """
 get_gens_t(sys::System) = get_components(ThermalGen, sys)
 get_gens_h(sys::System) = get_components(HydroGen, sys)
-get_branches(sys::System) = get_components(ACBranch, sys) # Includes both Line and Phase Shifting Transformer
+get_branches(sys::System) = get_components(ACBranch, sys) # Includes both Line, Transformer, and Phase Shifting Transformer
+get_dc_branches(sys::System) = get_components(DCBranch, sys) 
 get_nodes(sys::System) = get_components(Bus, sys)
 get_demands(sys::System) = get_components(StaticLoad, sys)
 get_renewables(sys::System) = get_components(RenewableGen, sys) # Renewable modelled as negative demand
@@ -115,8 +116,8 @@ get_ctrl_generation(sys::System) = Iterators.flatten((get_gens_t(sys), get_gens_
 get_nonctrl_generation(sys::System) = Iterators.flatten((get_demands(sys), get_renewables(sys))) # An iterator of all non-controllable load and generation
 
 """ A sorted vector to a type of power system component """
-get_sorted_nodes(sys::System) = sort_nodes!(collect(get_components(Bus, sys)))
-get_sorted_branches(sys::System) = sort_branches!(collect(get_components(ACBranch, sys)))
+get_sorted_nodes(sys::System) = sort_nodes!(collect(get_nodes(sys)))
+get_sorted_branches(sys::System) = sort_branches!(collect(get_branches(sys)))
 sort_nodes!(nodes::AbstractVector{Bus}) = sort!(nodes,by = x -> x.number)
 sort_branches!(branches::AbstractVector{<:Branch}) = sort!(branches,
         by = x -> (get_number(get_arc(x).from), get_number(get_arc(x).to))
@@ -129,6 +130,7 @@ sort_branches!(branches::AbstractVector{<:Branch}) = sort!(branches,
 make_named_array(value_func, list) = JuMP.Containers.DenseAxisArray(
     [value_func(x) for x in list], get_name.(list) 
 )
+
 
 """ A list with type_func componentes distributed on their node """
 function make_list(opfm::OPFmodel, type_func, nodes = get_nodes(opfm.sys)) 
@@ -148,7 +150,7 @@ function find_slack(nodes::AbstractVector{Bus})
     for (i,x) in enumerate(nodes)
         x.bustype == BusTypes.REF && return i,x
     end
-    @warn "No slack bus found!"
+    @error "No slack bus found!"
 end
 find_slack(sys::System) = find_slack(get_sorted_nodes(sys))
 
@@ -205,10 +207,17 @@ end
 # TODO: remove the need for idx in most functions, use array
 
 " Get the bus number of the from-bus and to-bus from a branch "
-get_bus_id(branch::ACBranch) = (branch.arc.from.number, branch.arc.to.number)
-get_bus_idx(branch::ACBranch, idx::Dict{<:Any, <:Int}) = (idx[branch.arc.from.number], idx[branch.arc.to.number])
+get_bus_id(branch::Branch) = (branch.arc.from.number, branch.arc.to.number)
+
+" Get the bus number index of the from-bus and to-bus from a branch "
+get_bus_idx(branch::Branch, idx::Dict{<:Any, <:Int}) = 
+    (idx[branch.arc.from.number], idx[branch.arc.to.number])
+
+" Get the bus number index of the from-bus and to-bus from all branches "
 get_bus_idx(branches::AbstractVector{<:Branch}, idx::Dict{<:Any, <:Int}) =
     split_pair(get_bus_idx.(branches, [idx]))
+
+" Get the bus number index of the from-bus and to-bus from all branches "
 function get_bus_idx(A::AbstractMatrix)
     m, n = size(A)
     ix = [[0,0] for _ in 1:m]

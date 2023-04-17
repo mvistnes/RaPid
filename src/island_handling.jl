@@ -3,7 +3,7 @@
 using PowerSystems
 import SparseArrays
 
-
+# FIX: Sometimes breaks
 """ Find island(s) in the system returned in a nested Vector.
 Each element of the Vector consists of two lists, nodes and branches, in that island. """
 function get_islands(sys::System, branches::AbstractVector{<:Branch})
@@ -32,17 +32,17 @@ function get_islands(sys::System, branches::AbstractVector{<:Branch})
 
         bus_number_tot == bus_number && break # all nodes are visited 
         if bus_number_tot < bus_number 
-            for i in islands
-                j = ""
-                for k in sort!(i[1], by = x -> x.name)
-                    if j == k
-                        println(j.name)
-                    else
-                        j=k
-                    end
-                end
-                #@show get_name.(i[2])
-            end
+            # for i in islands
+            #     j = ""
+            #     for k in sort!(i[1], by = x -> x.name)
+            #         if j == k
+            #             println(j.name)
+            #         else
+            #             j=k
+            #         end
+            #     end
+            #     #@show get_name.(i[2])
+            # end
             throw("More nodes counted, $(bus_number), than nodes in the system, $(bus_number_tot)!")
         end
 
@@ -53,6 +53,7 @@ function get_islands(sys::System, branches::AbstractVector{<:Branch})
     return islands
 end
 
+# FIX: Sometimes breaks
 function get_islands(nodes::AbstractVector{T}, branches::AbstractVector{T2}) where {T<:Integer, T2<:Tuple{Integer, Integer}}
     islands = Vector{Tuple{Vector{T}, Vector{T2}}}()
     visited_nodes = Vector{T}([branches[1][1]]) # start node on island 1 marked as visited
@@ -73,7 +74,7 @@ function get_islands(nodes::AbstractVector{T}, branches::AbstractVector{T2}) whe
             union!(new_nodes, setdiff(bn[2], visited_nodes))
         end
 
-        println(visited_nodes, visited_branches)
+        # println(visited_nodes, visited_branches)
         push!(islands, (visited_nodes, visited_branches))
         # push!(islands, (sort!(visited_nodes), sort!(visited_branches)))
         bus_number += length(visited_nodes)
@@ -84,6 +85,40 @@ function get_islands(nodes::AbstractVector{T}, branches::AbstractVector{T2}) whe
         visited_nodes = Vector([setdiff(nodes, visited_nodes) |> first])
                     # a random node not visited yet starts a new island
         visited_branches, new_nodes = find_connected(branches, first(visited_nodes))
+    end
+    return islands
+end
+
+function get_islands(T::SparseArrays.SparseMatrixCSC{<:Any, Ty}) where Ty <: Integer
+    islands = Vector{Vector{Ty}}()
+    visited_nodes = Vector{Ty}() # start node on island 1 marked as visited
+    new_nodes = T[:,1].nzind
+        # all nodes connected are set as neighouring nodes not visited,
+        # via visited branches
+
+    bus_number_tot = size(T,1)
+    bus_number = 0
+    while true
+
+        # Visit new nodes until there are no neighouring nodes connected
+        while !isempty(new_nodes)
+            node = pop!(new_nodes)
+            push!(visited_nodes, node)
+            bn = T[:,node].nzind
+            union!(new_nodes, setdiff(bn, visited_nodes))
+        end
+
+        # println(visited_nodes, visited_branches)
+        push!(islands, visited_nodes)
+        # push!(islands, (sort!(visited_nodes), sort!(visited_branches)))
+        bus_number += length(visited_nodes)
+
+        bus_number_tot == bus_number && break # all nodes are visited 
+        bus_number_tot < bus_number && throw("More nodes counted, $(bus_number), than nodes in the system, $(bus_number_tot)!")
+
+        visited_nodes = Vector([setdiff(nodes, visited_nodes) |> first])
+                    # a random node not visited yet starts a new island
+        new_nodes = T[:,first(visited_nodes)].nzind
     end
     return islands
 end
@@ -125,6 +160,123 @@ function find_connected(A::SparseArrays.SparseMatrixCSC{<:Integer, <:Integer}, b
     return new_branches, union!(get_to.(get_arc.(new_branches)), get_from.(get_arc.(new_branches)))
 end
 
+"""
+    Find islands after a contingency.
+    Removes all connection between the two nodes i and j.
+"""
+function island_detection(T::SparseArrays.SparseMatrixCSC{Ty, <:Integer}, i::Integer, j::Integer; atol::Real = 1e-5) where Ty
+    val = T[i, j]
+    T[i, j] = zero(Ty)
+    T[j, i] = zero(Ty)
+    T[i, i] = isapprox(T[i, i], val, atol=atol) ? zero(Ty) : T[i, i] + val
+    T[j, j] = isapprox(T[j, j], val, atol=atol) ? zero(Ty) : T[j, j] + val
+        # Values need to be exactly zero to be eliminated from the SparseMatrix in the algorithm
+    islands = island_detection(create_connectivity_matrix(T))
+    T[i, j] += val
+    T[j, i] += val
+    T[i, i] -= val
+    T[j, j] -= val
+    if sum(length(i) for i in islands) != size(T, 1) 
+        @warn "Counted nodes $(sum(length(i) for i in islands)) != total nodes $(size(T, 1)) in contingency of line $i-$j !"
+    end
+    return islands
+end
+
+function handle_islands(pf::DCPowerFlow, contingency::Tuple{Integer, Integer}, branch::Integer)
+    islands = island_detection(pf.B, contingency[1], contingency[2])
+    for island in islands
+        if pf.slack ∈ island
+            island_b = sort!(unique!(pf.DA[:,island].rowval))[1:end .!= branch]
+            if length(island) > 1 && length(island_b) > 1
+                return island, island_b
+            end
+            return [], []
+        end
+    end
+    return [], []
+end
+
+function handle_islands(B::AbstractMatrix, contingency::Tuple{Integer, Integer}, slack::Integer)
+    islands = island_detection(B, contingency[1], contingency[2])
+    for island in islands
+        if slack ∈ island
+            return length(island) > 1 ? island : []
+                # Need at least two nodes to make a valid system
+        end
+    end
+    return []
+end
+
+" Get all islands with the reference bus from all bx contingencies "
+get_all_islands(B::AbstractMatrix, bx::Vector{<:Tuple{Integer, Integer}}, slack::Integer) = 
+    [handle_islands(B, bx[i], slack) for i in eachindex(bx)]
+function get_all_islands(opfm::OPFmodel, slack::Integer)
+    nodes = get_sorted_nodes(opfm.sys)
+    branches = get_sorted_branches(opfm.sys)
+    idx = get_nodes_idx(nodes)
+    bx = get_bus_idx.(branches, [idx])
+    A = calc_A(bx, length(nodes))
+    return get_all_islands(A'*A, bx, slack)
+end
+
+function find_islands(T::SparseArrays.SparseMatrixCSC{<:Any, <:Integer})
+    n_buses = size(T, 1)
+    bus_islands = []
+    nodes = []
+    node = 1 
+    n_isolated_buses = 0
+    # Find the isolated buses
+    for (i, bus) in enumerate(SparseArrays.diag(T))
+        if bus == 0.0
+            push!(bus_islands, [i])
+            push!(nodes, i)
+            n_isolated_buses += 1
+            # In case the first buses are isolated
+            if node == i
+                node += 1
+            end
+        end
+    end
+    while true
+        n_nodes = new_islands(T, node)
+        push!(bus_islands, n_nodes)
+        append!(nodes, n_nodes)
+        if n_buses - n_isolated_buses > sum(length.(bus_islands), init=0)
+            node = first(setdiff(1:n_buses, nodes))
+        else
+            break
+        end
+    end
+    return bus_islands
+end
+
+
+function new_islands(T::SparseArrays.SparseMatrixCSC{<:Any, <:Integer}, node::Integer)
+    island = T[:,node].nzind
+    for i in island
+        union!(island,T[:,i].nzind)
+        # print(i, " ")
+    end
+    return island
+end
+
+function test_imml_island_handling(pf::DCPowerFlow, bx::Vector{<:Tuple{Integer, Integer}})
+    for (i,b) in enumerate(bx)
+        is = SCOPF.island_detection(pf.B, b[1], b[2])
+        try
+            flow = SCOPF.calculate_line_flows(pf, b, i)
+            if length(is) > 1
+                println(i, b, [x for x in is if length(x) < 100])
+            end
+        catch
+            if length(is) < 2
+                @warn "Error and no islands!"
+            end
+        end
+    end
+end
+
+
 #################################################################################################
 # The code under this line is created by Sigurd Jakobsen (2023) in SINT_LF
 #################################################################################################
@@ -156,7 +308,7 @@ end
 """
 function island_detection(T::SparseArrays.SparseMatrixCSC{<:Any, Ty}) where Ty <: Integer
     n_buses = size(T, 1)
-    bus_islands = Vector{Vector{Ty}}()
+    bus_islands = []
     islands = 0
     conn = SparseArrays.spzeros(Bool, n_buses)
     idx = 1 
@@ -165,7 +317,7 @@ function island_detection(T::SparseArrays.SparseMatrixCSC{<:Any, Ty}) where Ty <
     # Find the isolated buses
     for (i, bus) in enumerate(SparseArrays.diag(T))
         if bus == 0
-            append!(bus_islands, i)
+            push!(bus_islands, [i])
             n_isolated_buses += 1
             # In case the first buses are isolated
             if idx == i
@@ -174,7 +326,7 @@ function island_detection(T::SparseArrays.SparseMatrixCSC{<:Any, Ty}) where Ty <
         end
     end
     
-    row = T[:, idx]
+    row = T[idx, :]
     nelm = SparseArrays.nnz(row) 
     
     while true
@@ -204,21 +356,8 @@ function island_detection(T::SparseArrays.SparseMatrixCSC{<:Any, Ty}) where Ty <
                 break
             end
         end
-        row = T[:, idx]
+        row = T[idx, :]
         nelm = SparseArrays.nnz(row) 
     end
     return bus_islands
-end
-
-function island_detection(T::SparseArrays.SparseMatrixCSC{Ty, <:Integer}, i::Integer, j::Integer) where Ty
-    val = T[i, j]
-    T[i, j] -= val
-    T[j, i] -= val
-    islands = island_detection(T)
-    T[i, j] += val
-    T[j, i] += val
-    if sum(length(i) for i in islands) != size(T, 1) 
-        @warn "Counted nodes $(sum(length(i) for i in islands)) != total nodes $size(T, 1) in contingency of line $i-$j !"
-    end
-    return islands
 end

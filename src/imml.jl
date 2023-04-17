@@ -16,18 +16,16 @@ Input:
 """
 @views function get_changed_angles(
         X::AbstractMatrix{<:Real}, 
-        B::AbstractMatrix{<:Real}, 
-        DA::AbstractMatrix{<:Real},
+        b::Real, 
+        change::Real,
         θ₀::AbstractVector{<:Real}, 
         from_bus::Integer, 
-        to_bus::Integer, 
-        branch::Integer; 
-        atol=1e-5
+        to_bus::Integer; 
+        atol::Real = 1e-5
     )
-    change = DA[branch, to_bus] / B[from_bus, to_bus]
+    # change = DA[branch, to_bus] / B[from_bus, to_bus]
     x = change * (X[:,from_bus] - X[:,to_bus])
-    # x[slack] = 0.0
-    c⁻¹ = 1/B[from_bus,to_bus] + x[from_bus] - x[to_bus] 
+    c⁻¹ = 1/b + x[from_bus] - x[to_bus] 
     if isapprox(c⁻¹, zero(typeof(c⁻¹)); atol=atol)
         throw(DivideError())
     end
@@ -40,8 +38,9 @@ Calculate the power flow on the lines from the connectivity
 and the diagonal admittance matrices and the voltage angles
 in a contingency of the branch number.
 """
-function calc_Pline(pf::DCPowerFlow, from_bus_idx::Integer, to_bus_idx::Integer, branch::Integer)
-    θ = get_changed_angles(pf.X, pf.B, pf.DA, pf.θ, from_bus_idx, to_bus_idx, branch)
+function calc_Pline(pf::DCPowerFlow, cont::Tuple{Integer, Integer}, branch::Integer)
+    θ = get_changed_angles(pf.X, pf.B[cont[1], cont[2]], pf.DA[branch, cont[2]] / pf.B[cont[1], cont[2]], 
+        pf.θ, cont[1], cont[2])
     P = calc_Pline(pf.DA, θ)
     P[branch] = 0.0
     return P
@@ -62,41 +61,44 @@ Input:
 """
 @views function get_changed_X(
         X::AbstractMatrix{<:Real}, 
-        B::AbstractMatrix{<:Real}, 
-        DA::AbstractMatrix{<:Real},
+        b::Real, 
+        change::Real,
         from_bus::Integer, 
-        to_bus::Integer, 
+        to_bus::Integer,
         branch::Integer; 
-        atol=1e-5
+        atol::Real = 1e-5
     )
 
     # X_new = X - (X*A[from_bus,:]*DA[from_bus,to_bus]*x)/(1+DA[from_bus,to_bus]*x*A[from_bus,:])
-    change = DA[branch, to_bus] / B[from_bus, to_bus]
-    x = change * (X[:,from_bus] - X[:,to_bus])
-    c⁻¹ = 1/B[from_bus,to_bus] + x[from_bus] - x[to_bus]
+    # change = DA[branch, to_bus] / B[from_bus, to_bus]
+    x = (X[:,from_bus] - X[:,to_bus])
+    c⁻¹ = 1/b + change * (x[from_bus] - x[to_bus])
     if isapprox(c⁻¹, zero(typeof(c⁻¹)); atol=atol)
         throw(DivideError())
     end
     delta = 1/c⁻¹ * x
-    return X - x * delta'
+    return X - change * x * delta'
 end
 
 " Get the isf-matrix after a line outage using IMML "
 function get_isf(X::AbstractMatrix{<:Real}, B::AbstractMatrix{<:Real}, DA::AbstractMatrix{<:Real}, 
-        from_bus_idx::Integer, to_bus_idx::Integer, branch::Integer
+        cont::Tuple{Integer, Integer}, branch::Integer
     )
-    isf = calc_isf(DA, get_changed_X(X, B, DA, from_bus_idx, to_bus_idx, branch))
+    isf = calc_isf(DA, get_changed_X(X, B[cont[1], cont[2]], DA[branch, cont[2]] / B[cont[1], cont[2]], cont[1], cont[2], branch))
     isf[branch,:] .= 0
     return isf
 end
 
-get_isf(X::AbstractMatrix{<:Real}, B::AbstractMatrix{<:Real}, DA::AbstractMatrix{<:Real}, 
-    from_bus_idx::Integer, to_bus_idx::Integer, branch::Integer, nodes::AbstractVector{<:Integer}, branches::AbstractVector{<:Integer}) =
-    get_isf(view(X, nodes, nodes), view(B, nodes, nodes), view(DA, branches, nodes), 
-                    from_bus_idx, to_bus_idx, branch)
+function get_isf(X::AbstractMatrix{<:Real}, B::AbstractMatrix{<:Real}, DA::AbstractMatrix{<:Real}, 
+        cont::Tuple{Integer, Integer}, branch::Integer, nodes::AbstractVector{<:Integer})
+    isf = calc_isf(DA, get_changed_X(view(X, nodes, nodes), B[cont[1], cont[2]], DA[branch, cont[2]] / B[cont[1], cont[2]], 
+        findfirst(x -> x == cont[1], nodes), findfirst(x -> x == cont[2], nodes), branch))
+    isf[branch,:] .= 0
+    return isf
+end
 
-get_isf(pf::DCPowerFlow, from_bus_idx::Integer, to_bus_idx::Integer, branch::Integer) = 
-    get_isf(pf.X, pf.B, pf.DA, from_bus_idx, to_bus_idx, branch)
+get_isf(pf::DCPowerFlow, cont::Tuple{Integer, Integer}, branch::Integer) = 
+    get_isf(pf.X, pf.B, pf.DA, cont, branch)
 
 function calculate_line_flows(
         pf::DCPowerFlow, 
@@ -104,7 +106,7 @@ function calculate_line_flows(
         branch::Integer, 
         Pᵢ::AbstractVector{<:Real}
     ) 
-    get_isf(pf, cont[1], cont[2], branch)*Pᵢ
+    get_isf(pf, cont, branch)*Pᵢ
 end
 
 function get_overload(
@@ -136,18 +138,18 @@ Input:
 @views function calculate_line_flows(
         Pl0::AbstractVector{<:Real},
         ptdf::AbstractMatrix{<:Real},
-        B::AbstractMatrix{<:Real}, 
-        DA::AbstractMatrix{<:Real},
+        b::Real, 
+        change::Real,
         X::AbstractMatrix{<:Real}, 
         θ₀::AbstractVector{<:Real}, 
         from_bus::Integer, 
         to_bus::Integer, 
         branch::Integer; 
-        atol=1e-5
+        atol::Real = 1e-5
     )
-    change = DA[branch, to_bus] / B[from_bus, to_bus]
+    # change = DA[branch, to_bus] / B[from_bus, to_bus]
     x = change * (X[:,from_bus] - X[:,to_bus])
-    c⁻¹ = 1/B[from_bus,to_bus] + x[from_bus] - x[to_bus]
+    c⁻¹ = 1/b + x[from_bus] - x[to_bus]
     if isapprox(c⁻¹, zero(typeof(c⁻¹)); atol=atol)
         throw(DivideError())
     end
@@ -159,10 +161,12 @@ end
 
 function calculate_line_flows(
         pf::DCPowerFlow,
-        cont::Tuple{Integer, Integer},
+        cont::Tuple{Integer, Integer}, 
         branch::Integer
     )
-    calculate_line_flows(pf.F, pf.ϕ, pf.B, pf.DA, pf.X, pf.θ, cont[1], cont[2], branch)
+    calculate_line_flows(pf.F, pf.ϕ, pf.B[cont[1], cont[2]], 
+        pf.DA[branch, cont[2]] / pf.B[cont[1], cont[2]], 
+        pf.X, pf.θ, cont[1], cont[2], branch)
 end
 
 function get_overload(
@@ -172,8 +176,8 @@ function get_overload(
         DA::AbstractMatrix{<:Real}, 
         X::AbstractMatrix{<:Real}, 
         θ::AbstractVector{<:Real}, 
-        branch::Integer,
         cont::Tuple{Integer, Integer},
+        branch::Integer,
         linerating::AbstractVector{<:Real}
     )
     find_overload.(
@@ -184,8 +188,8 @@ end
 
 function get_overload(
         pf::DCPowerFlow,
-        branch::Integer,
         cont::Tuple{Integer, Integer},
+        branch::Integer, 
         linerating::AbstractVector{<:Real}
     )
     find_overload.(calculate_line_flows(pf, cont, branch), linerating)
@@ -193,12 +197,14 @@ end
 
 calculate_line_flows(
         pf::DCPowerFlow, 
+        cont::Tuple{Integer, Integer}, 
         branch::Integer,
-        cont::Tuple{Integer, Integer},
         nodes::AbstractVector{<:Integer}, 
         branches::AbstractVector{<:Integer}) =
-    calculate_line_flows(view(pf.F, branches), view(pf.ϕ, branches, nodes), view(pf.B, nodes, nodes), 
-        view(pf.DA, branches, nodes), view(pf.X, nodes, nodes),  view(pf.θ, nodes), cont[1], cont[2], branch)
+    calculate_line_flows(view(pf.F, branches), view(pf.ϕ, branches, nodes), pf.B[cont[1], cont[2]], 
+        pf.DA[branch, cont[2]] / pf.B[cont[1], cont[2]], view(pf.X, nodes, nodes), view(pf.θ, nodes), 
+        findfirst(x -> x == cont[1], nodes), findfirst(x -> x == cont[2], nodes), 
+        findfirst(x -> x == branch, branches))
 
 """ 
 LODF value for a contingency at line l_mn change in line k_pq 
