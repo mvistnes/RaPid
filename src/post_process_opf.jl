@@ -133,9 +133,9 @@ function print_contingency_power_flow(opfm::OPFmodel, pf, ΔP, short_term_limit_
             flow = calculate_line_flows(pf, (f, t), c, 
                         (pf.Pᵢ .+ get_ΔP(opfm, length(nodes), idx, ΔP, c)))
         catch DivideError
-            island, island_b = handle_islands(pf, (c, get_bus_idx(cont, idx)))
+            island, island_b = handle_islands(pf, get_bus_idx(cont, idx), c)
             ptdf = zeros(eltype(pf.ϕ), size(pf.ϕ))
-            ptdf[island_b, island] = get_isf(pf.X, pf.B, pf.DA, f, t, c, island, island_b)
+            ptdf[island_b, island] = get_isf(pf.X, pf.B, pf.DA, (f, t), c, island,)
             flow = ptdf * (pf.Pᵢ .+ δP)
         end
         if isempty(flow)
@@ -178,10 +178,10 @@ function print_contingency_overflow(opfm::OPFmodel, pf, ΔP, short_term_limit_mu
         try
             flow = calculate_line_flows(pf, (f, t), c, (pf.Pᵢ .+ δP))
         catch DivideError
-            island, island_b = handle_islands(pf, (c, get_bus_idx(cont, idx)))
+            island, island_b = handle_islands(pf, get_bus_idx(cont, idx), c)
             ptdf = zeros(eltype(pf.ϕ), size(pf.ϕ))
             try
-                ptdf[island_b, island] = get_isf(pf.X, pf.B, pf.DA, f, t, c, island, island_b)
+                ptdf[island_b, island] = get_isf(pf.X, pf.B, pf.DA, (f, t), c, island)
                 flow = ptdf * (pf.Pᵢ .+ δP)
                 catch DivideError
                     @warn "Islands forming due to contingency on line $(f)-$(t)-i_$c."

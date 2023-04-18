@@ -29,16 +29,21 @@ end
 
 function setup(system::System, prob_min = 0.1, prob_max = 0.4)
     voll = make_voll(system)
+    cost_renewables = make_cost_renewables(system)
     contingencies = get_name.(SCOPF.get_branches(system))
     prob = make_prob(contingencies, prob_min, prob_max)
     # contingencies = ["2-3-i_3"]
-    return voll, prob, contingencies
+    return voll, cost_renewables, prob, contingencies
 end
 
-""" An array of the Value Of Lost Load for the demand and get_renewables """
+""" An array of the Value Of Lost Load for the demand and renewables """
 make_voll(sys::System) = JuMP.Containers.DenseAxisArray(
-        [rand(1000:3000, length(get_demands(sys))); rand(1:30, length(get_renewables(sys)))], 
-        [get_name.(get_demands(sys)); get_name.(get_renewables(sys))]
+        rand(1000:3000, length(get_demands(sys))), 
+        get_name.(get_demands(sys))
+    )
+make_cost_renewables(sys::System) = JuMP.Containers.DenseAxisArray(
+        rand(1:30, length(get_renewables(sys))), 
+        get_name.(get_renewables(sys))
     )
 
 """ An array of the outage probability of the contingencies """
@@ -53,15 +58,15 @@ get_system(fname::String) = System(joinpath("data",fname))
 mutable struct OPFmodel
     sys::PowerSystems.System
     mod::JuMP.Model
-    # beta::Union{Nothing, JuMP.Containers.DenseAxisArray} # Should convert to sparse some time in the future
     voll::JuMP.Containers.DenseAxisArray
-    cost::JuMP.Containers.DenseAxisArray
+    cost_gen::JuMP.Containers.DenseAxisArray
+    cost_renewables::JuMP.Containers.DenseAxisArray
     contingencies::Union{Nothing, Vector{String}}
     prob::Union{Nothing, JuMP.Containers.DenseAxisArray}
 end
 
 """ Constructor for OPFmodel """
-function opfmodel(sys::System, optimizer, time_limit_sec, voll=nothing, contingencies=nothing, prob=nothing)
+function opfmodel(sys::System, optimizer, time_limit_sec, voll=nothing, cost_renewables=nothing, contingencies=nothing, prob=nothing)
     mod = Model(optimizer)
     # mod = Model(optimizer; add_bridges = false)
     set_string_names_on_creation(mod, false)
@@ -74,8 +79,9 @@ function opfmodel(sys::System, optimizer, time_limit_sec, voll=nothing, continge
     #     set_optimizer_attribute(mod, "msg_lev", GLPK.GLP_MSG_ON)
     # end
     c = [get_generator_cost(g)[2] for g in get_gens_t(sys)]
-    cost = JuMP.Containers.DenseAxisArray(
-            [c; [Statistics.mean(c) for _ in get_gens_h(sys)]],
+    c_mean = Statistics.mean(c)
+    cost_gen = JuMP.Containers.DenseAxisArray(
+            [c; [c_mean for _ in get_gens_h(sys)]],
             get_name.(get_ctrl_generation(sys))
         )
     # β = JuMP.Containers.DenseAxisArray{Int64}(undef, get_name.(get_nodes(sys)), get_name.(get_branches(sys)))
@@ -84,10 +90,7 @@ function opfmodel(sys::System, optimizer, time_limit_sec, voll=nothing, continge
     #     β[get_name(l.arc.to), get_name(l)] = -1
     # end
 
-    # @assert length(voll) == length(get_nonctrl_generation(sys)) # should be implemented
-    # @assert isempty(prob) || length(contingencies) == length(prob)
-
-    return OPFmodel(sys, mod, voll, cost, contingencies, prob)
+    return OPFmodel(sys, mod, voll, cost_gen, cost_renewables, contingencies, prob)
 end
 
 """Find value of β, β = 1 if from-bus is the bus, β = -1 if to-bus is the bus, 0 else"""
@@ -113,7 +116,7 @@ get_nodes(sys::System) = get_components(Bus, sys)
 get_demands(sys::System) = get_components(StaticLoad, sys)
 get_renewables(sys::System) = get_components(RenewableGen, sys) # Renewable modelled as negative demand
 get_ctrl_generation(sys::System) = Iterators.flatten((get_gens_t(sys), get_gens_h(sys))) # An iterator of all controllable generators
-get_nonctrl_generation(sys::System) = Iterators.flatten((get_demands(sys), get_renewables(sys))) # An iterator of all non-controllable load and generation
+get_generation(sys::System) = Iterators.flatten((get_ctrl_generation(sys), get_renewables(sys))) # An iterator of all generation
 
 """ A sorted vector to a type of power system component """
 get_sorted_nodes(sys::System) = sort_nodes!(collect(get_nodes(sys)))
@@ -142,6 +145,12 @@ function make_list(opfm::OPFmodel, type_func, nodes = get_nodes(opfm.sys))
     end
     return list
 end
+
+find_in_model(mod::Model, ctrl::ThermalGen, name::String) = mod[:pg0][name]
+find_in_model(mod::Model, ctrl::HydroGen, name::String) = mod[:pg0][name]
+find_in_model(mod::Model, r::RenewableGen, name::String) = mod[:pr0][name]
+find_in_model(mod::Model, d::StaticLoad, name::String) = -mod[:ls0][name]
+find_in_model(mod::Model, dc::DCBranch, name::String) = -mod[:pfdc0][name]
 
 """ Return the (first) slack bus in the system. 
 Return: slack bus number in nodes. The slack bus.
@@ -247,13 +256,14 @@ PowerSystems.get_active_power(value::StandardLoad) = value.current_active_power
 
 """ Return the net power injected at each node. """
 function get_net_Pᵢ(opfm::OPFmodel, nodes::AbstractVector{Bus}, 
-        idx::Dict{<:Any, <:Int} = get_nodes_idx(nodes), P = get_Pᵢ(opfm, nodes)
+        idx::Dict{<:Any, <:Int} = get_nodes_idx(nodes), P = get_Pgen(opfm, nodes)
     )
     Pᵢ = copy(P)
-    p = JuMP.value.(opfm.mod[:ls0])
+    p = JuMP.value.(opfm.mod[:pr0])
     for r in get_renewables(opfm.sys)
         Pᵢ[idx[r.bus.number]] += get_active_power(r) - p[get_name(r)]
     end
+    p = JuMP.value.(opfm.mod[:ls0])
     for d in get_demands(opfm.sys)
         Pᵢ[idx[d.bus.number]] -= get_active_power(d) + p[get_name(d)]
     end
@@ -261,17 +271,38 @@ function get_net_Pᵢ(opfm::OPFmodel, nodes::AbstractVector{Bus},
     return Pᵢ
 end
 
+function get_Pd(opfm::OPFmodel, nodes::AbstractVector{Bus}, 
+        idx::Dict{<:Any, <:Int} = get_nodes_idx(nodes))
+    P = zeros(length(nodes))
+    for r in get_renewables(opfm.sys)
+        add_device_value_to_node!(P, get_number(get_bus(r)), get_active_power(r), idx)
+    end
+    for d in get_demands(opfm.sys)
+        add_device_value_to_node!(P, get_number(get_bus(d)), -get_active_power(d), idx)
+    end
+    # @assert abs(sum(P)) < 0.001
+    return P
+end
+
 """ Return the power injected by controlled generation at each node. """
-function get_Pᵢ(opfm::OPFmodel, nodes::AbstractVector{Bus}, 
+function get_Pgen(opfm::OPFmodel, nodes::AbstractVector{Bus}, 
         idx::Dict{<:Any, <:Int} = get_nodes_idx(nodes)
     )
-    Pᵢ = zeros(length(nodes))
+    P = zeros(length(nodes))
     p = JuMP.value.(opfm.mod[:pg0])
-    for g in get_ctrl_generation(opfm.sys)
-        Pᵢ[idx[g.bus.number]] += p[get_name(g)]
-    end
-    return Pᵢ
+    pn = get_number.(get_bus.(get_ctrl_generation(opfm.sys)))
+    add_device_value_to_node!.([P], pn, p, [idx])
+
+    p = JuMP.value.(opfm.mod[:pfdc0])
+    a = get_arc.(get_dc_branches(opfm.sys))
+    from = get_number.(get_from.(a))
+    to = get_number.(get_to.(a))
+    add_device_value_to_node!.([P], from, p, [idx])
+    add_device_value_to_node!.([P], to, -p, [idx])
+    return P
 end
+
+add_device_value_to_node!(arr::AbstractVector, device::Integer, val::Real, idx::Dict{<:Any, <:Int}) = arr[idx[device]] += val
 
 
 " Calculate the severity index for the system based on line loading "

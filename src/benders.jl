@@ -16,9 +16,11 @@ Function creates extra production constraints on generators in the system
 based on the power transfer distribution factors of the generators in the
 system. 
 """
-function run_benders(type::OPF, system::System, voll, prob; ramp_minutes = 10, ramp_mult = 10, max_shed = 0.1, lim = 1e-6, short_term_limit_multi::Float64 = 1.5)
-    # set_rate!.(get_branches(system), get_rate.(get_branches(system))*0.9)
-    opfm = scopf(SC, system, Gurobi.Optimizer, voll=voll, ramp_minutes=ramp_minutes, max_shed=max_shed, short_term_limit_multi=short_term_limit_multi,renewable_prod = 1.0)
+function run_benders(type::OPF, system::System, voll, prob, cost_renewables; 
+        ramp_minutes = 10, ramp_mult = 10, max_shed = 0.1, lim = 1e-6, short_term_limit_multi::Float64 = 1.5)
+    # set_rate!.(get_branches(system), get_rate.(get_branches(system))*0.8) # run once for the IEEE RTS system
+    opfm = scopf(SC, system, Gurobi.Optimizer, voll=voll, cost_renewables=cost_renewables, 
+        ramp_minutes=ramp_minutes, max_shed=max_shed, short_term_limit_multi=short_term_limit_multi, renewable_prod = 1.0)
     MOI.set(opfm.mod, MOI.Silent(), true) # supress output from the solver
     solve_model!(opfm.mod)
     total_solve_time = solve_time(opfm.mod)
@@ -36,12 +38,15 @@ function run_benders(type::OPF, system::System, voll, prob; ramp_minutes = 10, r
     list_demands = make_list(opfm, get_demands)
     # cgen = connectivitymatrix(opfm.sys, length(nodes), idx)
     ctrl_generation = get_name.(get_ctrl_generation(opfm.sys))
+    dc_branch = get_name.(get_dc_branches(opfm.sys))
     renewables = get_name.(get_renewables(opfm.sys))
     demands = get_name.(get_demands(opfm.sys))
     linerating = get_rate.(branches)
     pg_lim = make_named_array(get_active_power_limits, get_ctrl_generation(opfm.sys))
-    pd_lim = make_named_array(get_active_power, get_nonctrl_generation(opfm.sys))
-    ΔP = Dict{Int, NTuple{4, Any}}() # Holds the ramp up and down for contingencies that need
+    pr_lim = make_named_array(get_active_power, get_renewables(opfm.sys))
+    dc_lim = make_named_array(get_active_power_limits_from, get_dc_branches(opfm.sys))
+    pd_lim = make_named_array(get_active_power, get_demands(opfm.sys))
+    ΔP = Dict{Int, NTuple{5, Any}}() # Holds the ramp up and down for contingencies that need
     overloads = []
     island = Vector{Vector{Int64}}() 
     island_b = Vector{Vector{Int64}}()
@@ -49,7 +54,7 @@ function run_benders(type::OPF, system::System, voll, prob; ramp_minutes = 10, r
     # Get initial state
     pf = SCOPF.DCPowerFlow(nodes, branches, idx, get_net_Pᵢ(opfm, nodes, idx))
     ptdf = pf.ϕ
-    P = get_Pᵢ(opfm, nodes)
+    P = get_Pgen(opfm, nodes)
     # print_contingency_overflow(opfm, pf, ΔP, 1.0)
 
     it = enumerate(get_bus_idx.(branches, [idx]))
@@ -132,7 +137,7 @@ function run_benders(type::OPF, system::System, voll, prob; ramp_minutes = 10, r
                 expr = JuMP.@expression(opfm.mod, sum(
                         (ptdf[i, in] * (P[in] - 
                         sum((opfm.mod[:pg0][ctrl.name] for ctrl in list_ctrl[n.name]), init=0.0) +
-                        sum((opfm.mod[:ls0][r.name] for r in list_renewables[n.name]), init=0.0) +
+                        sum((opfm.mod[:pr0][r.name] for r in list_renewables[n.name]), init=0.0) +
                         sum((opfm.mod[:ls0][d.name] for d in list_demands[n.name]), init=0.0))
                         for (in, n) in enumerate(nodes) if abs(ptdf[i, in]) > lim), init=0.0
                     ) )
@@ -156,6 +161,7 @@ function run_benders(type::OPF, system::System, voll, prob; ramp_minutes = 10, r
                         # active power variables for the generators in contingencies ramp up 
                     pgd = JuMP.@variable(opfm.mod, [g in ctrl_generation], base_name = "pgd", lower_bound = 0)
                             # and ramp down
+                    pfdccc = JuMP.@variable(opfm.mod, [d in dc_branch], base_name = "pfdccc")
                     prcc = JuMP.@variable(opfm.mod, [r in renewables], base_name = "prcc", lower_bound = 0)
                     lscc = JuMP.@variable(opfm.mod, [d in demands], base_name = "lscc", lower_bound = 0)
                             # load curtailment variables in in contingencies
@@ -163,12 +169,13 @@ function run_benders(type::OPF, system::System, voll, prob; ramp_minutes = 10, r
                         set_upper_bound(pgu[get_name(g)], get_ramp_limits(g).up * ramp_minutes)
                         set_upper_bound(pgd[get_name(g)], get_ramp_limits(g).down * ramp_minutes)
                     end
-                    ΔP[c] = (pgu, pgd, prcc, lscc)
+                    ΔP[c] = (pgu, pgd, pfdccc, prcc, lscc)
                 else # If the contingency is run before, a set of corrective variables already exist
                     pgu = x[1]
                     pgd = x[2]
-                    prcc = x[3]
-                    lscc = x[4]
+                    pfdccc = x[3]
+                    prcc = x[4]
+                    lscc = x[5]
                 end
 
                 # sort!(overloads, rev = true, by = x -> abs(x[2]))
@@ -178,8 +185,9 @@ function run_benders(type::OPF, system::System, voll, prob; ramp_minutes = 10, r
                     expr = JuMP.@expression(opfm.mod, sum((ptdf[i, in] * (P[in] - 
                             sum((opfm.mod[:pg0][ctrl.name] + pgu[ctrl.name] - pgd[ctrl.name] 
                                 for ctrl in list_ctrl[n.name]), init=0.0) -
-                            sum((opfm.mod[:ls0][r.name] + prcc[r.name] 
+                            sum((opfm.mod[:pr0][r.name] + prcc[r.name] 
                                 for r in list_renewables[n.name]), init=0.0) +
+                            sum((beta(n, d) * pfdccc[d.name] for d in dc_branch), init=0.0) +
                             sum((opfm.mod[:ls0][d.name] + lscc[d.name] 
                                 for d in list_demands[n.name]), init=0.0))
                             for (in, n) in enumerate(nodes) if abs(ptdf[i, in]) > lim), init=0.0
@@ -199,11 +207,9 @@ function run_benders(type::OPF, system::System, voll, prob; ramp_minutes = 10, r
                 # Extend the objective with the corrective variables
                 c_name = branches[c].name
                 @objective(opfm.mod, Min, objective_function(opfm.mod) + prob[c_name] * 
-                    (sum(opfm.voll[d] * (# ramp_minutes / 60 * opfm.mod[:lsc][d,c] +
-                        lscc[d]) for d in demands
-                        ) +
-                    sum(opfm.voll[r] * prcc[r] for r in renewables) +
-                    sum(opfm.cost[g] * ramp_mult * pgu[g] for g in ctrl_generation)
+                    (sum(opfm.voll.data' * lscc) +
+                    sum(opfm.cost_renewables.data' * prcc) +
+                    sum(opfm.cost_gen.data' * ramp_mult * pgu)
                     ) )
 
                 # Add new constraints that limit the corrective variables within operating limits
@@ -211,7 +217,9 @@ function run_benders(type::OPF, system::System, voll, prob; ramp_minutes = 10, r
                 JuMP.@constraint(opfm.mod, [g = ctrl_generation], 
                     0 <= opfm.mod[:pg0][g] + pgu[g] - pgd[g] <= pg_lim[g].max)
                 JuMP.@constraint(opfm.mod, [r = renewables], 
-                    0 <= opfm.mod[:ls0][r] + prcc[r] <= pd_lim[r] * max_shed)
+                    0 <= opfm.mod[:ls0][r] + prcc[r] <= pr_lim[r] * max_shed)
+                JuMP.@constraint(opfm.mod, [d = dc_branch], 
+                    dc_lim[d].min <= opfm.mod[:pfdc][d] + pfdccc[d] <= dc_lim[d].max)
                 JuMP.@constraint(opfm.mod, [d = demands], 
                     0 <= opfm.mod[:ls0][d] + lscc[d] <= pd_lim[d] * max_shed)
             end
@@ -239,7 +247,7 @@ end
 
 """ Solve model and update the power flow object """
 function update_model!(opfm, pf, nodes, idx)
-    P = get_Pᵢ(opfm, nodes, idx)
+    P = get_Pgen(opfm, nodes, idx)
     pf.Pᵢ = get_net_Pᵢ(opfm, nodes, idx, P)
     calculate_line_flows!(pf)
     run_pf!(pf)
@@ -253,11 +261,16 @@ function get_ΔP(opfm::OPFmodel, numnodes::Integer, idx::Dict{<:Any, <:Int}, ΔP
     if x != 0
         pgu = JuMP.value.(x[1])
         pgd = JuMP.value.(x[2])
-        prcc = JuMP.value.(x[3])
-        lscc = JuMP.value.(x[4])
+        pfdccc = JuMP.value.(x[3])
+        prcc = JuMP.value.(x[4])
+        lscc = JuMP.value.(x[5])
         
         for g in get_ctrl_generation(opfm.sys)
             δP[idx[g.bus.number]] += pgu[get_name(g)] - pgd[get_name(g)]
+        end
+        for g in get_dc_branches(opfm.sys)
+            δP[idx[g.arc.from.number]] -= pfdccc[get_name(g)]
+            δP[idx[g.arc.to.number]] += pfdccc[get_name(g)]
         end
         for g in get_renewables(opfm.sys)
             δP[idx[g.bus.number]] += prcc[get_name(g)]
@@ -285,19 +298,27 @@ function print_benders_results(opfm::OPFmodel, ΔP)
             end
         end
     end
-    for g in get_name.(get_renewables(opfm.sys))
-        @printf("%s: %.3f\n", g, JuMP.value(opfm.mod[:ls0][g]))
+    for g in get_name.(get_dc_branches(opfm.sys))
+        @printf("%s: %.3f\n", g, JuMP.value(opfm.mod[:pfdc0][g]))
         for (i,c) in ΔP
             if JuMP.value(c[3][g]) > 0.0001
-                @printf("   c%s: prcc: %.3f\n", i, JuMP.value(c[3][g]))
+                @printf("   c%s: pfdccc: %.3f\n", i, JuMP.value(c[4][g]))
+            end
+        end
+    end
+    for g in get_name.(get_renewables(opfm.sys))
+        @printf("%s: %.3f\n", g, JuMP.value(opfm.mod[:pr0][g]))
+        for (i,c) in ΔP
+            if JuMP.value(c[4][g]) > 0.0001
+                @printf("   c%s: prcc: %.3f\n", i, JuMP.value(c[4][g]))
             end
         end
     end
     for g in get_name.(get_demands(opfm.sys))
         @printf("%s: %.3f\n", g, JuMP.value(opfm.mod[:ls0][g]))
         for (i,c) in ΔP
-            if JuMP.value(c[4][g]) > 0.0001
-                @printf("   c%s: lscc: %.3f\n", i, JuMP.value(c[4][g]))
+            if JuMP.value(c[5][g]) > 0.0001
+                @printf("   c%s: lscc: %.3f\n", i, JuMP.value(c[5][g]))
             end
         end
     end
@@ -330,6 +351,7 @@ function add_contingency(opfm, prob, c_name; ramp_minutes = 10, ramp_mult = 10, 
     # active power variables for the generators in contingencies ramp up 
     pgd = JuMP.@variable(opfm.mod, [g in get_name.(get_ctrl_generation(opfm.sys))], base_name = "pgd", lower_bound = 0)
             # and ramp down
+    pfdccc = JuMP.@variable(opfm.mod, [d in get_name.(get_dc_branches(opfm.sys))], base_name = "pfdccc")
     prcc = JuMP.@variable(opfm.mod, [r in get_name.(get_renewables(opfm.sys))], base_name = "prcc", lower_bound = 0)
     lscc = JuMP.@variable(opfm.mod, [d in get_name.(get_demands(opfm.sys))], base_name = "lscc", lower_bound = 0)
             # load curtailment variables in in contingencies
@@ -350,7 +372,8 @@ function add_contingency(opfm, prob, c_name; ramp_minutes = 10, ramp_mult = 10, 
 
     @constraint(opfm.mod, [n = get_name.(get_nodes(opfm.sys))],
         sum(g.bus.name == n ? opfm.mod[:pg0][get_name(g)] + pgu[get_name(g)] - pgd[get_name(g)] : 0 for g in get_ctrl_generation(opfm.sys)) -
-        sum(beta(n,l) * pfcc[get_name(l)] for l in get_branches(opfm.sys)) == 
+        sum(beta(n,l) * pfcc[get_name(l)] for l in get_branches(opfm.sys)) -
+        sum(beta(n,l) * pfdccc[get_name(l)] for l in get_dc_branches(opfm.sys)) == 
         sum(d.bus.name == n ? get_active_power(d) - lscc[get_name(d)] : 0 for d in get_demands(opfm.sys)) +
         sum(d.bus.name == n ? -get_active_power(d) + prcc[get_name(d)] : 0 for d in get_renewables(opfm.sys))
     )
@@ -364,6 +387,10 @@ function add_contingency(opfm, prob, c_name; ramp_minutes = 10, ramp_mult = 10, 
     x = make_named_array(get_x, get_branches(opfm.sys))
     @constraint(opfm.mod, [l = get_name.(get_branches(opfm.sys))],
         pfcc[l] .- sum(beta(opfm.sys,l) .* vacc[:]) ./ x[l] .== 0
+    )
+    branch_rating = make_named_array(get_active_power_limits_from, get_dc_branches(opfm.sys))
+    @constraint(opfm.mod, [l = get_name.(get_dc_branches(opfm.sys)), c = opfm.contingencies], 
+        branch_rating[l].min <= opfm.mod[:pfdccc][l,c] <= branch_rating[l].max
     )
 
     for g in get_ctrl_generation(opfm.sys)
