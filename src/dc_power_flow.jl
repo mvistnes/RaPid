@@ -9,7 +9,6 @@ mutable struct DCPowerFlow <: PowerFlow
     fact_B # A factorization of the admittance matrix
     X::AbstractMatrix{<:Real} # Inverse of the admittance matrix
     ϕ::AbstractMatrix{<:Real} # PTDF matrix
-    Pᵢ::AbstractVector{<:Real} # Net power vector
     θ::AbstractVector{<:Real} # Bus voltage angles
     F::AbstractVector{<:Real} # Line power flow
     slack::Integer # Reference bus
@@ -24,13 +23,12 @@ function DCPowerFlow(nodes::AbstractVector{<:Bus}, branches::AbstractVector{<:Br
     X = calc_X(B, slack)
     ϕ = calc_isf(DA, X)
     fact_B = LinearAlgebra.factorize(B)
-    return DCPowerFlow(DA, B, fact_B, X, ϕ, Vector{typeof(first(B))}(), Vector{typeof(first(B))}(), Vector{typeof(first(B))}(), slack)
+    return DCPowerFlow(DA, B, fact_B, X, ϕ, Vector{typeof(first(B))}(), Vector{typeof(first(B))}(), slack)
 end
 
-function DCPowerFlow(nodes::AbstractVector{<:Bus}, branches::AbstractVector{<:Branch}, idx::Dict{<:Any, <:Int}, Pᵢ::AbstractVector{<:Real})
+function DCPowerFlow(model::Model, nodes::AbstractVector{<:Bus}, branches::AbstractVector{<:Branch}, idx::Dict{<:Any, <:Int})
     pf = DCPowerFlow(nodes, branches, idx)
-    pf.Pᵢ = Pᵢ
-    run_pf!(pf)
+    set_θ!(pf, model, nodes)
     calc_Pline!(pf)
     return pf
 end
@@ -41,18 +39,33 @@ get_B(pf::DCPowerFlow) = pf.B
 get_fact_B(pf::DCPowerFlow) = pf.fact_B
 get_X(pf::DCPowerFlow) = pf.X
 get_ϕ(pf::DCPowerFlow) = pf.ϕ
-get_Pᵢ(pf::DCPowerFlow) = pf.Pᵢ
 get_θ(pf::DCPowerFlow) = pf.θ
 
+set_θ!(pf::DCPowerFlow, model::Model, nodes::AbstractVector{<:Bus}) = 
+    pf.θ = get_sorted_angles(model, nodes)
+
 """ Calculate the net power for each node from the voltage angles """
-function calc_Pᵢ(branches::AbstractVector{<:Branch}, θ::AbstractVector{<:Real}, numnodes::Int64, idx::Dict{<:Any, <:Int}, outage::Tuple = (0,0))
+function calc_Pᵢ(branches::AbstractVector{<:Branch}, θ::AbstractVector{<:Real}, numnodes::Integer, 
+        idx::Dict{<:Any, <:Int}, outage::Tuple{<:Integer, <:Integer} = (0,0)
+    )
     P = zeros(numnodes)
     for branch in branches
         (f, t) = get_bus_idx(branch, idx)
+        val = (θ[f] - θ[t]) / branch.x
         if outage != (f, t)
-            P[f] += (θ[f] - θ[t]) / branch.x
-            P[t] -= (θ[f] - θ[t]) / branch.x
+            P[f] += val
+            P[t] -= val
         end
+    end
+    return P
+end
+
+function calc_Pᵢ_from_flow(branches::AbstractVector{<:Branch}, F::AbstractVector{<:Real}, numnodes::Integer, idx::Dict{<:Any, <:Int})
+    P = zeros(numnodes)
+    for (i,branch) in enumerate(branches)
+        (f, t) = get_bus_idx(branch, idx)
+        P[f] += F[i]
+        P[t] -= F[i]
     end
     return P
 end
@@ -217,13 +230,27 @@ end
 
 """ DC line flow calculation using Injection Shift Factors and Power Injection vector"""
 calculate_line_flows(isf::AbstractMatrix{<:Real}, Pᵢ::AbstractVector{<:Real}) = isf*Pᵢ
-function calculate_line_flows!(pf::DCPowerFlow) 
-    pf.F = pf.ϕ*pf.Pᵢ
+function calculate_line_flows!(pf::DCPowerFlow, Pᵢ::AbstractVector{<:Real}) 
+    pf.F = pf.ϕ*Pᵢ
 end
 
 """ DC power flow calculation using the Admittance matrix and Power Injection vector returning the bus angles """
 run_pf(B::AbstractMatrix{<:Real}, P::AbstractVector{<:Real}) = B \ P
-function run_pf!(pf::DCPowerFlow) 
-    pf.θ = pf.fact_B \ pf.Pᵢ
+function run_pf!(pf::DCPowerFlow, Pᵢ::AbstractVector{<:Real}) 
+    pf.θ = pf.fact_B \ Pᵢ
 end
 
+""" Active Power Injection vector calculation using the Admittance matrix and the bus angles """
+calc_Pᵢ(B::AbstractMatrix{<:Real}, θ::AbstractVector{<:Real}) = B * θ
+calc_Pᵢ(pf::DCPowerFlow) = pf.B * pf.θ
+
+get_power_flow_change(F::AbstractVector{<:Real}, ϕ::AbstractMatrix{<:Real}, A::AbstractMatrix{<:Integer}, branch::Integer) = 
+    F .+ get_change(ϕ, A, branch) * F[branch]
+
+function get_change(ϕ::AbstractMatrix{<:Real}, A::AbstractMatrix{<:Integer}, branch::Integer; atol::Real = 1e-5) 
+    x = LinearAlgebra.I - ϕ[branch,:]'*A[branch,:]
+    if isapprox(x, zero(typeof(x)); atol=atol)
+        throw(DivideError())
+    end
+    return ϕ*A[branch,:]*inv(x)
+end

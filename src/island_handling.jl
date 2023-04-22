@@ -261,17 +261,31 @@ function new_islands(T::SparseArrays.SparseMatrixCSC{<:Any, <:Integer}, node::In
 end
 
 function test_imml_island_handling(pf::DCPowerFlow, bx::Vector{<:Tuple{Integer, Integer}})
-    for (i,b) in enumerate(bx)
-        is = SCOPF.island_detection(pf.B, b[1], b[2])
+    ptdf1 = copy(pf.ϕ)
+    ptdf2 = copy(pf.ϕ)
+    for (c,cont) in enumerate(bx)
+        island, island_b = handle_islands(pf, cont, c)
         try
-            flow = SCOPF.calculate_line_flows(pf, b, i)
-            if length(is) > 1
-                println(i, b, [x for x in is if length(x) < 100])
+            flow = SCOPF.calculate_line_flows(pf, cont, c)
+            if length(island) < 500
+                println(c, cont)
             end
-        catch
-            if length(is) < 2
+        catch DivideError
+            if length(island) < 2
                 @warn "Error and no islands!"
             end
+        end
+        try
+            if isempty(island)
+                ptdf1 = get_isf(pf.DA, pf.B, cont, c, pf.slack)
+                ptdf2 = get_isf(pf, cont, c)
+            end
+            if any(abs.(ptdf1 .- ptdf2) .> 0.0001)
+                @error "Diff $c $(cont[1])-$(cont[2])!"
+            end
+        catch
+            @error "$c $(cont[1])-$(cont[2])!"
+            break
         end
     end
 end

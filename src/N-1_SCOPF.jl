@@ -219,11 +219,9 @@ end
 
 """ Incerted power at each bus for the base case """
 function add_c_bus!(opfm::OPFmodel, slack::Tuple{Integer, Bus} = find_slack(opfm.sys), 
-        listGen = make_list(opfm, get_ctrl_generation), 
-        listD = make_list(opfm, get_demands), listRe = make_list(opfm, get_renewables))
-    @expression(opfm.mod, ctrl[n = get_name.(get_nodes(opfm.sys))], 
-        sum(opfm.mod[:pg0][g.name] for g in listGen[n]))
-    @constraint(opfm.mod, inj_p[n = get_name.(get_nodes(opfm.sys))], ctrl[n] .- 
+        listGen = make_list(opfm.sys, get_ctrl_generation), 
+        listD = make_list(opfm.sys, get_demands), listRe = make_list(opfm.sys, get_renewables))
+    @constraint(opfm.mod, inj_p[n = get_name.(get_nodes(opfm.sys))], sum(opfm.mod[:pg0][g.name] for g in listGen[n]) .- 
             sum(beta(n, l) * opfm.mod[:pf0][get_name(l)] for l in get_branches(opfm.sys)) .-
             sum(beta(n, l) * opfm.mod[:pfdc0][get_name(l)] for l in get_dc_branches(opfm.sys)) .== 
             sum((get_active_power(d) - opfm.mod[:ls0][get_name(d)] for d in listD[n]), init = 0.0) + 
@@ -235,13 +233,13 @@ function add_c_bus!(opfm::OPFmodel, slack::Tuple{Integer, Bus} = find_slack(opfm
 end
 """ Incerted power at each bus for the base case and short-term contingencies """
 function add_c_bus_cont!(opfm::OPFmodel, islands::Vector, slack::Tuple{Integer, Bus} = find_slack(opfm.sys), 
-        listGen = make_list(opfm, get_ctrl_generation), 
-        listD = make_list(opfm, get_demands), listRe = make_list(opfm, get_renewables))
+        listGen = make_list(opfm.sys, get_ctrl_generation), 
+        listD = make_list(opfm.sys, get_demands), listRe = make_list(opfm.sys, get_renewables))
     add_c_bus!(opfm, slack, listGen, listD, listRe)
     for (i_c,c) in zip(islands, opfm.contingencies)
         isempty(i_c) && continue
         for n in get_name.(get_sorted_nodes(opfm.sys))[i_c]
-            @constraint(opfm.mod, opfm.mod[:ctrl][n] .- 
+            @constraint(opfm.mod, sum(opfm.mod[:pg0][g.name] for g in listGen[n]) .- 
                 sum(beta(n,l) * opfm.mod[:pfc][get_name(l),c] for l in get_branches(opfm.sys)) .- 
                 sum(beta(n,l) * opfm.mod[:pfdcc][get_name(l),c] for l in get_dc_branches(opfm.sys)) .== 
                 sum((get_active_power(d) - opfm.mod[:lsc][get_name(d),c] for d in listD[n]), init = 0.0) +
@@ -255,8 +253,8 @@ function add_c_bus_cont!(opfm::OPFmodel, islands::Vector, slack::Tuple{Integer, 
 end
 """ Incerted power at each bus for the base case and short-term and long-term contingencies """
 function add_c_bus_ccont!(opfm::OPFmodel, islands::Vector, slack::Tuple{Integer, Bus} = find_slack(opfm.sys), 
-        listGen = make_list(opfm, get_ctrl_generation), 
-        listD = make_list(opfm, get_demands), listRe = make_list(opfm, get_renewables))
+        listGen = make_list(opfm.sys, get_ctrl_generation), 
+        listD = make_list(opfm.sys, get_demands), listRe = make_list(opfm.sys, get_renewables))
     add_c_bus_cont!(opfm, islands, slack, listGen, listD, listRe)
     for (i_c,c) in zip(islands, opfm.contingencies)
         isempty(i_c) && continue
@@ -387,7 +385,7 @@ function add_lim_load_shed!(opfm::OPFmodel, listPd = make_named_array(get_active
 end
 function add_lim_load_shed_cont!(opfm::OPFmodel, islands::Vector, 
         listPd = make_named_array(get_active_power, get_demands(opfm.sys)), 
-        listD = make_list(opfm, get_demands); max_shed::Float64 = 1.0)
+        listD = make_list(opfm.sys, get_demands); max_shed::Float64 = 1.0)
     add_lim_load_shed!(opfm, listPd, max_shed=max_shed)
     for (i_c,c) in zip(islands, opfm.contingencies)
         isempty(i_c) && continue
@@ -403,7 +401,7 @@ function add_lim_load_shed_cont!(opfm::OPFmodel, islands::Vector,
 end
 function add_lim_load_shed_ccont!(opfm::OPFmodel, islands::Vector, 
         listPd = make_named_array(get_active_power, get_demands(opfm.sys)), 
-        listD = make_list(opfm, get_demands); max_shed::Float64 = 1.0)
+        listD = make_list(opfm.sys, get_demands); max_shed::Float64 = 1.0)
     add_lim_load_shed_cont!(opfm, islands, listPd, listD, max_shed=max_shed)
     for (i_c,c) in zip(islands, opfm.contingencies)
         isempty(i_c) && continue
@@ -428,7 +426,7 @@ function add_lim_renewable_shed!(opfm::OPFmodel, listPr = make_named_array(get_a
 end
 function add_lim_renewable_shed_cont!(opfm::OPFmodel, islands::Vector, 
         listPr = make_named_array(get_active_power, get_renewables(opfm.sys)), 
-        listD = make_list(opfm, get_renewables); max_curtail::Float64 = 1.0)
+        listD = make_list(opfm.sys, get_renewables); max_curtail::Float64 = 1.0)
     add_lim_renewable_shed!(opfm, listPr, max_curtail=max_curtail)
     for (i_c,c) in zip(islands, opfm.contingencies)
         isempty(i_c) && continue
@@ -444,7 +442,7 @@ function add_lim_renewable_shed_cont!(opfm::OPFmodel, islands::Vector,
 end
 function add_lim_renewable_shed_ccont!(opfm::OPFmodel, islands::Vector, 
         listPr = make_named_array(get_active_power, get_renewables(opfm.sys)), 
-        listD = make_list(opfm, get_renewables); max_curtail::Float64 = 1.0)
+        listD = make_list(opfm.sys, get_renewables); max_curtail::Float64 = 1.0)
     add_lim_renewable_shed_cont!(opfm, islands, listPr, listD, max_curtail=max_curtail)
     for (i_c,c) in zip(islands, opfm.contingencies)
         isempty(i_c) && continue

@@ -78,10 +78,10 @@ function opfmodel(sys::System, optimizer, time_limit_sec, voll=nothing, cost_ren
     # if GLPK.Optimizer == optimizer 
     #     set_optimizer_attribute(mod, "msg_lev", GLPK.GLP_MSG_ON)
     # end
-    c = [get_generator_cost(g)[2] for g in get_gens_t(sys)]
-    c_mean = Statistics.mean(c)
+    cost = [get_generator_cost(g)[2] for g in get_gens_t(sys)]
+    c_mean = Statistics.mean(cost)
     cost_gen = JuMP.Containers.DenseAxisArray(
-            [c; [c_mean for _ in get_gens_h(sys)]],
+            [[iszero(c) ? c_mean * (rand() + 0.5) : c for c in cost]; [c_mean * (rand() + 0.1) for _ in get_gens_h(sys)]],
             get_name.(get_ctrl_generation(sys))
         )
     # β = JuMP.Containers.DenseAxisArray{Int64}(undef, get_name.(get_nodes(sys)), get_name.(get_branches(sys)))
@@ -101,7 +101,7 @@ function beta(sys::System, branch::String)
     return [beta(b, l) for b in get_nodes(sys)]
 end
 
-a(line::String,contingency::String) = ifelse(line != contingency, 1, 0)
+a(line::String, contingency::String) = ifelse(line != contingency, 1, 0)
 
 get_generator_cost(gen) = get_operation_cost(gen) |> get_variable |> get_cost |> _get_g_value
 _get_g_value(x::AbstractVector{<:Tuple{Real, Real}}) = x[1]
@@ -126,6 +126,11 @@ sort_branches!(branches::AbstractVector{<:Branch}) = sort!(branches,
         by = x -> (get_number(get_arc(x).from), get_number(get_arc(x).to))
     )
 
+function get_sorted_angles(model, nodes)
+    va0 = JuMP.value.(model[:va0])
+    return [va0[n.name] for n in nodes]
+end
+
 # it_name(::Type{T}, mos::Model) where {T <:Component} = get_name.(get_components(T,mod))
 
 
@@ -136,11 +141,11 @@ make_named_array(value_func, list) = JuMP.Containers.DenseAxisArray(
 
 
 """ A list with type_func componentes distributed on their node """
-function make_list(opfm::OPFmodel, type_func, nodes = get_nodes(opfm.sys)) 
+function make_list(system::System, type_func, nodes = get_nodes(system)) 
     list = JuMP.Containers.DenseAxisArray(
         [[] for _ in 1:length(nodes)], get_name.(nodes)
     )
-    for g in type_func(opfm.sys)
+    for g in type_func(system)
         push!(list[g.bus.name], g)
     end
     return list
@@ -245,7 +250,11 @@ function get_bus_idx(A::AbstractMatrix)
 end
 
 " Split a Vector{Pair} into a Pair{Vector}"
-split_pair(val) = map(first, val), map(last, val)
+split_pair(val::AbstractVector{Pair}) = map(first, val), map(last, val)
+
+" zip a Pair{Vector, Vector} into a Vector{Pair}"
+zip_pair(val::Pair{AbstractVector, AbstractVector}) = [(a,b) for (a,b) in zip(first(val),last(val))]
+zip_pair(val1::AbstractVector, val2::AbstractVector) = zip_pair((val1, val2))
 
 " Get dual value (upper or lower bound) from model reference "
 get_low_dual(varref::VariableRef) = dual(LowerBoundRef(varref))
@@ -255,55 +264,85 @@ get_high_dual(varref::VariableRef) = dual(UpperBoundRef(varref))
 PowerSystems.get_active_power(value::StandardLoad) = value.current_active_power
 
 """ Return the net power injected at each node. """
-function get_net_Pᵢ(opfm::OPFmodel, nodes::AbstractVector{Bus}, 
-        idx::Dict{<:Any, <:Int} = get_nodes_idx(nodes), P = get_Pgen(opfm, nodes)
+function get_net_Pᵢ(model::Model, system::System, nodes::AbstractVector{Bus}, 
+        idx::Dict{<:Any, <:Int} = get_nodes_idx(nodes)
     )
-    Pᵢ = copy(P)
-    p = JuMP.value.(opfm.mod[:pr0])
-    for r in get_renewables(opfm.sys)
-        Pᵢ[idx[r.bus.number]] += get_active_power(r) - p[get_name(r)]
+    P = zeros(length(nodes))
+    p = JuMP.value.(model[:pr0])
+    for r in get_renewables(system)
+        P[idx[r.bus.number]] += get_active_power(r) - p[get_name(r)]
     end
-    p = JuMP.value.(opfm.mod[:ls0])
-    for d in get_demands(opfm.sys)
-        Pᵢ[idx[d.bus.number]] -= get_active_power(d) + p[get_name(d)]
+    p = JuMP.value.(model[:ls0])
+    for d in get_demands(system)
+        P[idx[d.bus.number]] -= get_active_power(d) + p[get_name(d)]
+    end
+    p = JuMP.value.(model[:pg0])
+    for r in get_ctrl_generation(system)
+        P[idx[r.bus.number]] += p[get_name(r)]
+    end
+    p = JuMP.value.(model[:pfdc0])
+    for d in get_dc_branches(system)
+        P[idx[d.from.number]] += p[get_name(d)]
+        P[idx[d.to.number]] -= p[get_name(d)]
     end
     # @assert abs(sum(Pᵢ)) < 0.001
-    return Pᵢ
+    return P
 end
 
-function get_Pd(opfm::OPFmodel, nodes::AbstractVector{Bus}, 
-        idx::Dict{<:Any, <:Int} = get_nodes_idx(nodes))
-    P = zeros(length(nodes))
-    for r in get_renewables(opfm.sys)
+function get_Pd!(P::Vector{<:Real}, system::System, idx::Dict{<:Any, <:Int})
+    for r in get_renewables(system)
         add_device_value_to_node!(P, get_number(get_bus(r)), get_active_power(r), idx)
     end
-    for d in get_demands(opfm.sys)
+    for d in get_demands(system)
         add_device_value_to_node!(P, get_number(get_bus(d)), -get_active_power(d), idx)
     end
-    # @assert abs(sum(P)) < 0.001
+end
+function get_Pd(system::System, nodes::AbstractVector{Bus}, 
+        idx::Dict{<:Any, <:Int} = get_nodes_idx(nodes))
+    P = zeros(length(nodes))
+    get_Pd!(P, system, idx)
+    return P
+end
+
+""" Return power shed at each node. """
+function get_Pshed!(P::Vector{<:Real}, model::Model, system::System, idx::Dict{<:Any, <:Int})
+    get_value_single_node!(P, get_renewables(system), model[:pr0], idx)
+    get_value_single_node!(-P, get_demands(system), model[:ls0], idx)
+end
+function get_Pshed(model::Model, system::System, nodes::AbstractVector{Bus}, 
+        idx::Dict{<:Any, <:Int} = get_nodes_idx(nodes)
+    )
+    P = zeros(length(nodes))
+    get_Pshed!(P, model, system, idx)
     return P
 end
 
 """ Return the power injected by controlled generation at each node. """
-function get_Pgen(opfm::OPFmodel, nodes::AbstractVector{Bus}, 
+function get_Pgen!(P::Vector{<:Real}, model::Model, system::System, idx::Dict{<:Any, <:Int})
+    get_value_single_node!(P, get_ctrl_generation(system), model[:pg0], idx)
+    get_value_single_node!(P, get_dc_branches(system), model[:pfdc0], idx)
+    return P
+end
+function get_Pgen(model::Model, system::System, nodes::AbstractVector{Bus}, 
         idx::Dict{<:Any, <:Int} = get_nodes_idx(nodes)
     )
     P = zeros(length(nodes))
-    p = JuMP.value.(opfm.mod[:pg0])
-    pn = get_number.(get_bus.(get_ctrl_generation(opfm.sys)))
-    add_device_value_to_node!.([P], pn, p, [idx])
-
-    p = JuMP.value.(opfm.mod[:pfdc0])
-    a = get_arc.(get_dc_branches(opfm.sys))
-    from = get_number.(get_from.(a))
-    to = get_number.(get_to.(a))
-    add_device_value_to_node!.([P], from, p, [idx])
-    add_device_value_to_node!.([P], to, -p, [idx])
+    get_Pgen!(P, model, system, idx)
     return P
 end
 
-add_device_value_to_node!(arr::AbstractVector, device::Integer, val::Real, idx::Dict{<:Any, <:Int}) = arr[idx[device]] += val
+function add_device_value_to_node!(arr::AbstractVector, device::Integer, val::Real, idx::Dict{<:Any, <:Int}) 
+    arr[idx[device]] += val
+end
 
+function get_value_single_node!(P::Vector{<:Real}, types, vals::AbstractArray, idx::Dict{<:Any, <:Int})
+    add_device_value_to_node!.([P], get_number.(get_bus.(types)), JuMP.value.(vals), [idx])
+end
+
+function get_value_double_node!(P::Vector{<:Real}, types, vals::AbstractArray, idx::Dict{<:Any, <:Int})
+    add_device_value_to_node!.([P], get_number.(get_from.(types)), JuMP.value.(vals), [idx])
+    add_device_value_to_node!.([P], get_number.(get_to.(types)), -JuMP.value.(vals), [idx])
+end
 
 " Calculate the severity index for the system based on line loading "
 function calc_severity(opfm::OPFmodel, lim::Real = 0.9)

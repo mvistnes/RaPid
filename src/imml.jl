@@ -90,8 +90,8 @@ function get_isf(X::AbstractMatrix{<:Real}, B::AbstractMatrix{<:Real}, DA::Abstr
 end
 
 function get_isf(X::AbstractMatrix{<:Real}, B::AbstractMatrix{<:Real}, DA::AbstractMatrix{<:Real}, 
-        cont::Tuple{Integer, Integer}, branch::Integer, nodes::AbstractVector{<:Integer})
-    isf = calc_isf(DA, get_changed_X(view(X, nodes, nodes), B[cont[1], cont[2]], DA[branch, cont[2]] / B[cont[1], cont[2]], 
+        cont::Tuple{Integer, Integer}, branch::Integer, nodes::AbstractVector{<:Integer}, branches::AbstractVector{<:Integer})
+    isf = calc_isf(view(DA, branches, nodes), get_changed_X(view(X, nodes, nodes), B[cont[1], cont[2]], DA[branch, cont[2]] / B[cont[1], cont[2]], 
         findfirst(x -> x == cont[1], nodes), findfirst(x -> x == cont[2], nodes), branch))
     isf[branch,:] .= 0
     return isf
@@ -195,16 +195,16 @@ function get_overload(
     find_overload.(calculate_line_flows(pf, cont, branch), linerating)
 end
 
-calculate_line_flows(
-        pf::DCPowerFlow, 
-        cont::Tuple{Integer, Integer}, 
-        branch::Integer,
-        nodes::AbstractVector{<:Integer}, 
-        branches::AbstractVector{<:Integer}) =
-    calculate_line_flows(view(pf.F, branches), view(pf.ϕ, branches, nodes), pf.B[cont[1], cont[2]], 
-        pf.DA[branch, cont[2]] / pf.B[cont[1], cont[2]], view(pf.X, nodes, nodes), view(pf.θ, nodes), 
-        findfirst(x -> x == cont[1], nodes), findfirst(x -> x == cont[2], nodes), 
-        findfirst(x -> x == branch, branches))
+# calculate_line_flows(
+#         pf::DCPowerFlow, 
+#         cont::Tuple{Integer, Integer}, 
+#         branch::Integer,
+#         nodes::AbstractVector{<:Integer}, 
+#         branches::AbstractVector{<:Integer}) =
+#     calculate_line_flows(view(pf.F, branches), view(pf.ϕ, branches, nodes), pf.B[cont[1], cont[2]], 
+#         pf.DA[branch, cont[2]] / pf.B[cont[1], cont[2]], view(pf.X, nodes, nodes), view(pf.θ, nodes), 
+#         findfirst(x -> x == cont[1], nodes), findfirst(x -> x == cont[2], nodes), 
+#         findfirst(x -> x == branch, branches))
 
 """ 
 LODF value for a contingency at line l_mn change in line k_pq 

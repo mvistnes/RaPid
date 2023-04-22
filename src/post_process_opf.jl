@@ -153,7 +153,7 @@ function print_contingency_power_flow(opfm::OPFmodel, short_term_limit_multi::Fl
     slack = find_slack(nodes)
     b_names = get_name.(branches)
     linerates = get_rate.(branches) * short_term_limit_multi
-    P = get_net_Pᵢ(opfm, nodes, idx)
+    P = get_net_Pᵢ(opfm.mod, opfm.sys, nodes, idx)
     println("Base case")
     print_power_flow(b_names, value.(opfm.mod[:pf0][get_name.(branches)]).data, linerates)
     for (c,cont) in enumerate(branches)
@@ -205,7 +205,7 @@ function print_contingency_overflow(opfm::OPFmodel, short_term_limit_multi::Floa
     slack = find_slack(nodes)
     b_names = get_name.(branches)
     linerates = get_rate.(branches) * short_term_limit_multi
-    P = get_net_Pᵢ(opfm, nodes, idx)
+    P = get_net_Pᵢ(opfm.mod, opfm.sys, nodes, idx)
     for (c,cont) in enumerate(branches)
         try
             flow = get_ptdf(branches[1:end .!= c], length(nodes), idx, slack[1]) * P
