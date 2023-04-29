@@ -1,5 +1,17 @@
 # CC BY 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2022
 
+""" Primitive IMML """
+get_power_flow_change(F::AbstractVector{<:Real}, ϕ::AbstractMatrix{<:Real}, A::AbstractMatrix{<:Integer}, branch) = 
+    F .+ get_change(ϕ, A, branch) * F[branch]
+
+function get_change(ϕ::AbstractMatrix{<:Real}, A::AbstractMatrix{<:Integer}, branch; atol::Real = 1e-5) 
+    x = LinearAlgebra.I - ϕ[branch,:]'*A[branch,:]
+    if isapprox(x, zero(typeof(x)); atol=atol)
+        throw(DivideError())
+    end
+    return ϕ*A[branch,:]*inv(x)
+end
+
 """
 Calculation of voltage angles in a contingency case using IMML
 
@@ -89,13 +101,13 @@ function get_isf(X::AbstractMatrix{<:Real}, B::AbstractMatrix{<:Real}, DA::Abstr
     return isf
 end
 
-function get_isf(X::AbstractMatrix{<:Real}, B::AbstractMatrix{<:Real}, DA::AbstractMatrix{<:Real}, 
-        cont::Tuple{Integer, Integer}, branch::Integer, nodes::AbstractVector{<:Integer}, branches::AbstractVector{<:Integer})
-    isf = calc_isf(view(DA, branches, nodes), get_changed_X(view(X, nodes, nodes), B[cont[1], cont[2]], DA[branch, cont[2]] / B[cont[1], cont[2]], 
-        findfirst(x -> x == cont[1], nodes), findfirst(x -> x == cont[2], nodes), branch))
-    isf[branch,:] .= 0
-    return isf
-end
+# function get_isf(X::AbstractMatrix{<:Real}, B::AbstractMatrix{<:Real}, DA::AbstractMatrix{<:Real}, 
+#         cont::Tuple{Integer, Integer}, branch::Integer, nodes::AbstractVector{<:Integer}, branches::AbstractVector{<:Integer})
+#     isf = calc_isf(view(DA, branches, nodes), get_changed_X(view(X, nodes, nodes), B[cont[1], cont[2]], DA[branch, cont[2]] / B[cont[1], cont[2]], 
+#         findfirst(x -> x == cont[1], nodes), findfirst(x -> x == cont[2], nodes), branch))
+#     isf[branch,:] .= 0
+#     return isf
+# end
 
 get_isf(pf::DCPowerFlow, cont::Tuple{Integer, Integer}, branch::Integer) = 
     get_isf(pf.X, pf.B, pf.DA, cont, branch)

@@ -28,7 +28,7 @@ end
 
 function DCPowerFlow(model::Model, nodes::AbstractVector{<:Bus}, branches::AbstractVector{<:Branch}, idx::Dict{<:Any, <:Int})
     pf = DCPowerFlow(nodes, branches, idx)
-    set_θ!(pf, model, nodes)
+    set_θ!(pf, model)
     calc_Pline!(pf)
     return pf
 end
@@ -41,8 +41,8 @@ get_X(pf::DCPowerFlow) = pf.X
 get_ϕ(pf::DCPowerFlow) = pf.ϕ
 get_θ(pf::DCPowerFlow) = pf.θ
 
-set_θ!(pf::DCPowerFlow, model::Model, nodes::AbstractVector{<:Bus}) = 
-    pf.θ = get_sorted_angles(model, nodes)
+set_θ!(pf::DCPowerFlow, model::Model) = 
+    pf.θ = get_sorted_angles(model)
 
 """ Calculate the net power for each node from the voltage angles """
 function calc_Pᵢ(branches::AbstractVector{<:Branch}, θ::AbstractVector{<:Real}, numnodes::Integer, 
@@ -133,37 +133,26 @@ end
     Calculate the inverse of the admittance matrix after a line outage. 
     cont[1] (from_bus), cont[2] (to_bus), and i_branch are index numbers 
 """
-function calc_X(DA, B, cont::Tuple{Integer, Integer}, i_branch::Integer, slack::Integer)
+function calc_X(DA::AbstractMatrix{<:Real}, B::AbstractMatrix{<:Real}, cont::Tuple{Integer, Integer}, i_branch::Integer, slack::Integer)
     x = B[cont[1], cont[2]] * DA[i_branch, cont[2]] / B[cont[1], cont[2]]
     neutralize_line!(B, cont[1], cont[2], -x)
     X = calc_X(B, slack)
     neutralize_line!(B, cont[1], cont[2], x)
-    # X[i_branch,:] .= 0
     return X
 end
 
-calc_isf(A::AbstractMatrix{<:Real}, D::AbstractMatrix{<:Real}, X::AbstractMatrix{<:Real}) = D * A * X
-calc_isf(DA::AbstractMatrix{<:Real}, X::AbstractMatrix{<:Real}) = DA * X
-
-""" Make the isf-matrix """
-function get_isf(branches::AbstractVector{<:Branch}, numnodes::Integer, idx::Dict{<:Any, <:Integer}, slack::Integer)
-    A = calc_A(branches, numnodes, idx)
-    D = calc_D(branches)
-    return calc_isf(A, D, calc_X(calc_B(A, D), slack))
-end
-
 """ 
-    Make the isf-matrix after a line outage using base case D*A and B. 
+    Calculate the inverse of the admittance matrix after a line outage which splits the system. 
     cont[1] (from_bus), cont[2] (to_bus), and i_branch are index numbers 
 """
-function get_isf(DA, B, cont::Tuple{Integer, Integer}, i_branch::Integer, slack::Integer)
-    X = calc_X(DA, B, cont, i_branch, slack)
-    isf = calc_isf(DA, X)
-    isf[i_branch,:] .= 0
-    return isf
+function calc_X(DA::AbstractMatrix{<:Real}, B::AbstractMatrix{<:Real}, cont::Tuple{Integer, Integer}, 
+        i_branch::Integer, slack::Integer, island::AbstractVector{<:Integer})
+    x = B[cont[1], cont[2]] * DA[i_branch, cont[2]] / B[cont[1], cont[2]]
+    neutralize_line!(B, cont[1], cont[2], -x)
+    X = calc_X(B[island, island], searchsortedfirst(island, slack))
+    neutralize_line!(B, cont[1], cont[2], x)
+    return X
 end
-get_isf(DA, B, idx::Dict{<:Any, <:Integer}, i_branch::Integer, branch::Branch, slack::Integer) = 
-    get_isf(DA, B, get_bus_idx(branch, idx), i_branch, slack)
 
 function neutralize_line!(B::AbstractMatrix, i::Integer, j::Integer, val::Real)
     B[i,j] += val
@@ -172,6 +161,40 @@ function neutralize_line!(B::AbstractMatrix, i::Integer, j::Integer, val::Real)
     B[j,j] -= val
 end
 
+calc_isf(A::AbstractMatrix{<:Real}, D::AbstractMatrix{<:Real}, X::AbstractMatrix{<:Real}) = D * A * X
+calc_isf(DA::AbstractMatrix{<:Real}, X::AbstractMatrix{<:Real}) = DA * X
+
+""" Make the isf-matrix """
+function get_isf(branches::AbstractVector{<:Branch}, nodes::AbstractVector{<:Bus})
+    A = calc_A(branches, length(nodes), get_nodes_idx(nodes))
+    D = calc_D(branches)
+    DA = D * A
+    B = fast_calc_B(A, DA)
+    X = calc_X(B, find_slack(nodes)[1])
+    return calc_isf(DA, X)
+end
+
+""" 
+    Make the isf-matrix after a line outage using base case D*A and B. 
+    cont[1] (from_bus), cont[2] (to_bus), and i_branch are index numbers 
+"""
+function get_isf(DA::AbstractMatrix{<:Real}, B::AbstractMatrix{<:Real}, cont::Tuple{Integer, Integer}, 
+        i_branch::Integer, slack::Integer)
+    X = calc_X(DA, B, cont, i_branch, slack)
+    isf = calc_isf(DA, X)
+    isf[i_branch,:] .= 0
+    return isf
+end
+
+""" 
+    Make the isf-matrix after a line outage, which splits the system, using base case D*A and B. 
+    cont[1] (from_bus), cont[2] (to_bus), and i_branch are index numbers 
+"""
+function get_isf(DA::AbstractMatrix{<:Real}, B::AbstractMatrix{<:Real}, cont::Tuple{Integer, Integer}, 
+        c::Integer, slack::Integer, nodes::AbstractVector{<:Integer}, branches::AbstractVector{<:Integer})
+    X = calc_X(DA, B, cont, c, slack, nodes)
+    return calc_isf(DA[branches, nodes], X)
+end
 
 """ Make the PTDF matrix for using the input nodes and branches """
 function get_ptdf(branches::AbstractVector{<:Branch}, numnodes::Integer, idx::Dict{<:Any, <:Integer}, slack::Integer)
@@ -240,17 +263,17 @@ function run_pf!(pf::DCPowerFlow, Pᵢ::AbstractVector{<:Real})
     pf.θ = pf.fact_B \ Pᵢ
 end
 
+""" DC power flow calculation using the inverse Admittance matrix and Power Injection vector returning the bus angles """
+calc_θ(X::AbstractMatrix{<:Real}, P::AbstractVector{<:Real}) = X * P
+function calc_θ!(pf::DCPowerFlow, Pᵢ::AbstractVector{<:Real}) 
+    pf.θ = pf.X * Pᵢ
+end
 """ Active Power Injection vector calculation using the Admittance matrix and the bus angles """
 calc_Pᵢ(B::AbstractMatrix{<:Real}, θ::AbstractVector{<:Real}) = B * θ
 calc_Pᵢ(pf::DCPowerFlow) = pf.B * pf.θ
 
-get_power_flow_change(F::AbstractVector{<:Real}, ϕ::AbstractMatrix{<:Real}, A::AbstractMatrix{<:Integer}, branch::Integer) = 
-    F .+ get_change(ϕ, A, branch) * F[branch]
-
-function get_change(ϕ::AbstractMatrix{<:Real}, A::AbstractMatrix{<:Integer}, branch::Integer; atol::Real = 1e-5) 
-    x = LinearAlgebra.I - ϕ[branch,:]'*A[branch,:]
-    if isapprox(x, zero(typeof(x)); atol=atol)
-        throw(DivideError())
-    end
-    return ϕ*A[branch,:]*inv(x)
+function calculate_island_line_flows(pf::DCPowerFlow, cont::Tuple{Integer, Integer}, c::Integer, Pᵢ::AbstractVector{<:Real})
+    island, island_b = handle_islands(pf.B, pf.DA, cont, c, pf.slack)
+    ptdf = get_isf(pf.DA, pf.B, cont, c, pf.slack, island, island_b)
+    return ptdf * Pᵢ[island]
 end

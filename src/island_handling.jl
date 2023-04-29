@@ -182,40 +182,45 @@ function island_detection(T::SparseArrays.SparseMatrixCSC{Ty, <:Integer}, i::Int
     return islands
 end
 
-function handle_islands(pf::DCPowerFlow, contingency::Tuple{Integer, Integer}, branch::Integer)
-    islands = island_detection(pf.B, contingency[1], contingency[2])
-    for island in islands
-        if pf.slack ∈ island
-            island_b = sort!(unique!(pf.DA[:,island].rowval))[1:end .!= branch]
-            if length(island) > 1 && length(island_b) > 1
-                return island, island_b
-            end
-            return [], []
+function find_ref_island(islands::Vector, slack::Integer)
+    for (i, island) in enumerate(islands)
+        if slack ∈ island
+            return i
         end
+    end
+    return 0
+end
+
+find_island_branches(island::Vector{<:Integer}, DA::AbstractMatrix, c_branch::Integer) = 
+    sort!(unique!(DA[:,island].rowval))[1:end .!= c_branch]
+
+function handle_islands(B::AbstractMatrix, DA::AbstractMatrix, contingency::Tuple{Integer, Integer}, branch::Integer, slack::Integer)
+    islands = island_detection(B, contingency[1], contingency[2])
+    island = islands[find_ref_island(islands, slack)]
+    island_b = find_island_branches(island, DA, branch)
+    
+    # Need at least two nodes to make a valid system
+    if length(island) > 1 && length(island_b) > 1
+        return island, island_b
     end
     return [], []
 end
 
 function handle_islands(B::AbstractMatrix, contingency::Tuple{Integer, Integer}, slack::Integer)
     islands = island_detection(B, contingency[1], contingency[2])
-    for island in islands
-        if slack ∈ island
-            return length(island) > 1 ? island : []
-                # Need at least two nodes to make a valid system
-        end
-    end
-    return []
+    island = islands[find_ref_island(islands, slack)]
+    return length(island) > 1 ? island : []
+        # Need at least two nodes to make a valid system
 end
 
 " Get all islands with the reference bus from all bx contingencies "
 get_all_islands(B::AbstractMatrix, bx::Vector{<:Tuple{Integer, Integer}}, slack::Integer) = 
     [handle_islands(B, bx[i], slack) for i in eachindex(bx)]
+
 function get_all_islands(opfm::OPFmodel, slack::Integer)
-    nodes = get_sorted_nodes(opfm.sys)
-    branches = get_sorted_branches(opfm.sys)
-    idx = get_nodes_idx(nodes)
-    bx = get_bus_idx.(branches, [idx])
-    A = calc_A(bx, length(nodes))
+    idx = get_nodes_idx(opfm.nodes)
+    bx = get_bus_idx.(opfm.branches, [idx])
+    A = calc_A(bx, length(opfm.nodes))
     return get_all_islands(A'*A, bx, slack)
 end
 
