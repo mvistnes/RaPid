@@ -231,7 +231,7 @@ function run_benders(type::OPF, system::System, voll=nothing, prob=nothing;
                         for in_vec in islands[1:end .!= island]
                             for in in in_vec
                                 JuMP.@constraint(opfm.mod, [g = list[in].ctrl_generation], 
-                                    opfm.mod[:pg0][g] == pgu[g] - pgd[g])
+                                    opfm.mod[:pg0][g] == pgd[g] - pgu[g])
                                 JuMP.@constraint(opfm.mod, [g = list[in].dc_branches], 
                                     pfdccc[g] == 0)
                                 JuMP.@constraint(opfm.mod, [g = list[in].renewables], 
@@ -295,7 +295,7 @@ function run_benders(type::OPF, system::System, voll=nothing, prob=nothing;
         end
         next = iterate(it, state)
     end
-    @info @sprintf "END: PF solve time %.4f. Total solve time %.4f. Total time %.4f." total_calc_overload_time total_solve_time (time() - total_time)
+    @printf "END: PF solve time %.4f. Total solve time %.4f. Total time %.4f." total_calc_overload_time total_solve_time (time() - total_time)
     return opfm, pf, Pc, Pcc
 end         
 

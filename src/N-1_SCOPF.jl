@@ -386,7 +386,9 @@ function add_lim_ramp_P_gen!(opfm::OPFmodel, islands::Vector, list::Vector{CType
             end
             for n in setdiff(1:length(opfm.nodes), island)
                 @constraint(opfm.mod, [g in list[n].ctrl_generation], 
-                    0 == opfm.mod[:pg0][g] + opfm.mod[:pgu][g,c] - opfm.mod[:pgd][g,c])
+                    opfm.mod[:pg0][g] == opfm.mod[:pgd][g,c])
+                @constraint(opfm.mod, [g in list[n].ctrl_generation], 
+                    0 == opfm.mod[:pgu][g,c])
             end
         else
             @constraint(opfm.mod, opfm.mod[:pgu][:,c] .<= rampup * ramp_minutes)
