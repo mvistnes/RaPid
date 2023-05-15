@@ -111,6 +111,7 @@ function p_scopf(system::System, optimizer; pen = 10000, time_limit_sec = 120)
             @NLconstraint(opf_m, pfc[l_name,c]^2 + qfc[l_name,c]^2 <= l_rate^2)
         end
     end
+    @constraint(opf_m, va0[find_slack(opfm.nodes)[2].name] == 0)
 
     # restrict active and reactive power generation to min and max values
     for g in get_components(Generator, system)

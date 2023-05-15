@@ -43,7 +43,7 @@ function run_benders(type::OPF, system::System, voll=nothing, prob=nothing;
     (rampup, rampdown) = split_pair(get_ramp_limits.(opfm.ctrl_generation))
     Pc = Dict{Int, NTuple{3, Any}}() # Holds the short term variables for contingencies
     Pcc = Dict{Int, NTuple{5, Any}}() # Holds the long term variables for contingencies
-    overloads = []
+    overloads = Dict{Int, Vector{Tuple{Int64, Float64}}}()
     island = Vector{Vector{Int64}}() 
     island_b = Vector{Vector{Int64}}()
 
@@ -76,223 +76,35 @@ function run_benders(type::OPF, system::System, voll=nothing, prob=nothing;
 
         # Calculate the power flow with the new outage and find if there are any overloads
         (c, cont), state = next
-        islands = Vector{Vector{Int64}}() 
-        island = 0
-        island_b = Vector{Int64}()
         t = time()
-        try
-            flow = calculate_line_flows(pf, cont, c)
-            overloads = filter_overload(flow, linerating)
-        catch DivideError
-            # island, island_b = handle_islands(pf, cont, c)
-            # try
-            #     flow = calculate_line_flows(pf, cont, c, island, island_b)
-            #     if isempty(flow)
-            #         @debug "Reference node isolated due to contingency on line $(cont[1])-$(cont[2])-i_$c."
-            #         overloads = [] # the reference node is not connected to any other nodes
-            #     else
-            #         @debug "Islands forming due to contingency on line $(cont[1])-$(cont[2])-i_$c."
-            #         overloads = filter_overload(flow, view(linerating, island_b))
-            #     end
-            # catch DivideError
-                overloads = [1]
-            # end
-        end
-        if !isempty(overloads) # ptdf calculation is more expensive than line flow
-            ΔPc = get_ΔPc(length(opfm.nodes), list, Pc, c)
-            ΔPcc = get_ΔPcc(opfm, length(opfm.nodes), list, Pcc, c)
-            if overloads != [1]
-                ptdf = get_isf(pf, cont, c)
-            else
-                islands = island_detection(pf.B, cont[1], cont[2])
-                island = find_ref_island(islands, pf.slack)
-                island_b = find_island_branches(islands[island], pf.DA, c)
-                fill!(ptdf, zero(eltype(ptdf)))
-                ptdf[island_b, islands[island]] = get_isf(pf.DA, pf.B, cont, c, pf.slack, islands[island], island_b)
-            end
-            overloads = filter_overload(ptdf * (Pᵢ .+ ΔPcc), linerating)
-        end
+        overload, islands, island, island_b, ptdf, ΔPc, ΔPcc = find_overload(opfm, pf, cont, c, Pc, Pcc, list, linerating, Pᵢ, ptdf)
         total_calc_overload_time += time() - t
-        if !isempty(overloads) || !isempty(islands)
+        if !isempty(overload)
+            overloads[c] = overload
             # add_contingency(opfm, opfm.branches[c].name, ramp_minutes=ramp_minutes, ramp_mult=ramp_mult, 
             #     max_shed=max_shed, lim=lim, short_term_limit_multi=short_term_limit_multi)
-            overloads_st = filter_overload(overloads, linerating * (short_term_limit_multi - 1.0))
-            if !isempty(overloads_st) || !isempty(islands)
-                x = get(Pc, c, 0)
-                if x == 0
-                    pgc = JuMP.@variable(opfm.mod, [g in 1:length(opfm.ctrl_generation)], base_name = "pgc", lower_bound = 0)
-                    prc = JuMP.@variable(opfm.mod, [d in 1:length(opfm.renewables)], base_name = "prc", lower_bound = 0)
-                    lsc = JuMP.@variable(opfm.mod, [d in 1:length(opfm.demands)], base_name = "lsc", lower_bound = 0)
-                    Pc[c] = (pgc, prc, lsc)
-
-                    @objective(opfm.mod, Min, objective_function(opfm.mod) + opfm.prob[c] * sum(opfm.voll' * lsc))
-
-                    # Add new constraints that limit the corrective variables within operating limits
-                    JuMP.@constraint(opfm.mod, sum(lsc) == sum(prc) + sum(pgc))
-                    if isempty(islands)
-                        JuMP.@constraint(opfm.mod, 0 .<= opfm.mod[:pg0] .- pgc)
-                        JuMP.@constraint(opfm.mod, 0 .<= prc .<= pr_lim .* max_shed)
-                        JuMP.@constraint(opfm.mod, 0 .<= lsc .<= pd_lim .* max_shed)
-                    else
-                        for in in islands[island]
-                            JuMP.@constraint(opfm.mod, [g = list[in].ctrl_generation], 
-                                0 <= opfm.mod[:pg0][g] - pgc[g])
-                            JuMP.@constraint(opfm.mod, [g = list[in].renewables], 
-                                0 <= prc[g] <= pr_lim[g] * max_shed)
-                            JuMP.@constraint(opfm.mod, [d = list[in].demands], 
-                                0 <= lsc[d] <= pd_lim[d] * max_shed)
-                        end
-                        for in_vec in islands[1:end .!= island]
-                            for in in in_vec
-                                JuMP.@constraint(opfm.mod, [g = list[in].ctrl_generation], 
-                                    opfm.mod[:pg0][g] == pgc[g])
-                                JuMP.@constraint(opfm.mod, [g = list[in].renewables], 
-                                    prc[g] == pr_lim[g])
-                                JuMP.@constraint(opfm.mod, [d = list[in].demands], 
-                                    lsc[d] == pd_lim[d])
-                            end
-                        end
-                    end
-                    cut_added = 2
-                else # If the contingency is run before, a set of variables already exist
-                    pgc = x[1]
-                    prc = x[2]
-                    lsc = x[3]
-                end
+            overloads_st = filter_overload(overloads[c], linerating * (short_term_limit_multi - 1.0))
+            if !isempty(overloads_st)
+                pgc, prc, lsc = get_Pc(opfm, Pc, islands, island, list, pr_lim, pd_lim, max_shed, cont, c)
 
                 # Add preventive actions and short-term corrective actions
-                for (i,ol) in overloads_st
-                    expr = JuMP.@expression(opfm.mod, sum(
-                            (ptdf[i, in] * (Pg[in] + ΔPc[in] - 
-                            sum((opfm.mod[:pg0][ctrl] - pgc[ctrl] for ctrl in sublist.ctrl_generation), init=0.0) -
-                            sum((beta(n, opfm.dc_branches[d]) * opfm.mod[:pfdc0][d] for d in sublist.dc_branches), init=0.0) +
-                            sum((prc[r] for r in sublist.renewables), init=0.0) -
-                            sum((lsc[d] for d in sublist.demands), init=0.0)
-                            ) for (in, (n, sublist)) in enumerate(zip(opfm.nodes, list))), init=0.0
-                        ) )
-                    
-                    @info @sprintf "Pre: Contingency line %d-%d-i_%d; overload on %s of %.2f" cont[1] cont[2] c opfm.branches[i].name ol
-                    @debug "Cut added: $(sprint_expr(expr,lim))\n"
-                    # set_warm_start!(opfm.mod, :pg0) # query of information then edit of model, else OptimizeNotCalled errors
-                    if ol < 0
-                        pre_cut = JuMP.@constraint(opfm.mod, expr <= ol)
-                    else
-                        pre_cut = JuMP.@constraint(opfm.mod, expr >= ol)
-                    end
-                    cut_added = 2
-                end
+                cut_added = set_Pc(opfm, ΔPc, list, ptdf, Pg, pgc, prc, lsc, overloads_st, cont, c, cut_added)
             end
             if type == PCSC::OPF
-                x = get(Pcc, c, 0)
-                if x == 0
-
-                    # Add corrective variables
-                    pgu = JuMP.@variable(opfm.mod, [g in 1:length(opfm.ctrl_generation)], base_name = "pgu", lower_bound = 0)
-                        # active power variables for the generators in contingencies ramp up 
-                    pgd = JuMP.@variable(opfm.mod, [g in 1:length(opfm.ctrl_generation)], base_name = "pgd", lower_bound = 0)
-                            # and ramp down
-                    pfdccc = JuMP.@variable(opfm.mod, [d in 1:length(opfm.dc_branches)], base_name = "pfdccc")
-                    prcc = JuMP.@variable(opfm.mod, [r in 1:length(opfm.renewables)], base_name = "prcc", lower_bound = 0)
-                    lscc = JuMP.@variable(opfm.mod, [d in 1:length(opfm.demands)], base_name = "lscc", lower_bound = 0)
-                            # load curtailment variables in in contingencies
-                    Pcc[c] = (pgu, pgd, pfdccc, prcc, lscc)
-
-                    # Extend the objective with the corrective variables
-                    @objective(opfm.mod, Min, objective_function(opfm.mod) + opfm.prob[c] * 
-                        (sum(opfm.voll' * lscc) +
-                        sum(opfm.cost_ctrl_gen' * ramp_mult * pgu) # +
-                        # sum(opfm.cost_ctrl_gen' * pgd)
-                        ) )
-
-                    # Add new constraints that limit the corrective variables within operating limits
-                    JuMP.@constraint(opfm.mod, sum(pgu) + sum(lscc) == sum(pgd) + sum(prcc))
-                    if isempty(islands)
-                        JuMP.@constraint(opfm.mod, pgu .<= rampup * ramp_minutes)
-                        JuMP.@constraint(opfm.mod, pgd .<= rampdown * ramp_minutes)
-                        JuMP.@constraint(opfm.mod, 0 .<= opfm.mod[:pg0] .+ pgu .- pgd .<= pg_lim_max)
-                        JuMP.@constraint(opfm.mod, dc_lim_min .<= pfdccc .<= dc_lim_max)
-                        JuMP.@constraint(opfm.mod, prcc .<= pr_lim .* max_shed)
-                        JuMP.@constraint(opfm.mod, lscc .<= pd_lim .* max_shed)
-                    else
-                        for in in islands[island]
-                            JuMP.@constraint(opfm.mod,  [g = list[in].ctrl_generation], 
-                                pgu[g] <= rampup[g] * ramp_minutes)
-                            JuMP.@constraint(opfm.mod,  [g = list[in].ctrl_generation], 
-                                pgd[g] <= rampdown[g] * ramp_minutes)
-                            JuMP.@constraint(opfm.mod, [g = list[in].ctrl_generation], 
-                                0 <= opfm.mod[:pg0][g] + pgu[g] - pgd[g] <= pg_lim_max[g])
-                            JuMP.@constraint(opfm.mod, [g = list[in].dc_branches], 
-                                dc_lim_min[g] <= pfdccc[g] <= dc_lim_max[g])
-                            JuMP.@constraint(opfm.mod, [g = list[in].renewables], 
-                                prcc[g] <= pr_lim[g] * max_shed)
-                            JuMP.@constraint(opfm.mod, [d = list[in].demands], 
-                                lscc[d] <= pd_lim[d] * max_shed)
-                        end
-                        for in_vec in islands[1:end .!= island]
-                            for in in in_vec
-                                JuMP.@constraint(opfm.mod, [g = list[in].ctrl_generation], 
-                                    opfm.mod[:pg0][g] == pgd[g] - pgu[g])
-                                JuMP.@constraint(opfm.mod, [g = list[in].dc_branches], 
-                                    pfdccc[g] == 0)
-                                JuMP.@constraint(opfm.mod, [g = list[in].renewables], 
-                                    prcc[g] == pr_lim[g])
-                                JuMP.@constraint(opfm.mod, [d = list[in].demands], 
-                                    lscc[d] == pd_lim[d])
-                            end
-                        end
-                    end
-                    cut_added = 3                    
-
-                else # If the contingency is run before, a set of corrective variables already exist
-                    pgu = x[1]
-                    pgd = x[2]
-                    pfdccc = x[3]
-                    prcc = x[4]
-                    lscc = x[5]
-                end
-
-                # sort!(overloads, rev = true, by = x -> abs(x[2]))
-                # (i,ol) = first(overloads)
-                for (i,ol) in overloads
-                    # Finding and adding the Benders cut
-                    expr = JuMP.@expression(opfm.mod, sum((ptdf[i, in] * (
-                            Pg[in] + ΔPcc[in] -
-                            sum((opfm.mod[:pg0][ctrl] + pgu[ctrl] - pgd[ctrl] 
-                                for ctrl in sublist.ctrl_generation), init=0.0) -
-                            sum((beta(n, opfm.dc_branches[d]) * pfdccc[d] for d in sublist.dc_branches), init=0.0) +
-                            sum((prcc[r] for r in sublist.renewables), init=0.0) -
-                            sum((lscc[d] for d in sublist.demands), init=0.0)
-                            ) for (in, (n, sublist)) in enumerate(zip(opfm.nodes, list))), init=0.0
-                        ) )
-                    
-                    @info @sprintf "Corr: Contingency line %d-%d-i_%d; overload on %s of %.4f" cont[1] cont[2] c opfm.branches[i].name ol
-                    @debug "Cut added: $(sprint_expr(expr,lim))\n"
-                    # set_warm_start!(opfm.mod, :pg0) # query of information then edit of model, else OptimizeNotCalled errors
-                    if ol < 0
-                        corr_cut = JuMP.@constraint(opfm.mod, expr <= ol)
-                    else
-                        corr_cut = JuMP.@constraint(opfm.mod, expr >= ol)
-                    end
-                    cut_added = 3
-                end
+                pgu, pgd, pfdccc, prcc, lscc = get_Pcc(opfm, Pcc, islands, island, list, pr_lim, pd_lim, max_shed, ramp_mult, ramp_minutes, rampup, rampdown, dc_lim_min, dc_lim_max, pg_lim_max, cont, c)
+                cut_added = set_Pcc(opfm, ΔPcc, list, ptdf, Pg, pgu, pgd, pfdccc, prcc, lscc, overloads[c], cont, c, cut_added)
             end
             if cut_added > 1
-                solve_model!(opfm.mod)
-                total_solve_time += solve_time(opfm.mod)
-                if termination_status(opfm.mod) != MOI.OPTIMAL 
-                    @info "Removing latest cut."
-                    (@isdefined pre_cut) && delete(opfm.mod, pre_cut)
-                    (@isdefined corr_cut) && delete(opfm.mod, corr_cut)
-                    solve_model!(opfm.mod)
-                    if termination_status(opfm.mod) != MOI.OPTIMAL
-                        throw(ErrorException("Infeasible model!"))
-                    end
-                end
+                Pᵢ, Pg = update_model!(opfm, pf, Pd, total_solve_time)
                 cut_added = 1
-                Pᵢ = update_model!(opfm.mod, pf)
-                Pg = Pᵢ - Pd
             end
+        elseif !isempty(islands) && get(Pc, c, 0) == 0
+            pgc, prc, lsc = get_Pc(opfm, Pc, islands, island, list, pr_lim, pd_lim, max_shed, cont, c)
+            pgu, pgd, pfdccc, prcc, lscc = get_Pcc(opfm, Pcc, islands, island, list, pr_lim, pd_lim, max_shed, ramp_mult, ramp_minutes, rampup, rampdown, dc_lim_min, dc_lim_max, pg_lim_max, cont, c)
+            Pᵢ, Pg = update_model!(opfm, pf, Pd, total_solve_time)
+            cut_added = 1
         end
+        termination_status(opfm.mod) != MOI.OPTIMAL && return opfm, pf, Pc, Pcc
         next = iterate(it, state)
     end
     @printf "END: PF solve time %.4f. Total solve time %.4f. Total time %.4f." total_calc_overload_time total_solve_time (time() - total_time)
@@ -300,10 +112,55 @@ function run_benders(type::OPF, system::System, voll=nothing, prob=nothing;
 end         
 
 """ Solve model and update the power flow object """
-function update_model!(model, pf)
-    set_θ!(pf, model)
+function update_model!(opfm, pf, Pd, total_solve_time)
+    solve_model!(opfm.mod)
+    total_solve_time += solve_time(opfm.mod)
+
+    Pᵢ = calc_Pᵢ(pf)
+    Pg = Pᵢ - Pd
+    set_θ!(pf, opfm.mod)
     calc_Pline!(pf)
-    return calc_Pᵢ(pf)
+    return Pᵢ, Pg
+end
+
+function find_overload(opfm, pf, cont, c, Pc, Pcc, list, linerating, Pᵢ, ptdf)
+    islands = Vector{Vector{Int64}}() 
+    island = 0
+    island_b = Vector{Int64}()
+    try
+        flow = calculate_line_flows(pf, cont, c)
+        overloads = filter_overload(flow, linerating)
+    catch DivideError
+        # island, island_b = handle_islands(pf, cont, c)
+        # try
+        #     flow = calculate_line_flows(pf, cont, c, island, island_b)
+        #     if isempty(flow)
+        #         @debug "Reference node isolated due to contingency on line $(cont[1])-$(cont[2])-i_$c."
+        #         overloads = [] # the reference node is not connected to any other nodes
+        #     else
+        #         @debug "Islands forming due to contingency on line $(cont[1])-$(cont[2])-i_$c."
+        #         overloads = filter_overload(flow, view(linerating, island_b))
+        #     end
+        # catch DivideError
+            overloads = [1]
+        # end
+    end
+    isempty(overloads) && return overloads, islands, island, island_b, ptdf, [], []
+    
+    # ptdf calculation is more expensive than line flow
+    ΔPc = get_ΔPc(length(opfm.nodes), list, Pc, c)
+    ΔPcc = get_ΔPcc(opfm, length(opfm.nodes), list, Pcc, c)
+    if overloads != [1]
+        ptdf = get_isf(pf, cont, c)
+    else
+        islands = island_detection(pf.B, cont[1], cont[2])
+        island = find_ref_island(islands, pf.slack)
+        island_b = find_island_branches(islands[island], pf.DA, c)
+        fill!(ptdf, zero(eltype(ptdf)))
+        ptdf[island_b, islands[island]] = get_isf(pf.DA, pf.B, cont, c, pf.slack, islands[island], island_b)
+    end
+    overloads = filter_overload(ptdf * (Pᵢ .+ ΔPcc), linerating)
+    return overloads, islands, island, island_b, ptdf, ΔPc, ΔPcc
 end
 
 """ Return the short term power injection change at each node. """
@@ -324,6 +181,74 @@ function get_ΔPc(numnodes::Integer, list, Pc, c)
         end
     end
     return ΔP
+end
+
+function get_Pc(opfm::OPFmodel, Pc, islands, island, list, pr_lim, pd_lim, max_shed, cont, c)
+    x = get(Pc, c, 0)
+    if x == 0
+        pgc = JuMP.@variable(opfm.mod, [g in 1:length(opfm.ctrl_generation)], base_name = "pgc", lower_bound = 0)
+        prc = JuMP.@variable(opfm.mod, [d in 1:length(opfm.renewables)], base_name = "prc", lower_bound = 0)
+        lsc = JuMP.@variable(opfm.mod, [d in 1:length(opfm.demands)], base_name = "lsc", lower_bound = 0)
+        Pc[c] = (pgc, prc, lsc)
+
+        @objective(opfm.mod, Min, objective_function(opfm.mod) + opfm.prob[c] * sum(opfm.voll' * lsc))
+
+        # Add new constraints that limit the corrective variables within operating limits
+        JuMP.@constraint(opfm.mod, sum(lsc) == sum(prc) + sum(pgc))
+        if isempty(islands)
+            JuMP.@constraint(opfm.mod, 0 .<= opfm.mod[:pg0] .- pgc)
+            JuMP.@constraint(opfm.mod, 0 .<= prc .<= pr_lim .* max_shed)
+            JuMP.@constraint(opfm.mod, 0 .<= lsc .<= pd_lim .* max_shed)
+        else
+            for in in islands[island]
+                JuMP.@constraint(opfm.mod, [g = list[in].ctrl_generation], 
+                    0 <= opfm.mod[:pg0][g] - pgc[g])
+                JuMP.@constraint(opfm.mod, [g = list[in].renewables], 
+                    0 <= prc[g] <= pr_lim[g] * max_shed)
+                JuMP.@constraint(opfm.mod, [d = list[in].demands], 
+                    0 <= lsc[d] <= pd_lim[d] * max_shed)
+            end
+            for in_vec in islands[1:end .!= island]
+                for in in in_vec
+                    JuMP.@constraint(opfm.mod, [g = list[in].ctrl_generation], 
+                        opfm.mod[:pg0][g] == pgc[g])
+                    JuMP.@constraint(opfm.mod, [g = list[in].renewables], 
+                        prc[g] == pr_lim[g])
+                    JuMP.@constraint(opfm.mod, [d = list[in].demands], 
+                        lsc[d] == pd_lim[d])
+                end
+            end
+        end
+    else # If the contingency is run before, a set of variables already exist
+        pgc = x[1]
+        prc = x[2]
+        lsc = x[3]
+    end
+    return pgc, prc, lsc
+end
+
+function set_Pc(opfm::OPFmodel, ΔPc, list, ptdf, Pg, pgc, prc, lsc, overloads_st, cont, c, cut_added)
+    for (i,ol) in overloads_st
+        expr = JuMP.@expression(opfm.mod, sum(
+                (ptdf[i, in] * (Pg[in] + ΔPc[in] - 
+                sum((opfm.mod[:pg0][ctrl] - pgc[ctrl] for ctrl in sublist.ctrl_generation), init=0.0) -
+                sum((beta(n, opfm.dc_branches[d]) * opfm.mod[:pfdc0][d] for d in sublist.dc_branches), init=0.0) +
+                sum((prc[r] for r in sublist.renewables), init=0.0) -
+                sum((lsc[d] for d in sublist.demands), init=0.0)
+                ) for (in, (n, sublist)) in enumerate(zip(opfm.nodes, list))), init=0.0
+            ) )
+        
+        @info @sprintf "Pre: Contingency line %d-%d-i_%d; overload on %s of %.2f" cont[1] cont[2] c opfm.branches[i].name ol
+        @debug "Cut added: $(sprint_expr(expr,lim))\n"
+        # set_warm_start!(opfm.mod, :pg0) # query of information then edit of model, else OptimizeNotCalled errors
+        if ol < 0
+            pre_cut = JuMP.@constraint(opfm.mod, expr <= ol)
+        else
+            pre_cut = JuMP.@constraint(opfm.mod, expr >= ol)
+        end
+        cut_added = 2
+    end
+    return cut_added
 end
 
 """ Return the long term power injection change at each node. """
@@ -349,11 +274,110 @@ function get_ΔPcc(opfm::OPFmodel, numnodes::Integer, list, Pcc, c)
     return ΔP
 end
 
+function get_Pcc(opfm::OPFmodel, Pcc, islands, island, list, pr_lim, pd_lim, max_shed, ramp_mult, ramp_minutes, rampup, rampdown, dc_lim_min, dc_lim_max, pg_lim_max, cont, c)
+    x = get(Pcc, c, 0)
+    if x == 0
+
+        # Add corrective variables
+        pgu = JuMP.@variable(opfm.mod, [g in 1:length(opfm.ctrl_generation)], base_name = "pgu", lower_bound = 0)
+            # active power variables for the generators in contingencies ramp up 
+        pgd = JuMP.@variable(opfm.mod, [g in 1:length(opfm.ctrl_generation)], base_name = "pgd", lower_bound = 0)
+                # and ramp down
+        pfdccc = JuMP.@variable(opfm.mod, [d in 1:length(opfm.dc_branches)], base_name = "pfdccc")
+        prcc = JuMP.@variable(opfm.mod, [r in 1:length(opfm.renewables)], base_name = "prcc", lower_bound = 0)
+        lscc = JuMP.@variable(opfm.mod, [d in 1:length(opfm.demands)], base_name = "lscc", lower_bound = 0)
+                # load curtailment variables in in contingencies
+        Pcc[c] = (pgu, pgd, pfdccc, prcc, lscc)
+
+        # Extend the objective with the corrective variables
+        @objective(opfm.mod, Min, objective_function(opfm.mod) + opfm.prob[c] * 
+            (sum(opfm.voll' * lscc) +
+            sum(opfm.cost_ctrl_gen' * ramp_mult * pgu) # +
+            # sum(opfm.cost_ctrl_gen' * pgd)
+            ) )
+
+        # Add new constraints that limit the corrective variables within operating limits
+        JuMP.@constraint(opfm.mod, sum(pgu) + sum(lscc) == sum(pgd) + sum(prcc))
+        if isempty(islands)
+            JuMP.@constraint(opfm.mod, pgu .<= rampup * ramp_minutes)
+            JuMP.@constraint(opfm.mod, pgd .<= rampdown * ramp_minutes)
+            JuMP.@constraint(opfm.mod, 0 .<= opfm.mod[:pg0] .+ pgu .- pgd .<= pg_lim_max)
+            JuMP.@constraint(opfm.mod, dc_lim_min .<= pfdccc .<= dc_lim_max)
+            JuMP.@constraint(opfm.mod, prcc .<= pr_lim .* max_shed)
+            JuMP.@constraint(opfm.mod, lscc .<= pd_lim .* max_shed)
+        else
+            for in in islands[island]
+                JuMP.@constraint(opfm.mod,  [g = list[in].ctrl_generation], 
+                    pgu[g] <= rampup[g] * ramp_minutes)
+                JuMP.@constraint(opfm.mod,  [g = list[in].ctrl_generation], 
+                    pgd[g] <= rampdown[g] * ramp_minutes)
+                JuMP.@constraint(opfm.mod, [g = list[in].ctrl_generation], 
+                    0 <= opfm.mod[:pg0][g] + pgu[g] - pgd[g] <= pg_lim_max[g])
+                JuMP.@constraint(opfm.mod, [g = list[in].dc_branches], 
+                    dc_lim_min[g] <= pfdccc[g] <= dc_lim_max[g])
+                JuMP.@constraint(opfm.mod, [g = list[in].renewables], 
+                    prcc[g] <= pr_lim[g] * max_shed)
+                JuMP.@constraint(opfm.mod, [d = list[in].demands], 
+                    lscc[d] <= pd_lim[d] * max_shed)
+            end
+            for in_vec in islands[1:end .!= island]
+                for in in in_vec
+                    JuMP.@constraint(opfm.mod, [g = list[in].ctrl_generation], 
+                        opfm.mod[:pg0][g] == pgd[g] - pgu[g])
+                    JuMP.@constraint(opfm.mod, [g = list[in].dc_branches], 
+                        pfdccc[g] == 0)
+                    JuMP.@constraint(opfm.mod, [g = list[in].renewables], 
+                        prcc[g] == pr_lim[g])
+                    JuMP.@constraint(opfm.mod, [d = list[in].demands], 
+                        lscc[d] == pd_lim[d])
+                end
+            end
+        end            
+
+    else # If the contingency is run before, a set of corrective variables already exist
+        pgu = x[1]
+        pgd = x[2]
+        pfdccc = x[3]
+        prcc = x[4]
+        lscc = x[5]
+    end
+    return pgu, pgd, pfdccc, prcc, lscc
+end
+
+function set_Pcc(opfm::OPFmodel, ΔPcc, list, ptdf, Pg, pgu, pgd, pfdccc, prcc, lscc, overloads, cont, c, cut_added)
+    
+    # sort!(overloads, rev = true, by = x -> abs(x[2]))
+    # (i,ol) = first(overloads)
+    for (i,ol) in overloads
+        # Finding and adding the Benders cut
+        expr = JuMP.@expression(opfm.mod, sum((ptdf[i, in] * (
+                Pg[in] + ΔPcc[in] -
+                sum((opfm.mod[:pg0][ctrl] + pgu[ctrl] - pgd[ctrl] 
+                    for ctrl in sublist.ctrl_generation), init=0.0) -
+                sum((beta(n, opfm.dc_branches[d]) * pfdccc[d] for d in sublist.dc_branches), init=0.0) +
+                sum((prcc[r] for r in sublist.renewables), init=0.0) -
+                sum((lscc[d] for d in sublist.demands), init=0.0)
+                ) for (in, (n, sublist)) in enumerate(zip(opfm.nodes, list))), init=0.0
+            ) )
+        
+        @info @sprintf "Corr: Contingency line %d-%d-i_%d; overload on %s of %.4f" cont[1] cont[2] c opfm.branches[i].name ol
+        @info "Cut added: $(sprint_expr(expr))\n"
+        # set_warm_start!(opfm.mod, :pg0) # query of information then edit of model, else OptimizeNotCalled errors
+        if ol < 0
+            corr_cut = JuMP.@constraint(opfm.mod, expr <= ol)
+        else
+            corr_cut = JuMP.@constraint(opfm.mod, expr >= ol)
+        end
+        cut_added = 3
+    end
+    return cut_added
+end
+
 " An AffExpr nicely formatted to a string "
 sprint_expr(expr::AffExpr, lim = 1e-6) = 
     join(Printf.@sprintf("%s%5.2f %s ", (x[2] > 0 ? "+" : "-"), abs(x[2]), x[1]) 
             for x in expr.terms if abs(x[2]) > lim) * 
-        Printf.@sprintf("<= %s%.2f", (expr.constant > 0 ? "-" : "+"), abs(expr.constant)
+        Printf.@sprintf("<= %s%.2f", (expr.constant > 0 ? "-" : " "), abs(expr.constant)
     )
 
 function print_benders_results(opfm::OPFmodel, Pc::Dict{Int, NTuple{3, Any}} = Dict{Int, NTuple{3, Any}}(), 

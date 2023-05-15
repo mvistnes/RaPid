@@ -88,12 +88,14 @@ function print_active_power(opfm::OPFmodel)
 end
 
 function print_power_flow(opfm::OPFmodel, sep::String = " ")
-    print_power_flow(
-            get_name.(opfm.branches), 
-            value.(opfm.mod[:pf0]), 
-            get_rate.(opfm.branches),
-            sep
-        )
+    try
+        print_power_flow(get_name.(opfm.branches), value.(opfm.mod[:pf0]), 
+            get_rate.(opfm.branches), sep)
+    catch KeyError
+        print_power_flow(get_name.(opfm.branches), 
+            calculate_line_flows(get_isf(opfm.branches, opfm.nodes), get_net_Pᵢ(opfm)), 
+            get_rate.(opfm.branches), sep)
+    end
 end
 function print_power_flow(names::AbstractVector{String}, flow::AbstractVector, 
         rate::AbstractVector{<:Real}, sep::String = " ")

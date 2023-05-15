@@ -14,7 +14,7 @@ mutable struct DCPowerFlow <: PowerFlow
     slack::Integer # Reference bus
 end
 
-function DCPowerFlow(nodes::AbstractVector{<:Bus}, branches::AbstractVector{<:Branch}, idx::Dict{<:Any, <:Int})
+function DCPowerFlow(nodes::AbstractVector{<:Bus}, branches::AbstractVector{<:Branch}, idx::Dict{<:Any, <:Int} = get_nodes_idx(nodes))
     slack = find_slack(nodes)[1]
     A = calc_A(branches, length(nodes), idx)
     D = calc_D(branches)
@@ -26,7 +26,7 @@ function DCPowerFlow(nodes::AbstractVector{<:Bus}, branches::AbstractVector{<:Br
     return DCPowerFlow(DA, B, fact_B, X, ϕ, Vector{typeof(first(B))}(), Vector{typeof(first(B))}(), slack)
 end
 
-function DCPowerFlow(model::Model, nodes::AbstractVector{<:Bus}, branches::AbstractVector{<:Branch}, idx::Dict{<:Any, <:Int})
+function DCPowerFlow(model::Model, nodes::AbstractVector{<:Bus}, branches::AbstractVector{<:Branch}, idx::Dict{<:Any, <:Int} = get_nodes_idx(nodes))
     pf = DCPowerFlow(nodes, branches, idx)
     set_θ!(pf, model)
     calc_Pline!(pf)

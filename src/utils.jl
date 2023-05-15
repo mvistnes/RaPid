@@ -120,6 +120,26 @@ function opfmodel(sys::System, optimizer, time_limit_sec, voll::Vector{<:Real},
     cost_ctrl_gen = Vector{Float64}([get_generator_cost(g)[2] for g in ctrl_generation])
     cost_renewables = Vector{Float64}() # Vector{Float64}([get_generator_cost(g)[2] for g in renewables])
 
+    check_values(cost_ctrl_gen, ctrl_generation, "cost")
+    check_values(voll, demands, "voll")
+    check_values(getindex.(get_active_power_limits.(ctrl_generation), :max), ctrl_generation, "max_active_power")
+    check_values(get_active_power.(demands), demands, "max_active_power")
+    check_values(get_active_power.(renewables), renewables, "max_active_power")
+    (rampup, rampdown) = split_pair(get_ramp_limits.(ctrl_generation))
+    check_values(rampup, ctrl_generation, "rampup")
+    check_values(rampdown, ctrl_generation, "rampdown")
+    check_values(get_r.(branches), branches, "r")
+    check_values(get_x.(branches), branches, "x")
+    check_values(get_rate.(branches), branches, "rate")
+    limits = split_pair(get_active_power_limits_from.(dc_branches))
+    check_values(limits[1], dc_branches, "rate_dc_branches_min")
+    check_values(limits[2], dc_branches, "rate_dc_branches_max")
+
+    islands = island_detection(nodes, branches)
+    if length(islands) > 1
+        @info "The system is separated into islands" islands
+    end
+
     return OPFmodel(sys, mod, 
         cost_ctrl_gen, cost_renewables, voll, contingencies, prob, 
         ctrl_generation, branches, dc_branches, nodes, demands, renewables)
@@ -131,6 +151,13 @@ function opfmodel(sys::System, optimizer, time_limit_sec)
     fix_generation_cost!(sys)
     return opfmodel(sys, optimizer, time_limit_sec, voll, contingencies, prob)
 end
+
+function check_values(val::Real, var::Component, name::String; atol=1e-5)
+    if isapprox(val, zero(typeof(val)); atol=atol)
+        @info "$(get_name(var)) has $val value in $name."
+    end
+end
+check_values(val, var, name; atol=1e-5) = check_values.(val, var, [name], atol=atol)
 
 """Find value of β, β = 1 if from-bus is the bus, β = -1 if to-bus is the bus, 0 else"""
 beta(bus::Bus, branch::Branch) = bus == branch.arc.from ? 1 : bus == branch.arc.to ? -1 : 0

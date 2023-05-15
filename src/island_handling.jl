@@ -182,6 +182,11 @@ function island_detection(T::SparseArrays.SparseMatrixCSC{Ty, <:Integer}, i::Int
     return islands
 end
 
+function island_detection(nodes::AbstractVector{<:Bus}, branches::AbstractVector{<:Branch})
+    idx = get_nodes_idx(nodes)
+    return island_detection(calc_B(branches, length(nodes), idx))
+end
+
 function find_ref_island(islands::Vector, slack::Integer)
     for (i, island) in enumerate(islands)
         if slack ∈ island
@@ -313,14 +318,13 @@ function create_connectivity_matrix(Y::SparseArrays.SparseMatrixCSC)
 end
 
 """
-    island_detection(T, isolated_buses)
+    island_detection(T)
 
     Uses Goderya's algorithm to detect islands [goderya_fast_1980}(@cite).
     The implmentation is adapted from [milano_power_2010](@cite).
     
     Inputs:
         T: Connectivity matrix.
-        mul: Function used for the multiplication.
 
     Outputs:
         List of buses in the same island.

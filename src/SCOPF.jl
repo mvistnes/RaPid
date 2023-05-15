@@ -24,6 +24,9 @@ export add_system_data_to_json, get_system, OPFmodel, opfmodel, beta, solve_mode
 include("N-1_SCOPF.jl")
 export scopf, p_scopf, pc_scopf
 
+include("OPF_PTDF.jl")
+export opf
+
 #=
     A formulation of a PC-SCOPF where first a P-SCOPF is run,
     then a C-SCOPF is run using the results.
