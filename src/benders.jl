@@ -17,11 +17,11 @@ based on the power transfer distribution factors of the generators in the
 system. 
 """
 function run_benders(type::OPF, system::System, voll=nothing, prob=nothing; 
-        ramp_minutes = 10, ramp_mult = 10, max_shed = 0.1, lim = 1e-6, short_term_limit_multi::Float64 = 1.5)
+        ramp_minutes = 10, ramp_mult = 10, max_shed = 0.1, lim = 1e-6, short_term_limit_multi::Real = 1.5)
     total_time = time()
     # set_rate!.(get_branches(system), get_rate.(get_branches(system))*0.8) # run once for the IEEE RTS system
     opfm = scopf(SC, system, Gurobi.Optimizer, voll=voll, prob=prob, ramp_minutes=ramp_minutes, max_shed=max_shed, 
-        short_term_limit_multi=short_term_limit_multi, renewable_prod = 1.0)
+        renewable_prod = 1.0)
     MOI.set(opfm.mod, MOI.Silent(), true) # supress output from the solver
     solve_model!(opfm.mod)
     total_solve_time = solve_time(opfm.mod)
@@ -88,11 +88,11 @@ function run_benders(type::OPF, system::System, voll=nothing, prob=nothing;
                 pgc, prc, lsc = get_Pc(opfm, Pc, islands, island, list, pr_lim, pd_lim, max_shed, cont, c)
 
                 # Add preventive actions and short-term corrective actions
-                cut_added = set_Pc(opfm, ΔPc, list, ptdf, Pg, pgc, prc, lsc, overloads_st, cont, c, cut_added)
+                cut_added = set_Pc(opfm, ΔPc, list, ptdf, Pg, pgc, prc, lsc, overloads_st, cont, c, cut_added, lim)
             end
             if type == PCSC::OPF
                 pgu, pgd, pfdccc, prcc, lscc = get_Pcc(opfm, Pcc, islands, island, list, pr_lim, pd_lim, max_shed, ramp_mult, ramp_minutes, rampup, rampdown, dc_lim_min, dc_lim_max, pg_lim_max, cont, c)
-                cut_added = set_Pcc(opfm, ΔPcc, list, ptdf, Pg, pgu, pgd, pfdccc, prcc, lscc, overloads[c], cont, c, cut_added)
+                cut_added = set_Pcc(opfm, ΔPcc, list, ptdf, Pg, pgu, pgd, pfdccc, prcc, lscc, overloads[c], cont, c, cut_added, lim)
             end
             if cut_added > 1
                 Pᵢ, Pg = update_model!(opfm, pf, Pd, total_solve_time)
@@ -101,6 +101,7 @@ function run_benders(type::OPF, system::System, voll=nothing, prob=nothing;
         elseif !isempty(islands) && get(Pc, c, 0) == 0
             pgc, prc, lsc = get_Pc(opfm, Pc, islands, island, list, pr_lim, pd_lim, max_shed, cont, c)
             pgu, pgd, pfdccc, prcc, lscc = get_Pcc(opfm, Pcc, islands, island, list, pr_lim, pd_lim, max_shed, ramp_mult, ramp_minutes, rampup, rampdown, dc_lim_min, dc_lim_max, pg_lim_max, cont, c)
+            @info "Island: Contingency line $(cont[1])-$(cont[2])-i_$(c)"
             Pᵢ, Pg = update_model!(opfm, pf, Pd, total_solve_time)
             cut_added = 1
         end
@@ -227,7 +228,7 @@ function get_Pc(opfm::OPFmodel, Pc, islands, island, list, pr_lim, pd_lim, max_s
     return pgc, prc, lsc
 end
 
-function set_Pc(opfm::OPFmodel, ΔPc, list, ptdf, Pg, pgc, prc, lsc, overloads_st, cont, c, cut_added)
+function set_Pc(opfm::OPFmodel, ΔPc, list, ptdf, Pg, pgc, prc, lsc, overloads_st, cont, c, cut_added, lim)
     for (i,ol) in overloads_st
         expr = JuMP.@expression(opfm.mod, sum(
                 (ptdf[i, in] * (Pg[in] + ΔPc[in] - 
@@ -344,7 +345,7 @@ function get_Pcc(opfm::OPFmodel, Pcc, islands, island, list, pr_lim, pd_lim, max
     return pgu, pgd, pfdccc, prcc, lscc
 end
 
-function set_Pcc(opfm::OPFmodel, ΔPcc, list, ptdf, Pg, pgu, pgd, pfdccc, prcc, lscc, overloads, cont, c, cut_added)
+function set_Pcc(opfm::OPFmodel, ΔPcc, list, ptdf, Pg, pgu, pgd, pfdccc, prcc, lscc, overloads, cont, c, cut_added, lim)
     
     # sort!(overloads, rev = true, by = x -> abs(x[2]))
     # (i,ol) = first(overloads)
@@ -361,7 +362,7 @@ function set_Pcc(opfm::OPFmodel, ΔPcc, list, ptdf, Pg, pgu, pgd, pfdccc, prcc, 
             ) )
         
         @info @sprintf "Corr: Contingency line %d-%d-i_%d; overload on %s of %.4f" cont[1] cont[2] c opfm.branches[i].name ol
-        @info "Cut added: $(sprint_expr(expr))\n"
+        @debug "Cut added: $(sprint_expr(expr,lim))\n"
         # set_warm_start!(opfm.mod, :pg0) # query of information then edit of model, else OptimizeNotCalled errors
         if ol < 0
             corr_cut = JuMP.@constraint(opfm.mod, expr <= ol)
@@ -391,15 +392,15 @@ function print_benders_results(opfm::OPFmodel, Pc::Dict{Int, NTuple{3, Any}} = D
         @printf("%12s: %.3f\n", g.name, JuMP.value(opfm.mod[:pg0][i_g]))
         for (i,c) in Pc
             if JuMP.value(c[1][i_g]) > lim
-                @printf("           %4dc: pgc: %.3f\n", i, JuMP.value(c[1][i_g]))
+                @printf("          c %12s: pgc: %.3f\n", opfm.contingencies[i], JuMP.value(c[1][i_g]))
             end
         end
         for (i,c) in Pcc
             if JuMP.value(c[1][i_g]) > lim
-                @printf("           %4dc: pgu: %.3f\n", i, JuMP.value(c[1][i_g]))
+                @printf("          c %12s: pgu: %.3f\n", opfm.contingencies[i], JuMP.value(c[1][i_g]))
             end
             if JuMP.value(c[2][i_g]) > lim
-                @printf("           %4dc: pgd: %.3f\n", i, JuMP.value(c[2][i_g]))
+                @printf("          c %12s: pgd: %.3f\n", opfm.contingencies[i], JuMP.value(c[2][i_g]))
             end
         end
     end
@@ -407,7 +408,7 @@ function print_benders_results(opfm::OPFmodel, Pc::Dict{Int, NTuple{3, Any}} = D
         @printf("%12s: %.3f\n", g.name, JuMP.value(opfm.mod[:pfdc0][i_g]))
         for (i,c) in Pcc
             if JuMP.value(c[3][i_g]) > lim
-                @printf("           %4dc: pfdccc: %.3f\n", i, JuMP.value(c[4][i_g]))
+                @printf("          c %12s: pfdccc: %.3f\n", opfm.contingencies[i], JuMP.value(c[4][i_g]))
             end
         end
     end
@@ -415,12 +416,12 @@ function print_benders_results(opfm::OPFmodel, Pc::Dict{Int, NTuple{3, Any}} = D
         @printf("%12s: %.3f\n", g.name, JuMP.value(opfm.mod[:pr0][i_g]))
         for (i,c) in Pc
             if JuMP.value(c[2][i_g]) > lim
-                @printf("           %4dc: prc: %.3f\n", i, JuMP.value(c[2][i_g]))
+                @printf("          c %12s: prc: %.3f\n", opfm.contingencies[i], JuMP.value(c[2][i_g]))
             end
         end
         for (i,c) in Pcc
             if JuMP.value(c[4][i_g]) > lim
-                @printf("           %4dc: prcc: %.3f\n", i, JuMP.value(c[4][i_g]))
+                @printf("          c %12s: prcc: %.3f\n", opfm.contingencies[i], JuMP.value(c[4][i_g]))
             end
         end
     end
@@ -428,18 +429,18 @@ function print_benders_results(opfm::OPFmodel, Pc::Dict{Int, NTuple{3, Any}} = D
         @printf("%12s: %.3f\n", g.name, JuMP.value(opfm.mod[:ls0][i_g]))
         for (i,c) in Pc
             if JuMP.value(c[3][i_g]) > lim
-                @printf("           %4dc: lsc: %.3f\n", i, JuMP.value(c[3][i_g]))
+                @printf("          c %12s: lsc: %.3f\n", opfm.contingencies[i], JuMP.value(c[3][i_g]))
             end
         end
         for (i,c) in Pcc
             if JuMP.value(c[5][i_g]) > lim
-                @printf("           %4dc: lscc: %.3f\n", i, JuMP.value(c[5][i_g]))
+                @printf("          c %12s: lscc: %.3f\n", opfm.contingencies[i], JuMP.value(c[5][i_g]))
             end
         end
     end
 end
 
-function add_contingency(opfm, c_name; ramp_minutes = 10, ramp_mult = 10, max_shed = 0.1, lim = 1e-6, short_term_limit_multi::Float64 = 1.5)
+function add_contingency(opfm, c_name; ramp_minutes = 10, ramp_mult = 10, max_shed = 0.1, lim = 1e-6, short_term_limit_multi::Real = 1.5)
 
     pgu = JuMP.@variable(opfm.mod, [g in get_name.(get_ctrl_generation(opfm.sys))], base_name = "pgu", lower_bound = 0)
     # active power variables for the generators in contingencies ramp up 

@@ -27,9 +27,26 @@ function add_system_data_to_json(;
     to_json(system_data, joinpath(DATA_DIR, file_name), force=true)
 end
 
+function get_system(
+        data_dir = "data\\RTS_GMLC",
+        base_power = 100.0,
+        descriptors = "data\\RTS_GMLC\\user_descriptors.yaml",
+        timeseries_metadata_file = "data\\RTS_GMLC\\timeseries_pointers.json",
+        generator_mapping_file = "data\\RTS_GMLC\\generator_mapping.yaml"
+        )
+    data = PowerSystemTableData(
+        data_dir,
+        base_power,
+        descriptors;
+        timeseries_metadata_file = timeseries_metadata_file,
+        generator_mapping_file = generator_mapping_file,
+    )
+    return System(data)
+end
+
 function setup(system::System, prob_min = 0.1, prob_max = 0.4)
     voll = make_voll(system)
-    contingencies = get_name.(SCOPF.get_sorted_branches(system))
+    contingencies = get_name.(sort_components!(get_branches(system)))
     prob = make_prob(contingencies, prob_min, prob_max)
     # contingencies = ["2-3-i_3"]
     return voll, prob, contingencies
@@ -57,10 +74,8 @@ function set_renewable_prod!(system::System, ratio::Real=0.5)
 end
 
 """ Set the active power demand """
-function set_active_power_demand!(system::System)
-    for g in get_demands(system)
-        set_active_power!(g, get_max_active_power(g))
-    end
+function set_active_power_demand!(system::System, demands = get_max_active_power.(get_demands(system)))
+    set_active_power!.(get_demands(system), demands)
 end
 
 PowerSystems.set_active_power!(dem::StandardLoad, val::Real) = 
@@ -111,9 +126,9 @@ function opfmodel(sys::System, optimizer, time_limit_sec, voll::Vector{<:Real},
     # end
 
     ctrl_generation = collect(get_ctrl_generation(sys))
-    branches = get_sorted_branches(sys)
-    dc_branches = get_sorted_dc_branches(sys)
-    nodes = get_sorted_nodes(sys)
+    branches = sort_components!(get_branches(sys))
+    dc_branches = sort_components!(get_dc_branches(sys))
+    nodes = sort_components!(get_nodes(sys))
     demands = collect(get_demands(sys))
     renewables = collect(get_renewables(sys))
 
@@ -185,11 +200,10 @@ get_ctrl_generation(sys::System) = Iterators.flatten((get_gens_t(sys), get_gens_
 get_generation(sys::System) = Iterators.flatten((get_ctrl_generation(sys), get_renewables(sys))) # An iterator of all generation
 
 """ A sorted vector to a type of power system component """
-get_sorted_nodes(sys::System) = sort_nodes!(collect(get_nodes(sys)))
-get_sorted_branches(sys::System) = sort_branches!(collect(get_branches(sys)))
-get_sorted_dc_branches(sys::System) = sort_branches!(collect(get_dc_branches(sys)))
-sort_nodes!(nodes::AbstractVector{Bus}) = sort!(nodes,by = x -> x.number)
-sort_branches!(branches::AbstractVector{<:Branch}) = sort!(branches,
+sort_components!(list::PowerSystems.FlattenIteratorWrapper) = sort_components!(collect(list))
+sort_components!(nodes::AbstractVector{Bus}) = sort!(nodes, by = x -> x.number)
+sort_components!(components::AbstractVector{<:Component}) = sort!(components, by = x -> x.bus.number)
+sort_components!(branches::AbstractVector{<:Branch}) = sort!(branches,
         by = x -> (get_number(get_arc(x).from), get_number(get_arc(x).to))
     )
 
@@ -260,7 +274,7 @@ function find_slack(nodes::AbstractVector{Bus})
     end
     @error "No slack bus found!"
 end
-find_slack(sys::System) = find_slack(get_sorted_nodes(sys))
+find_slack(sys::System) = find_slack(sort_components!(get_nodes(sys)))
 
 """ Run optimizer to solve the model and check for optimality """
 function solve_model!(model::Model)

@@ -14,10 +14,10 @@ function opf(system::System, optimizer;
             max_curtail::Float64 = 1.0,
             renewable_prod::Float64= 0.5
         )
-    contingencies = isnothing(contingencies) ? get_name.(get_sorted_branches(system)) : contingencies
+    contingencies = isnothing(contingencies) ? get_name.(sort_components!(get_branches(system))) : contingencies
     prob = isnothing(prob) ? make_prob(contingencies) : prob
-    set_renewable_prod!(system, renewable_prod)
-    set_active_power_demand!(system)
+    # set_renewable_prod!(system, renewable_prod)
+    # set_active_power_demand!(system)
 
     opfm = isnothing(voll) ? opfmodel(system, optimizer, time_limit_sec) : opfmodel(system, optimizer, time_limit_sec, voll, contingencies, prob)
     idx = get_nodes_idx(opfm.nodes)
@@ -61,7 +61,7 @@ function opf(system::System, optimizer;
     # end
 
     @constraint(opfm.mod, branch_lim, -branch_rating .<= isf * inj_p .<= branch_rating)
-    @constraint(opfm.mod, sum(pg0, init=0.0) + sum(ls0, init=0.0) + sum(get_active_power.(opfm.renewables), init=0.0) == 
+    @constraint(opfm.mod, power_balance, sum(pg0, init=0.0) + sum(ls0, init=0.0) + sum(get_active_power.(opfm.renewables), init=0.0) == 
         sum(get_active_power.(opfm.demands), init=0.0) + sum(pr0, init=0.0))
 
     branch_rating = get_active_power_limits_from.(opfm.dc_branches)

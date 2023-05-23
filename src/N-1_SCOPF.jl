@@ -12,20 +12,20 @@ function scopf(type::OPF, system::System, optimizer;
             voll = nothing, 
             contingencies = nothing, 
             prob = nothing,
-            time_limit_sec::Int64 = 600,
+            time_limit_sec::Integer = 600,
             unit_commit::Bool = false,
-            max_shed::Float64 = 0.1,
-            max_curtail::Float64 = 1.0,
-            renewable_prod::Float64= 0.5, 
+            max_shed::Real = 0.1,
+            max_curtail::Real = 1.0,
+            renewable_prod::Real= 0.5, 
             circuit_breakers::Bool=false,
-            short_term_limit_multi::Float64 = 1.5,
-            ramp_minutes::Int64 = 10,
+            short_term_limit_multi::Real = 1.5,
+            ramp_minutes::Real = 10,
             ramp_mult::Real = 10
         )
-    contingencies = isnothing(contingencies) ? get_name.(get_sorted_branches(system)) : contingencies
+    contingencies = isnothing(contingencies) ? get_name.(sort_components!(get_branches(system))) : contingencies
     prob = isnothing(prob) ? make_prob(contingencies) : prob
-    set_renewable_prod!(system, renewable_prod)
-    set_active_power_demand!(system)
+    # set_renewable_prod!(system, renewable_prod)
+    # set_active_power_demand!(system)
 
     opfm = isnothing(voll) ? opfmodel(system, optimizer, time_limit_sec) : opfmodel(system, optimizer, time_limit_sec, voll, contingencies, prob)
     idx = get_nodes_idx(opfm.nodes)
@@ -45,8 +45,8 @@ end
 """ Run a SCOPF of a power system, base case only """
 function scopf(opfm::OPFmodel, list::Vector{CTypes}, idx::Dict{<:Any, <:Int}; 
             unit_commit::Bool = false,
-            max_shed::Float64 = 0.1,
-            max_curtail::Float64 = 1.0
+            max_shed::Real = 0.1,
+            max_curtail::Real = 1.0
         )
     init_var_dc_SCOPF!(opfm)
     slack = find_slack(opfm.nodes)
@@ -66,10 +66,10 @@ end
 """ Run a P-SCOPF of a power system, preventive actions allowed for securing contingencies """
 function p_scopf(opfm::OPFmodel, list::Vector{CTypes}, idx::Dict{<:Any, <:Int}; 
             unit_commit::Bool=false,
-            max_shed::Float64 = 0.1,
-            max_curtail::Float64 = 1.0,
+            max_shed::Real = 0.1,
+            max_curtail::Real = 1.0,
             circuit_breakers::Bool = false,
-            short_term_limit_multi::Float64 = 1.5
+            short_term_limit_multi::Real = 1.5
         )
     init_var_dc_P_SCOPF!(opfm) 
     slack = find_slack(opfm.nodes)
@@ -94,12 +94,12 @@ end
 """ Run a PC-SCOPF of a power system, preventive and corrective actions allowed for securing contingencies """
 function pc_scopf(opfm::OPFmodel, list::Vector{CTypes}, idx::Dict{<:Any, <:Int}; 
             unit_commit::Bool = false,
-            max_shed::Float64 = 0.1,
-            max_curtail::Float64 = 1.0,
+            max_shed::Real = 0.1,
+            max_curtail::Real = 1.0,
             circuit_breakers::Bool=false,
-            short_term_limit_multi::Float64 = 1.5,
+            short_term_limit_multi::Real = 1.5,
             ramp_mult::Real = 10,
-            ramp_minutes::Int64 = 10
+            ramp_minutes::Real = 10
         )
     init_var_dc_PC_SCOPF!(opfm)
     slack = find_slack(opfm.nodes)
@@ -294,7 +294,7 @@ function add_c_branch_cont!(
             opfm::OPFmodel, idx,
             x::AbstractVector{<:Real} = get_x.(opfm.branches), 
             branch_rating::AbstractVector{<:Real} = get_rate.(opfm.branches); 
-            short_term_limit_multi::Float64 = 1.0
+            short_term_limit_multi::Real = 1.0
         )
     @constraint(opfm.mod, pfc_lim[l = 1:length(opfm.branches), c = 1:length(opfm.contingencies)], 
             -branch_rating[l] * !isequal(l,c) * short_term_limit_multi <= opfm.mod[:pfc][l,c] <= 
@@ -312,7 +312,7 @@ function add_c_branch_ccont!(
             opfm::OPFmodel, idx, 
             x::AbstractVector{<:Real} = get_x.(opfm.branches), 
             branch_rating::AbstractVector = get_rate.(opfm.branches); 
-            short_term_limit_multi::Float64 = 1.0
+            short_term_limit_multi::Real = 1.0
         )
     @constraint(opfm.mod, pfcc_lim[l = 1:length(opfm.branches), c = 1:length(opfm.contingencies)], 
             -branch_rating[l] * !isequal(l,c) <= opfm.mod[:pfcc][l,c] <= branch_rating[l] * !isequal(l,c)
@@ -403,7 +403,7 @@ end
 
 """ Restrict load shedding to max shed amount of load per node """
 function add_lim_load_shed!(opfm::OPFmodel, listPd = get_active_power.(opfm.demands); 
-        max_shed::Float64 = 1.0)
+        max_shed::Real = 1.0)
     @constraint(opfm.mod, load_shed, 
             opfm.mod[:ls0] .<= listPd .* max_shed
         )
@@ -411,7 +411,7 @@ function add_lim_load_shed!(opfm::OPFmodel, listPd = get_active_power.(opfm.dema
 end
 function add_lim_load_shed_cont!(opfm::OPFmodel, islands::Vector, 
         list::Vector{CTypes}, 
-        listPd = get_active_power.(opfm.demands); max_shed::Float64 = 1.0)
+        listPd = get_active_power.(opfm.demands); max_shed::Real = 1.0)
     add_lim_load_shed!(opfm, listPd, max_shed=max_shed)
     for (c,island) in enumerate(islands)
         for n in island
@@ -427,7 +427,7 @@ function add_lim_load_shed_cont!(opfm::OPFmodel, islands::Vector,
 end
 function add_lim_load_shed_ccont!(opfm::OPFmodel, islands::Vector, 
         list::Vector{CTypes}, 
-        listPd = get_active_power.(opfm.demands); max_shed::Float64 = 1.0)
+        listPd = get_active_power.(opfm.demands); max_shed::Real = 1.0)
     add_lim_load_shed_cont!(opfm, islands, list, listPd, max_shed=max_shed)
     for (c,island) in enumerate(islands)
         for n in island
@@ -444,14 +444,14 @@ end
 
 """ Restrict load shedding to renewable production per node """
 function add_lim_renewable_shed!(opfm::OPFmodel, listPr = get_active_power.(opfm.renewables); 
-        max_curtail::Float64 = 1.0)
+        max_curtail::Real = 1.0)
     @constraint(opfm.mod, renew_shed, 
             opfm.mod[:pr0] .<= listPr .* max_curtail
         )
     @info "Restriction of renewable shedding: Base case"
 end
 function add_lim_renewable_shed_cont!(opfm::OPFmodel, islands::Vector, 
-        list::Vector{CTypes}, listPr = get_active_power.(opfm.renewables); max_curtail::Float64 = 1.0)
+        list::Vector{CTypes}, listPr = get_active_power.(opfm.renewables); max_curtail::Real = 1.0)
     add_lim_renewable_shed!(opfm, listPr, max_curtail=max_curtail)
     for (c,island) in enumerate(islands)
         for n in island
@@ -466,7 +466,7 @@ function add_lim_renewable_shed_cont!(opfm::OPFmodel, islands::Vector,
     @info "- After contingency, before corrective actions"
 end
 function add_lim_renewable_shed_ccont!(opfm::OPFmodel, islands::Vector, 
-        list::Vector{CTypes}, listPr = get_active_power.(opfm.renewables); max_curtail::Float64 = 1.0)
+        list::Vector{CTypes}, listPr = get_active_power.(opfm.renewables); max_curtail::Real = 1.0)
     add_lim_renewable_shed_cont!(opfm, islands, list, listPr, max_curtail=max_curtail)
     for (c,island) in enumerate(islands)
         for n in island

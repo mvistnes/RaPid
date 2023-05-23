@@ -11,7 +11,7 @@ module SCOPF
 =#
 include("utils.jl")
 export add_system_data_to_json, get_system, OPFmodel, opfmodel, beta, solve_model!, set_warm_start!, 
-    calc_severity, calc_line_severity, get_branches, get_nodes, get_sorted_branches, get_sorted_nodes,
+    calc_severity, calc_line_severity, get_branches, get_nodes, sort_components!,
     get_nodes_idx, get_bus_idx, find_slack
 
 #=  

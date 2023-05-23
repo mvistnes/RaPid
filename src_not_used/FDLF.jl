@@ -1,9 +1,9 @@
 using LinearAlgebra
 using Printf
-include("system_description.jl")
-import .SystemDescription
-include("dc_power_flow.jl")
-import .DCPowerFlow
+# include("system_description.jl")
+# import .SystemDescription
+# include("dc_power_flow.jl")
+# import .DCPowerFlow
 
 # NEED CONVERSION FROM PYTHON TO JULIA !!!!!!!
 """Fast Decoupled Power Flow
@@ -29,11 +29,11 @@ function fdlf(nodes::Vector{Bus}, branches::Vector{Branch}, it_max::Int, lim::Ab
     if method == "std"
         println("Standard Fast Decoupled Power Flow")
         dP = dQ = buildH(nodes, branches)
-    else if method == "pri"
+    elseif method == "pri"
         println("Primal Fast Decoupled Power Flow")
         dP = buildB(Ybus, B_id, numB, sizeJ)
         dQ = buildH(nodes, branches)
-    else if method == "dual"
+    elseif method == "dual"
         println("Dual Fast Decoupled Power Flow")
         dP = buildH(nodes, branches)
         dQ = buildB(Ybus, B_id, numB, sizeJ)
@@ -104,4 +104,3 @@ function print_jacobi_dpf(dP, dQ)
     jac = concatenate((jac1,jac2), axis=0)
     print_jacobi(jac)
 end  
-
