@@ -22,7 +22,7 @@ function scopf(type::OPF, system::System, optimizer;
             ramp_minutes::Real = 10,
             ramp_mult::Real = 10
         )
-    contingencies = isnothing(contingencies) ? get_name.(sort_components!(get_branches(system))) : contingencies
+    contingencies = isnothing(contingencies) ? sort_components!(get_branches(system)) : contingencies
     prob = isnothing(prob) ? make_prob(contingencies) : prob
     # set_renewable_prod!(system, renewable_prod)
     # set_active_power_demand!(system)

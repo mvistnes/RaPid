@@ -46,7 +46,7 @@ end
 
 function setup(system::System, prob_min = 0.1, prob_max = 0.4)
     voll = make_voll(system)
-    contingencies = get_name.(sort_components!(get_branches(system)))
+    contingencies = sort_components!(get_branches(system))
     prob = make_prob(contingencies, prob_min, prob_max)
     # contingencies = ["2-3-i_3"]
     return voll, prob, contingencies
@@ -62,7 +62,7 @@ function fix_generation_cost!(sys::System)
 end
 
 set_operation_cost!(gen::Generator, val::Real) = 
-    PowerSystems.set_operation_cost!(gen, ThreePartCost((0.0, val), 0.0, 0.0, 0.0))
+    PowerSystems.set_operation_cost!(gen, ThreePartCost(VariableCost((0.0, val)), 0.0, 0.0, 0.0))
 set_operation_cost!(gen::RenewableGen, val::Real) = 
     PowerSystems.set_operation_cost!(gen, TwoPartCost(VariableCost((0.0, val)), 0.0))
 
@@ -81,12 +81,18 @@ end
 PowerSystems.set_active_power!(dem::StandardLoad, val::Real) = 
     PowerSystems.set_current_active_power!(dem, val)
 
+function set_ramp_limits!(system::System, ramp_mult::Real = 0.01)
+    gens = get_ctrl_generation(system)
+    ramp_lim = [(up=(x.max*ramp_mult), down=(x.max*ramp_mult)) for x in get_active_power_limits.(gens)]
+    PowerSystems.set_ramp_limits!.(gens,ramp_lim)
+end
+
 """ An array of the Value Of Lost Load for the demand and renewables """
-make_voll(sys::System) = rand(1000:3000, length(get_demands(sys)))
-make_cost_renewables(sys::System) = rand(1:30, length(get_renewables(sys)))
+make_voll(sys::System, x_range::UnitRange=1000:3000) = rand(x_range, length(get_demands(sys)))
+make_cost_renewables(sys::System, x_range::UnitRange=1:30) = rand(x_range, length(get_renewables(sys)))
 
 """ An array of the outage probability of the contingencies """
-make_prob(contingencies::AbstractVector{String}, prob_min = 0.1, prob_max = 0.4) = 
+make_prob(contingencies::AbstractVector, prob_min = 0.1, prob_max = 0.4) = 
     (rand(length(contingencies)).*(prob_max - prob_min) .+ prob_min)./8760
 
 get_system(fname::String) = System(joinpath("data",fname))
@@ -99,7 +105,6 @@ mutable struct OPFmodel
     cost_ctrl_gen::Vector{<:Real}
     cost_renewables::Vector{<:Real}
     voll::Vector{<:Real}
-    contingencies::Vector{String}
     prob::Vector{<:Real}
 
     ctrl_generation::Vector{Generator}
@@ -108,11 +113,12 @@ mutable struct OPFmodel
     nodes::Vector{Bus}
     demands::Vector{StaticLoad}
     renewables::Vector{RenewableGen}
+    contingencies::Vector{<:Component}
 end
 
 """ Constructor for OPFmodel """
 function opfmodel(sys::System, optimizer, time_limit_sec, voll::Vector{<:Real}, 
-        contingencies::Vector{String}=String[], prob::Vector{<:Real}=[])
+        contingencies::Vector{<:Branch}=Component[], prob::Vector{<:Real}=[])
     mod = Model(optimizer)
     # mod = Model(optimizer; add_bridges = false)
     set_string_names_on_creation(mod, false)
@@ -155,9 +161,8 @@ function opfmodel(sys::System, optimizer, time_limit_sec, voll::Vector{<:Real},
         @info "The system is separated into islands" islands
     end
 
-    return OPFmodel(sys, mod, 
-        cost_ctrl_gen, cost_renewables, voll, contingencies, prob, 
-        ctrl_generation, branches, dc_branches, nodes, demands, renewables)
+    return OPFmodel(sys, mod, cost_ctrl_gen, cost_renewables, voll, prob, 
+        ctrl_generation, branches, dc_branches, nodes, demands, renewables, contingencies)
 end
 
 """ Automatic constructor for OPFmodel where voll, prob, and contingencies are automatically computed. """
@@ -329,6 +334,19 @@ get_bus_idx(branch::Branch, idx::Dict{<:Any, <:Int}) =
 get_bus_idx(branches::AbstractVector{<:Branch}, idx::Dict{<:Any, <:Int}) =
     split_pair(get_bus_idx.(branches, [idx]))
 
+get_branch_bus_idx(branches::AbstractVector{<:Branch}, contingencies::AbstractVector{<:Branch}, idx::Dict{<:Any, <:Int}) = 
+    [(findfirst(x -> x == b, branches), get_bus_idx(b, idx)) for b in contingencies]
+
+function extract_bus_idx(branch::String, idx::Dict{<:Any, <:Int})
+    (f,t) = extract_bus(branch)
+    return (idx[f], idx[t])
+end
+
+function extract_bus(branch::String)
+    x = split(branch, "-")
+    return (parse(Int,x[1]), parse(Int,x[2]))
+end
+
 " Get the bus number index of the from-bus and to-bus from all branches "
 function get_bus_idx(A::AbstractMatrix)
     m, n = size(A)
@@ -438,7 +456,7 @@ end
 function calc_severity(opfm::OPFmodel, lim::Real = 0.9)
     rate = make_named_array(get_rate, get_branches(opfm.sys))
     sev = 0
-    for c in opfm.contingencies
+    for c in 1:length(opfm.contingencies)
         for l in get_name.(get_branches(opfm.sys))
             sev += calc_line_severity(value(opfm.mod[:pfc][l,c]), rate[l], lim)
         end
@@ -453,7 +471,7 @@ calc_severity(
         pfc, 
         lim::Real = 0.9
         ) = 
-    sum(calc_line_severity(pfc[l,c], rate[l], lim) for c in contingencies, l in branches)
+    sum(calc_line_severity(pfc[l,c], rate[l], lim) for c in 1:length(opfm.contingencies), l in branches)
 
 calc_severity(values::AbstractVector{<:Real}, rate::AbstractVector{<:Real}, lim::Real = 0.9) = 
     sum(calc_line_severity.(values, rate, [lim]))

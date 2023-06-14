@@ -225,8 +225,9 @@ get_all_islands(B::AbstractMatrix, bx::Vector{<:Tuple{Integer, Integer}}, slack:
 function get_all_islands(opfm::OPFmodel, slack::Integer)
     idx = get_nodes_idx(opfm.nodes)
     bx = get_bus_idx.(opfm.branches, [idx])
+    cx = get_bus_idx.(opfm.contingencies, [idx])
     A = calc_A(bx, length(opfm.nodes))
-    return get_all_islands(A'*A, bx, slack)
+    return get_all_islands(A'*A, cx, slack)
 end
 
 function find_islands(T::SparseArrays.SparseMatrixCSC{<:Any, <:Integer})

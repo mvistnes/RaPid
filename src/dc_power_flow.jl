@@ -165,12 +165,13 @@ calc_isf(A::AbstractMatrix{<:Real}, D::AbstractMatrix{<:Real}, X::AbstractMatrix
 calc_isf(DA::AbstractMatrix{<:Real}, X::AbstractMatrix{<:Real}) = DA * X
 
 """ Make the isf-matrix """
-function get_isf(branches::AbstractVector{<:Branch}, nodes::AbstractVector{<:Bus})
-    A = calc_A(branches, length(nodes), get_nodes_idx(nodes))
+function get_isf(branches::AbstractVector{<:Branch}, nodes::AbstractVector{<:Bus}, 
+        idx::Dict{<:Any, <:Integer} = get_nodes_idx(nodes), slack::Integer = find_slack(nodes)[1])
+    A = calc_A(branches, length(nodes), idx)
     D = calc_D(branches)
     DA = D * A
     B = fast_calc_B(A, DA)
-    X = calc_X(B, find_slack(nodes)[1])
+    X = calc_X(B, slack)
     return calc_isf(DA, X)
 end
 
@@ -194,31 +195,6 @@ function get_isf(DA::AbstractMatrix{<:Real}, B::AbstractMatrix{<:Real}, cont::Tu
         c::Integer, slack::Integer, nodes::AbstractVector{<:Integer}, branches::AbstractVector{<:Integer})
     X = calc_X(DA, B, cont, c, slack, nodes)
     return calc_isf(DA[branches, nodes], X)
-end
-
-""" Make the PTDF matrix for using the input nodes and branches """
-function get_ptdf(branches::AbstractVector{<:Branch}, numnodes::Integer, idx::Dict{<:Any, <:Integer}, slack::Integer)
-    B = calc_B(branches, numnodes, idx)
-    B[:,slack] .= zero(Float64)
-    B[slack,:] .= zero(Float64)
-    B[slack,slack] = one(Float64)
-    return get_ptdf(LinearAlgebra.lu(B), branches, numnodes, idx, slack)
-end
-function get_ptdf(Bx, branches::AbstractVector{<:Branch}, numnodes::Integer, idx::Dict{<:Any, <:Integer}, slack::Integer)
-    A = zeros(Float64, size(branches,1), numnodes) # Container for the distribution factors
-    for (i, branch) in enumerate(branches)
-        branch.x == 0 && continue
-        ΔP = zeros(Float64, numnodes)
-        (f, t) = get_bus_id(branch) # (f)rom and (t)o bus at this branch
-        if f != slack
-            ΔP[idx[f]] = 1 / branch.x
-        end
-        if t != slack # ∈ keys(idx)
-            ΔP[idx[t]] = -1 / branch.x
-        end
-        A[i, :] = Bx \ ΔP # append factors to matrix
-    end
-    return A
 end
 
 """ Return the overload of a line, else return 0.0 """
@@ -276,4 +252,19 @@ function calculate_island_line_flows(pf::DCPowerFlow, cont::Tuple{Integer, Integ
     island, island_b = handle_islands(pf.B, pf.DA, cont, c, pf.slack)
     ptdf = get_isf(pf.DA, pf.B, cont, c, pf.slack, island, island_b)
     return ptdf * Pᵢ[island]
+end
+
+function get_contingency_ptdf(opfm::OPFmodel, pf::DCPowerFlow)
+    idx = get_nodes_idx(opfm.nodes)
+    ptdf = Vector{Matrix{Float64}}(undef, length(opfm.contingencies))
+    for (i,(c,cont)) in enumerate(get_branch_bus_idx(opfm.branches, opfm.contingencies, idx))
+        try
+            ptdf[i] = get_isf(pf, cont, c)
+        catch DivideError
+            island, island_b = handle_islands(pf.B, pf.DA, cont, c, pf.slack)
+            ptdf[i] = zeros(eltype(pf.ϕ), size(pf.ϕ))
+            ptdf[i][island_b, island] = get_isf(pf.DA, pf.B, cont, c, pf.slack, island, island_b)
+        end
+    end
+    return ptdf
 end

@@ -121,16 +121,6 @@ function calculate_line_flows(
     get_isf(pf, cont, branch)*Pᵢ
 end
 
-function get_overload(
-        pf::DCPowerFlow,
-        branch::Integer,
-        cont::Tuple{Integer, Integer}, 
-        Pᵢ::AbstractVector{<:Real},
-        linerating::AbstractVector{<:Real}
-    )
-    find_overload.(calculate_line_flows(pf, cont, branch, Pᵢ), linerating)
-end
-
 """
 Calculation of line flow in a contingency case using IMML.
 If DivideError, there are island(s) in the system.
@@ -179,32 +169,6 @@ function calculate_line_flows(
     calculate_line_flows(pf.F, pf.ϕ, pf.B[cont[1], cont[2]], 
         pf.DA[branch, cont[2]] / pf.B[cont[1], cont[2]], 
         pf.X, pf.θ, cont[1], cont[2], branch)
-end
-
-function get_overload(
-        Pl0::AbstractVector{<:Real}, 
-        ptdf::AbstractMatrix{<:Real}, 
-        B::AbstractMatrix{<:Real},
-        DA::AbstractMatrix{<:Real}, 
-        X::AbstractMatrix{<:Real}, 
-        θ::AbstractVector{<:Real}, 
-        cont::Tuple{Integer, Integer},
-        branch::Integer,
-        linerating::AbstractVector{<:Real}
-    )
-    find_overload.(
-                calculate_line_flows(Pl0, ptdf, B, DA, X, θ, cont[1], cont[2], branch), 
-                linerating
-            )
-end
-
-function get_overload(
-        pf::DCPowerFlow,
-        cont::Tuple{Integer, Integer},
-        branch::Integer, 
-        linerating::AbstractVector{<:Real}
-    )
-    find_overload.(calculate_line_flows(pf, cont, branch), linerating)
 end
 
 # calculate_line_flows(

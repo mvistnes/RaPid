@@ -41,4 +41,5 @@ prob =
     0.41, 0.35, 0.34, 0.32, 0.54, 0.35, 0.35, 0.38, 0.38, 0.34, 0.34, 0.45 # branches
     ]
 prob /= 8760
+set_rate!.(get_branches(system), get_rate.(get_branches(system))*0.8)
 
