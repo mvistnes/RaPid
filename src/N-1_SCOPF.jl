@@ -14,20 +14,21 @@ function scopf(type::OPF, system::System, optimizer;
             prob = nothing,
             time_limit_sec::Integer = 600,
             unit_commit::Bool = false,
-            max_shed::Real = 0.1,
+            max_shed::Real = 1.0,
             max_curtail::Real = 1.0,
             renewable_prod::Real= 0.5, 
             circuit_breakers::Bool=false,
             short_term_limit_multi::Real = 1.5,
             ramp_minutes::Real = 10,
-            ramp_mult::Real = 10
+            ramp_mult::Real = 10,
+            debug=false
         )
     contingencies = isnothing(contingencies) ? sort_components!(get_branches(system)) : contingencies
     prob = isnothing(prob) ? make_prob(contingencies) : prob
     # set_renewable_prod!(system, renewable_prod)
     # set_active_power_demand!(system)
 
-    opfm = isnothing(voll) ? opfmodel(system, optimizer, time_limit_sec) : opfmodel(system, optimizer, time_limit_sec, voll, contingencies, prob)
+    opfm = isnothing(voll) ? opfmodel(system, optimizer, time_limit_sec, debug=debug) : opfmodel(system, optimizer, time_limit_sec, voll, contingencies, prob, debug=debug)
     idx = get_nodes_idx(opfm.nodes)
     list = make_list(opfm, idx, opfm.nodes)
     if type == SC::OPF
@@ -79,7 +80,7 @@ function p_scopf(opfm::OPFmodel, list::Vector{CTypes}, idx::Dict{<:Any, <:Int};
     add_lim_P_gen!(opfm, islands, list)
     add_lim_load_shed_cont!(opfm, islands, list, max_shed=max_shed)
     listPr = get_active_power.(opfm.renewables)
-    !isempty(listPr) && add_lim_renewable_shed_cont!(opfm, islands, listPr, max_curtail=max_curtail)
+    !isempty(listPr) && add_lim_renewable_shed_cont!(opfm, islands, list, listPr, max_curtail=max_curtail)
     if circuit_breakers
         add_circuit_breakers_cont!(opfm, short_term_limit_multi)
     else
@@ -110,7 +111,7 @@ function pc_scopf(opfm::OPFmodel, list::Vector{CTypes}, idx::Dict{<:Any, <:Int};
     # init_var_dc_PC_SCOPF!(opfm, max_shed) |> add_c_bus_ccont! |> add_obj!
     add_lim_load_shed_ccont!(opfm, islands, list, max_shed=max_shed)
     listPr = get_active_power.(opfm.renewables)
-    !isempty(listPr) && add_lim_renewable_shed_ccont!(opfm, islands, listPr, max_curtail=max_curtail)
+    !isempty(listPr) && add_lim_renewable_shed_ccont!(opfm, islands, list, listPr, max_curtail=max_curtail)
     if circuit_breakers
         add_circuit_breakers_ccont!(opfm, short_term_limit_multi)
     else
@@ -184,9 +185,9 @@ end
 
 """ Objective with base case generation and load shedding """
 function add_obj!(opfm::OPFmodel)
-    @objective(opfm.mod, Min, opfm.cost_ctrl_gen' * opfm.mod[:pg0] + 
+    @objective(opfm.mod, Min, sum(x * opfm.mod[:pg0][i] for (i,x) in enumerate(opfm.cost_ctrl_gen))+ 
         # opfm.cost_renewables' * opfm.mod[:pr0] + 
-        opfm.voll' * opfm.mod[:ls0])
+        sum(x * opfm.mod[:ls0][i] for (i,x) in enumerate(opfm.voll)))
     @info "Objective added: base case generation and load shedding"
 end
 """ Objective with base case and contingency generation and load shedding """
@@ -194,7 +195,8 @@ function add_obj_cont!(opfm::OPFmodel)
     add_obj!(opfm)
     @objective(opfm.mod, Min, objective_function(opfm.mod) + 
             sum(opfm.prob[c] * (
-                sum(opfm.voll' * opfm.mod[:lsc][:,c]) # +
+                sum(x * opfm.mod[:lsc][i,c] for (i,x) in enumerate(opfm.voll)) # +
+                # sum(opfm.voll' * opfm.mod[:lsc][:,c]) # +
                 # sum(opfm.cost_renewables' * opfm.mod[:prc][:,c])
                 ) for c in 1:length(opfm.contingencies)
             )
@@ -206,8 +208,10 @@ function add_obj_ccont!(opfm::OPFmodel, ramp_mult = 10)
     add_obj_cont!(opfm)
     @objective(opfm.mod, Min, objective_function(opfm.mod) + 
             sum(opfm.prob[c] * (
-                sum(opfm.cost_ctrl_gen' * ramp_mult * opfm.mod[:pgu][:,c]) + #+ opfm.mod[:pgd][g,c]*0.1) 
-                sum(opfm.voll' * opfm.mod[:lscc][:,c]) # +
+                sum(x * ramp_mult * (opfm.mod[:pgu][i,c] .+ opfm.mod[:pgd][i,c]) for (i,x) in enumerate(opfm.cost_ctrl_gen)) + 
+                sum(x * opfm.mod[:lscc][i,c] for (i,x) in enumerate(opfm.voll)) # +
+                # sum(opfm.cost_ctrl_gen' * ramp_mult * (opfm.mod[:pgu][:,c] .+ opfm.mod[:pgd][:,c])) + 
+                # sum(opfm.voll' * opfm.mod[:lscc][:,c]) # +
                 # sum(opfm.cost_renewables' * opfm.mod[:prcc][:,c])
                 ) for c in 1:length(opfm.contingencies)
             )
@@ -251,7 +255,8 @@ function add_c_bus_cont!(opfm::OPFmodel, islands::Vector, slack::Integer, list::
         end
     end
     # @constraint(opfm.mod, vac_lim, -π/2 .<= opfm.mod[:vac] .<= π/2) # Not really needed
-    @constraint(opfm.mod, ref_vac, opfm.mod[:vac][slack[1],:] .== 0) # Set voltage angle at reference bus
+    @constraint(opfm.mod, ref_vac[l = 1:length(opfm.contingencies)], opfm.mod[:vac][slack[1],l] .== 0) # Set voltage angle at reference bus
+    # @constraint(opfm.mod, sum(opfm.mod[:lsc]) == sum(opfm.mod[:prc]) + sum(opfm.mod[:pgc]))
     @info "- After contingency, before corrective actions"
 end
 """ Incerted power at each bus for the base case and short-term and long-term contingencies """
@@ -270,7 +275,8 @@ function add_c_bus_ccont!(opfm::OPFmodel, islands::Vector, slack::Integer, list:
         end
     end
     # @constraint(opfm.mod, vacc_lim, -π/2 .<= opfm.mod[:vacc] .<= π/2) # Not really needed
-    @constraint(opfm.mod, ref_vacc, opfm.mod[:vacc][slack[1],:] .== 0) # Set voltage angle at reference bus
+    @constraint(opfm.mod, ref_vacc[l = 1:length(opfm.contingencies)], opfm.mod[:vacc][slack[1],l] .== 0) # Set voltage angle at reference bus
+    # @constraint(opfm.mod, sum(opfm.mod[:pgu]) + sum(opfm.mod[:lscc]) == sum(opfm.mod[:pgd]) + sum(opfm.mod[:prcc]))
     @info "- After contingency and corrective actions"
 end
 
@@ -280,9 +286,8 @@ function add_c_branch!(
             x::AbstractVector{<:Real} = get_x.(opfm.branches), 
             branch_rating::AbstractVector{<:Real} = get_rate.(opfm.branches)
         )
-    @constraint(opfm.mod, pf0_lim, 
-            -branch_rating .<= opfm.mod[:pf0] .<= branch_rating
-        )
+    @constraint(opfm.mod, pf0_lim_n, -branch_rating .<= opfm.mod[:pf0])
+    @constraint(opfm.mod, pf0_lim_p, opfm.mod[:pf0] .<= branch_rating)
     @constraint(opfm.mod, pb0[l = 1:length(opfm.branches)],
             opfm.mod[:pf0][l] - (opfm.mod[:va0][idx[opfm.branches[l].arc.from.number]] - 
                 opfm.mod[:va0][idx[opfm.branches[l].arc.to.number]]) / x[l] == 0
@@ -296,13 +301,15 @@ function add_c_branch_cont!(
             branch_rating::AbstractVector{<:Real} = get_rate.(opfm.branches); 
             short_term_limit_multi::Real = 1.0
         )
-    @constraint(opfm.mod, pfc_lim[l = 1:length(opfm.branches), c = 1:length(opfm.contingencies)], 
-            -branch_rating[l] * !isequal(l,c) * short_term_limit_multi <= opfm.mod[:pfc][l,c] <= 
-            branch_rating[l] * !isequal(l,c) * short_term_limit_multi
+    @constraint(opfm.mod, pfc_lim_n[l = 1:length(opfm.branches), c = 1:length(opfm.contingencies)], 
+            -branch_rating[l] * !isequal(opfm.branches[l],opfm.contingencies[c]) * short_term_limit_multi <= opfm.mod[:pfc][l,c]
+        )
+    @constraint(opfm.mod, pfc_lim_p[l = 1:length(opfm.branches), c = 1:length(opfm.contingencies)], 
+            opfm.mod[:pfc][l,c] <= !isequal(opfm.branches[l],opfm.contingencies[c]) * branch_rating[l] * short_term_limit_multi
         )
     add_c_branch!(opfm, idx, x, branch_rating)
     @constraint(opfm.mod, pbc[l = 1:length(opfm.branches), c = 1:length(opfm.contingencies)],
-            opfm.mod[:pfc][l,c] - !isequal(l,c) * (opfm.mod[:vac][idx[opfm.branches[l].arc.from.number],c] - 
+            opfm.mod[:pfc][l,c] - !isequal(opfm.branches[l],opfm.contingencies[c]) * (opfm.mod[:vac][idx[opfm.branches[l].arc.from.number],c] - 
             opfm.mod[:vac][idx[opfm.branches[l].arc.to.number],c]) / x[l] == 0
         )
     @info "- After contingency, before corrective actions"
@@ -314,12 +321,15 @@ function add_c_branch_ccont!(
             branch_rating::AbstractVector = get_rate.(opfm.branches); 
             short_term_limit_multi::Real = 1.0
         )
-    @constraint(opfm.mod, pfcc_lim[l = 1:length(opfm.branches), c = 1:length(opfm.contingencies)], 
-            -branch_rating[l] * !isequal(l,c) <= opfm.mod[:pfcc][l,c] <= branch_rating[l] * !isequal(l,c)
+    @constraint(opfm.mod, pfcc_lim_n[l = 1:length(opfm.branches), c = 1:length(opfm.contingencies)], 
+            -branch_rating[l] * !isequal(opfm.branches[l],opfm.contingencies[c]) <= opfm.mod[:pfcc][l,c]
+        )
+    @constraint(opfm.mod, pfcc_lim_p[l = 1:length(opfm.branches), c = 1:length(opfm.contingencies)], 
+            opfm.mod[:pfcc][l,c] <= !isequal(opfm.branches[l],opfm.contingencies[c]) * branch_rating[l]
         )
     add_c_branch_cont!(opfm, idx, x, branch_rating, short_term_limit_multi=short_term_limit_multi)
     @constraint(opfm.mod, pbcc[l = 1:length(opfm.branches), c = 1:length(opfm.contingencies)],
-            opfm.mod[:pfcc][l,c] - !isequal(l,c) * (opfm.mod[:vacc][idx[opfm.branches[l].arc.from.number],c] - 
+            opfm.mod[:pfcc][l,c] - !isequal(opfm.branches[l],opfm.contingencies[c]) * (opfm.mod[:vacc][idx[opfm.branches[l].arc.from.number],c] - 
             opfm.mod[:vacc][idx[opfm.branches[l].arc.to.number],c]) / x[l] == 0
         )
     @info "- After contingency and corrective actions"
@@ -330,9 +340,8 @@ function add_c_dc_branch!(
             opfm::OPFmodel, 
             branch_rating::AbstractVector = get_active_power_limits_from.(opfm.dc_branches)
         )
-    @constraint(opfm.mod, pfdc0_lim[l = 1:length(opfm.dc_branches)], 
-            branch_rating[l].min <= opfm.mod[:pfdc0][l] <= branch_rating[l].max
-        )
+    @constraint(opfm.mod, pfdc0_lim_n[l = 1:length(opfm.dc_branches)], branch_rating[l].min <= opfm.mod[:pfdc0][l])
+    @constraint(opfm.mod, pfdc0_lim_p[l = 1:length(opfm.dc_branches)], opfm.mod[:pfdc0][l] <= branch_rating[l].max)
     @info "Power flow on dc lines: Base case"
 end 
 """ Power flow on DC branch and branch limits for the base case and short-term and long-term contingency """
@@ -340,8 +349,11 @@ function add_c_dc_branch_ccont!(
             opfm::OPFmodel, 
             branch_rating::AbstractVector = get_active_power_limits_from.(opfm.dc_branches)
         )
-    @constraint(opfm.mod, pfdccc_lim[l = 1:length(opfm.dc_branches), c = 1:length(opfm.contingencies)], 
-            branch_rating[l].min <= opfm.mod[:pfdccc][l,c] <= branch_rating[l].max
+    @constraint(opfm.mod, pfdccc_lim_n[l = 1:length(opfm.dc_branches), c = 1:length(opfm.contingencies)], 
+            branch_rating[l].min <= opfm.mod[:pfdccc][l,c]
+        )
+    @constraint(opfm.mod, pfdccc_lim_p[l = 1:length(opfm.dc_branches), c = 1:length(opfm.contingencies)], 
+            opfm.mod[:pfdccc][l,c] <= branch_rating[l].max
         )
     add_c_dc_branch!(opfm, branch_rating)
     @info "- After contingency and corrective actions"
@@ -355,7 +367,7 @@ function add_min_P_gen!(opfm::OPFmodel)
     @info "Minimum power generation limits added"
 end
 
-""" Restrict active power generation in Contingency"""
+""" Restrict active power generation in contingency"""
 function add_lim_P_gen!(opfm::OPFmodel, islands::Vector, list::Vector{CTypes})
     for (c,island) in enumerate(islands)
         if length(island) < length(opfm.nodes)
@@ -363,10 +375,10 @@ function add_lim_P_gen!(opfm::OPFmodel, islands::Vector, list::Vector{CTypes})
                 @constraint(opfm.mod, [g in list[n].ctrl_generation], 0 <= opfm.mod[:pg0][g] - opfm.mod[:pgc][g,c])
             end
             for n in setdiff(1:length(opfm.nodes), island)
-                @constraint(opfm.mod, [g in list[n].ctrl_generation], 0 == opfm.mod[:pg0][g] - opfm.mod[:pgc][g,c])
+                @constraint(opfm.mod, [g in list[n].ctrl_generation], opfm.mod[:pg0][g] == opfm.mod[:pgc][g,c])
             end
         else
-            @constraint(opfm.mod, 0 .<= opfm.mod[:pg0] .- opfm.mod[:pgc][:,c])
+            @constraint(opfm.mod, [g in 1:length(opfm.ctrl_generation)], 0 .<= opfm.mod[:pg0] .- opfm.mod[:pgc][g,c])
         end
     end
     @info "Restriction power generation limits added"
@@ -382,20 +394,21 @@ function add_lim_ramp_P_gen!(opfm::OPFmodel, islands::Vector, list::Vector{CType
                 @constraint(opfm.mod, [g in list[n].ctrl_generation], opfm.mod[:pgu][g,c] .<= rampup * ramp_minutes)
                 @constraint(opfm.mod, [g in list[n].ctrl_generation], opfm.mod[:pgd][g,c] .<= rampdown * ramp_minutes)
                 @constraint(opfm.mod, [g in list[n].ctrl_generation], 
-                    0 <= opfm.mod[:pg0][g] + opfm.mod[:pgu][g,c] - opfm.mod[:pgd][g,c] <= p_lim[g])
+                    0 <= opfm.mod[:pg0][g] + opfm.mod[:pgu][g,c] - opfm.mod[:pgd][g,c])
+                @constraint(opfm.mod, [g in list[n].ctrl_generation], 
+                    opfm.mod[:pg0][g] + opfm.mod[:pgu][g,c] - opfm.mod[:pgd][g,c] <= p_lim[g])
             end
             for n in setdiff(1:length(opfm.nodes), island)
                 @constraint(opfm.mod, [g in list[n].ctrl_generation], 
-                    opfm.mod[:pg0][g] == opfm.mod[:pgd][g,c])
-                @constraint(opfm.mod, [g in list[n].ctrl_generation], 
-                    0 == opfm.mod[:pgu][g,c])
+                    opfm.mod[:pg0][g] == opfm.mod[:pgd][g,c] - opfm.mod[:pgu][g,c])
             end
         else
-            @constraint(opfm.mod, opfm.mod[:pgu][:,c] .<= rampup * ramp_minutes)
-            @constraint(opfm.mod, opfm.mod[:pgd][:,c] .<= rampdown * ramp_minutes)
-            @constraint(opfm.mod, 
-                0 .<= opfm.mod[:pg0] .+ (opfm.mod[:pgu][:,c] .- opfm.mod[:pgd][:,c]) .<= p_lim
-            )
+            @constraint(opfm.mod, [g in 1:length(opfm.ctrl_generation)], opfm.mod[:pgu][g,c] <= rampup[g] * ramp_minutes)
+            @constraint(opfm.mod, [g in 1:length(opfm.ctrl_generation)], opfm.mod[:pgd][g,c] <= rampdown[g] * ramp_minutes)
+            @constraint(opfm.mod, [g in 1:length(opfm.ctrl_generation)], 
+                0 <= opfm.mod[:pg0][g] + (opfm.mod[:pgu][g,c] - opfm.mod[:pgd][g,c]))
+            @constraint(opfm.mod, [g in 1:length(opfm.ctrl_generation)], 
+                opfm.mod[:pg0][g] + (opfm.mod[:pgu][g,c] - opfm.mod[:pgd][g,c]) <= p_lim[g])
         end
     end
     @info "Ramping restrictions on generators added"
@@ -414,13 +427,15 @@ function add_lim_load_shed_cont!(opfm::OPFmodel, islands::Vector,
         listPd = get_active_power.(opfm.demands); max_shed::Real = 1.0)
     add_lim_load_shed!(opfm, listPd, max_shed=max_shed)
     for (c,island) in enumerate(islands)
-        for n in island
-            @constraint(opfm.mod, [d in list[n].demands], opfm.mod[:lsc][d,c] <= listPd[d] * max_shed)
-        end
         if length(island) < length(opfm.nodes)
+            for n in island
+                @constraint(opfm.mod, [d in list[n].demands], opfm.mod[:lsc][d,c] <= listPd[d] * max_shed)
+            end
             for n in setdiff(1:length(opfm.nodes), island)
                 @constraint(opfm.mod, [d in list[n].demands], opfm.mod[:lsc][d,c] == listPd[d])
             end
+        else
+            @constraint(opfm.mod, [d in 1:length(opfm.demands)], opfm.mod[:lsc][d,c] <= listPd[d] * max_shed)
         end
     end
     @info "- After contingency, before corrective actions"
@@ -430,13 +445,15 @@ function add_lim_load_shed_ccont!(opfm::OPFmodel, islands::Vector,
         listPd = get_active_power.(opfm.demands); max_shed::Real = 1.0)
     add_lim_load_shed_cont!(opfm, islands, list, listPd, max_shed=max_shed)
     for (c,island) in enumerate(islands)
-        for n in island
-            @constraint(opfm.mod, [d in list[n].demands], opfm.mod[:lscc][d,c] <= listPd[d] * max_shed)
-        end
         if length(island) < length(opfm.nodes)
+            for n in island
+                @constraint(opfm.mod, [d in list[n].demands], opfm.mod[:lscc][d,c] <= listPd[d] * max_shed)
+            end
             for n in setdiff(1:length(opfm.nodes), island)
                 @constraint(opfm.mod, [d in list[n].demands], opfm.mod[:lscc][d,c] == listPd[d])
             end
+        else
+            @constraint(opfm.mod, [d in 1:length(opfm.demands)], opfm.mod[:lscc][d,c] <= listPd[d] * max_shed)
         end
     end
     @info "- After contingency and corrective actions"
@@ -454,13 +471,15 @@ function add_lim_renewable_shed_cont!(opfm::OPFmodel, islands::Vector,
         list::Vector{CTypes}, listPr = get_active_power.(opfm.renewables); max_curtail::Real = 1.0)
     add_lim_renewable_shed!(opfm, listPr, max_curtail=max_curtail)
     for (c,island) in enumerate(islands)
-        for n in island
-            @constraint(opfm.mod, [d = list[n].renewables], opfm.mod[:prc][d,c] <= listPr[d] * max_curtail)
-        end
         if length(island) < length(opfm.nodes)
+            for n in island
+                @constraint(opfm.mod, [d in list[n].renewables], opfm.mod[:prc][d,c] <= listPr[d] * max_curtail)
+            end
             for n in setdiff(1:length(opfm.nodes), island)
                 @constraint(opfm.mod, [d in list[n].renewables], opfm.mod[:prc][d,c] == listPr[d])
             end
+        else
+            @constraint(opfm.mod, [d in 1:length(opfm.renewables)], opfm.mod[:prc][d,c] <= listPr[d] * max_curtail)
         end
     end
     @info "- After contingency, before corrective actions"
@@ -469,13 +488,15 @@ function add_lim_renewable_shed_ccont!(opfm::OPFmodel, islands::Vector,
         list::Vector{CTypes}, listPr = get_active_power.(opfm.renewables); max_curtail::Real = 1.0)
     add_lim_renewable_shed_cont!(opfm, islands, list, listPr, max_curtail=max_curtail)
     for (c,island) in enumerate(islands)
-        for n in island
-            @constraint(opfm.mod, [d = list[n].renewables], opfm.mod[:prcc][d,c] <= listPr[d] * max_curtail)
-        end
         if length(island) < length(opfm.nodes)
+            for n in island
+                @constraint(opfm.mod, [d in list[n].renewables], opfm.mod[:prcc][d,c] <= listPr[d] * max_curtail)
+            end
             for n in setdiff(1:length(opfm.nodes), island)
                 @constraint(opfm.mod, [d in list[n].renewables], opfm.mod[:prcc][d,c] == listPr[d])
             end
+        else
+            @constraint(opfm.mod, [d in 1:length(opfm.demands)], opfm.mod[:prcc][d,c] <= listPr[d] * max_curtail)
         end
     end
     @info "- After contingency and corrective actions"

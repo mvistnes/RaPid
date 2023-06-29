@@ -109,17 +109,20 @@ end
 #     return isf
 # end
 
-get_isf(pf::DCPowerFlow, cont::Tuple{Integer, Integer}, branch::Integer) = 
+get_isf(
+        pf::DCPowerFlow, 
+        cont::Tuple{Integer, Integer}, 
+        branch::Integer
+    ) = 
     get_isf(pf.X, pf.B, pf.DA, cont, branch)
 
-function calculate_line_flows(
+calculate_line_flows(
         pf::DCPowerFlow, 
         cont::Tuple{Integer, Integer},
         branch::Integer, 
         Pᵢ::AbstractVector{<:Real}
-    ) 
+    ) =
     get_isf(pf, cont, branch)*Pᵢ
-end
 
 """
 Calculation of line flow in a contingency case using IMML.
@@ -161,15 +164,14 @@ Input:
     return Pl
 end
 
-function calculate_line_flows(
+calculate_line_flows(
         pf::DCPowerFlow,
         cont::Tuple{Integer, Integer}, 
         branch::Integer
-    )
+    ) =
     calculate_line_flows(pf.F, pf.ϕ, pf.B[cont[1], cont[2]], 
         pf.DA[branch, cont[2]] / pf.B[cont[1], cont[2]], 
         pf.X, pf.θ, cont[1], cont[2], branch)
-end
 
 # calculate_line_flows(
 #         pf::DCPowerFlow, 

@@ -2,8 +2,8 @@
 using PowerSystems
 using JuMP
 # using Ipopt # LP, SOCP, Nonconvex
-using Gurobi # LP, SOCP, Integer
-# using GLPK # LP, Integer
+import Gurobi # LP, SOCP, Integer
+import GLPK # LP, Integer
 using Plots
 using StatsPlots
 using Printf
@@ -118,18 +118,18 @@ end
 
 """ Constructor for OPFmodel """
 function opfmodel(sys::System, optimizer, time_limit_sec, voll::Vector{<:Real}, 
-        contingencies::Vector{<:Branch}=Component[], prob::Vector{<:Real}=[])
-    mod = Model(optimizer)
-    # mod = Model(optimizer; add_bridges = false)
-    set_string_names_on_creation(mod, false)
+        contingencies::Vector{<:Branch}=Component[], prob::Vector{<:Real}=[]; debug=false)
+    # mod = Model(optimizer)
+    mod = Model(optimizer; add_bridges = false)
+    set_string_names_on_creation(mod, debug)
     # @debug begin
     #     set_string_names_on_creation(mod, true)
     #     "Variable names is on."
     # end
 
-    # if GLPK.Optimizer == optimizer 
-    #     set_optimizer_attribute(mod, "msg_lev", GLPK.GLP_MSG_ON)
-    # end
+    if GLPK.Optimizer == optimizer 
+        set_optimizer_attribute(mod, "msg_lev", GLPK.GLP_MSG_ON)
+    end
 
     ctrl_generation = collect(get_ctrl_generation(sys))
     branches = sort_components!(get_branches(sys))
@@ -166,7 +166,7 @@ function opfmodel(sys::System, optimizer, time_limit_sec, voll::Vector{<:Real},
 end
 
 """ Automatic constructor for OPFmodel where voll, prob, and contingencies are automatically computed. """
-function opfmodel(sys::System, optimizer, time_limit_sec)
+function opfmodel(sys::System, optimizer, time_limit_sec; debug=false)
     voll, prob, contingencies = setup(sys, 1, 4)
     fix_generation_cost!(sys)
     return opfmodel(sys, optimizer, time_limit_sec, voll, contingencies, prob)
@@ -223,6 +223,7 @@ make_named_array(value_func, list) = JuMP.Containers.DenseAxisArray(
 )
 
 struct CTypes
+    node
     ctrl_generation
     renewables
     demands
@@ -232,7 +233,7 @@ end
 
 """ Make a list where all components distributed on their node """
 function make_list(opfm::OPFmodel, idx::Dict{<:Any, <:Int}, nodes::AbstractVector{Bus}) 
-    list = [CTypes([Int[] for _ in 1:5]...) for _ in 1:length(nodes)]
+    list = [CTypes(n, [Int[] for _ in 1:5]...) for n in nodes]
     for (i,r) in enumerate(opfm.ctrl_generation)
         push!(list[idx[r.bus.number]].ctrl_generation, i)
     end
@@ -380,8 +381,7 @@ get_high_dual(varref::VariableRef) = dual(UpperBoundRef(varref))
 PowerSystems.get_active_power(value::StandardLoad) = value.current_active_power
 
 """ Return the net power injected at each node. """
-function get_net_Pᵢ(opfm::OPFmodel, idx::Dict{<:Any, <:Int} = get_nodes_idx(opfm.nodes)
-    )
+function get_net_Pᵢ(opfm::OPFmodel, idx::Dict{<:Any, <:Int} = get_nodes_idx(opfm.nodes))
     P = zeros(length(opfm.nodes))
     for (i,r) in enumerate(opfm.renewables)
         P[idx[r.bus.number]] += get_active_power(r) - JuMP.value(opfm.mod[:pr0][i])

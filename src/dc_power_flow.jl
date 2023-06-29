@@ -60,6 +60,7 @@ function calc_Pᵢ(branches::AbstractVector{<:Branch}, θ::AbstractVector{<:Real
     return P
 end
 
+""" Calculate the net power for each node from the power flow """
 function calc_Pᵢ_from_flow(branches::AbstractVector{<:Branch}, F::AbstractVector{<:Real}, numnodes::Integer, idx::Dict{<:Any, <:Int})
     P = zeros(numnodes)
     for (i,branch) in enumerate(branches)

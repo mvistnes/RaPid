@@ -27,7 +27,7 @@ for g in SCOPF.get_generation(system)
         SCOPF.set_operation_cost!(g, 50)
     end
 end
-prob = fill(0.01, length(branches))
+prob = fill(0.01, length(contingencies))
 short = 1.25
 long = 1.0
 
