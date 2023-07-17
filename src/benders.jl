@@ -21,12 +21,13 @@ function run_benders(type::OPF, system::System, voll=nothing, prob=nothing, cont
         branch_short_term_limit_multi::Real = 1.5, branch_long_term_limit_multi::Real = 1.2, 
         gen_short_term_limit_multi::Real = 2.0, gen_long_term_limit_multi::Real = 1.0, p_failure = 0.0, branch_c = nothing, rate_c = 0.0, debug = false)
     total_time = time()
-    opfm = scopf(SC, system, Gurobi.Optimizer, voll=voll, prob=prob, contingencies=contingencies, ramp_minutes=ramp_minutes, max_shed=max_shed, 
-        renewable_prod = 1.0, debug = debug)
-    if !isnothing(branch_c) 
-        @info "Flow constraint on branch $branch_c is $rate_c."
-        JuMP.@constraint(opfm.mod, opfm.mod[:pf0][findfirst(x -> x == branch_c, opfm.branches)] == rate_c)
-    end
+    # opfm = scopf(SC, system, Gurobi.Optimizer, voll=voll, prob=prob, contingencies=contingencies, ramp_minutes=ramp_minutes, max_shed=max_shed, 
+    #     renewable_prod = 1.0, debug = debug)
+    opfm, Pc_ptdf, Pcc_ptdf = SCOPF.opf(SC, system, Gurobi.Optimizer, voll=voll, contingencies=contingencies, prob=prob, max_shed=max_shed)
+    # if !isnothing(branch_c) 
+    #     @info "Flow constraint on branch $branch_c is $rate_c."
+    #     JuMP.@constraint(opfm.mod, opfm.mod[:pf0][findfirst(x -> x == branch_c, opfm.branches)] == rate_c)
+    # end
     MOI.set(opfm.mod, MOI.Silent(), true) # supress output from the solver
     solve_model!(opfm.mod)
     termination_status(opfm.mod) != MOI.OPTIMAL && return opfm, [], [], [], []
@@ -51,11 +52,11 @@ function run_benders(type::OPF, system::System, voll=nothing, prob=nothing, cont
     island_b = Vector{Vector{Int64}}()
 
     # Get initial state
-    pf = SCOPF.DCPowerFlow(opfm.mod, opfm.nodes, opfm.branches, idx)
+    Pᵢ = get_net_Pᵢ(opfm, idx)
+    pf = SCOPF.DCPowerFlow(opfm.nodes, opfm.branches, Pᵢ, idx)
     ptdf = copy(pf.ϕ)
     Pg = get_controllable(opfm, idx)
     Pd = get_Pd(opfm, idx) # Fixed injection
-    Pᵢ = calc_Pᵢ(pf)
     ΔPc = zeros(length(Pg))
     ΔPcc = zeros(length(Pg))
     ΔPccx = zeros(length(Pg))
@@ -90,13 +91,16 @@ function run_benders(type::OPF, system::System, voll=nothing, prob=nothing, cont
                 end
             end
             @info "Island: Contingency line $(cont[1])-$(cont[2])-i_$(c)"
-            Pᵢ, Pg = update_model!(opfm, pf, Pd, total_solve_time, idx)
+            Pᵢ, Pg, total_solve_time = update_model!(opfm, pf, Pd, total_solve_time, idx)
         end
-        overloads_c = filter_overload(ptdf * (Pᵢ .+ get_ΔPc(length(opfm.nodes), list, Pc, c)), linerating * branch_short_term_limit_multi)
+        ΔPc = get_ΔPc(length(opfm.nodes), list, Pc, c)
+        overloads_c = filter_overload(ptdf * (Pᵢ .+ ΔPc), linerating * branch_short_term_limit_multi)
         if type == PCSC::OPF
-            overloads_cc = filter_overload(ptdf * (Pᵢ .+ get_ΔPcc(opfm, length(opfm.nodes), list, Pcc, c)), linerating * branch_long_term_limit_multi)
+            ΔPcc = get_ΔPcc(opfm, length(opfm.nodes), list, Pcc, c)
+            overloads_cc = filter_overload(ptdf * (Pᵢ .+ ΔPcc), linerating * branch_long_term_limit_multi)
             if p_failure > 0.0
-                overloads_ccx = filter_overload(ptdf * (Pᵢ .+ get_ΔPccx(opfm, length(opfm.nodes), list, Pccx, c)), linerating * branch_long_term_limit_multi)
+                ΔPccx = get_ΔPccx(opfm, length(opfm.nodes), list, Pccx, c)
+                overloads_ccx = filter_overload(ptdf * (Pᵢ .+ ΔPccx), linerating * branch_long_term_limit_multi)
             end
         end
 
@@ -114,7 +118,7 @@ function run_benders(type::OPF, system::System, voll=nothing, prob=nothing, cont
             end
         end
         if cut_added > 1
-            Pᵢ, Pg = update_model!(opfm, pf, Pd, total_solve_time, idx)
+            Pᵢ, Pg, total_solve_time = update_model!(opfm, pf, Pd, total_solve_time, idx)
             cut_added = 1
         end
         termination_status(opfm.mod) != MOI.OPTIMAL && return opfm, pf, Pc, Pcc, Pccx
@@ -129,12 +133,12 @@ function update_model!(opfm, pf, Pd, total_solve_time, idx)
     solve_model!(opfm.mod)
     total_solve_time += solve_time(opfm.mod)
 
-    set_θ!(pf, opfm.mod)
-    calc_Pline!(pf)
     # Pᵢ = calc_Pᵢ(pf)
     Pᵢ = get_net_Pᵢ(opfm, idx)
     Pg = Pᵢ - Pd
-    return Pᵢ, Pg
+    calc_θ!(pf, Pᵢ)
+    calc_Pline!(pf)
+    return Pᵢ, Pg, total_solve_time
 end
 
 function find_system_state(pf, cont, c, linerating, branch_short_term_limit_multi, branch_long_term_limit_multi, ptdf)

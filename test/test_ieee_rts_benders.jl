@@ -1,7 +1,7 @@
 # CC BY 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2022
 
-open("output.txt", "w") do out
-    redirect_stdout(out) do
+# open("output.txt", "w") do out
+#     redirect_stdout(out) do
 
 system = System("data\\matpower\\IEEE_RTS.m")
 # SCOPF.fix_generation_cost!(system);
@@ -55,14 +55,16 @@ ramp_minutes = 10
 max_shed = 0.1
 ramp_mult = 10
 
-@time opfm_ptdf, Pc_ptdf, Pcc_ptdf = SCOPF.opf(system, Gurobi.Optimizer, voll=voll, contingencies=contingencies, prob=prob, max_shed=max_shed, 
+@time opfm_ptdf, Pc_ptdf, Pcc_ptdf = SCOPF.opf(SCOPF.PCSC, system, Gurobi.Optimizer, voll=voll, contingencies=contingencies, prob=prob, max_shed=max_shed, 
     ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_limit_multi=short, long_term_limit_multi=long);
 @time SCOPF.solve_model!(opfm_ptdf.mod);
+println("Objective value PTDF: ", JuMP.objective_value(opfm_ptdf.mod))
 # @time opfm_norm = SCOPF.scopf(SCOPF.PCSC, system, Gurobi.Optimizer, voll=voll, contingencies=contingencies, prob=prob, max_shed=max_shed, 
 #     ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_limit_multi=short);
 # @time SCOPF.solve_model!(opfm_norm.mod);
 @time opfm, pf, Pc, Pcc, Pccx = SCOPF.run_benders(SCOPF.PCSC, system, voll, prob, contingencies, max_shed=max_shed, 
     ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, branch_short_term_limit_multi=short, branch_long_term_limit_multi=long, p_failure=0.00);
+println("Objective value Benders: ", JuMP.objective_value(opfm.mod))
 
 # SCOPF.print_corrective_results(opfm_norm)
 # SCOPF.print_benders_results(opfm_ptdf, Pc_ptdf, Pcc_ptdf)
@@ -70,5 +72,5 @@ ramp_mult = 10
 SCOPF.print_contingency_P(opfm, Pc, Pcc, Pccx, SCOPF.get_nodes_idx(opfm.nodes))
 SCOPF.print_contingency_P(opfm_ptdf, Pc_ptdf, Pcc_ptdf, Pccx, SCOPF.get_nodes_idx(opfm_ptdf.nodes))
 
-end
-end
+# end
+# end

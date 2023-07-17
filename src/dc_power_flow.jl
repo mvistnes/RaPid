@@ -33,6 +33,12 @@ function DCPowerFlow(model::Model, nodes::AbstractVector{<:Bus}, branches::Abstr
     return pf
 end
 
+function DCPowerFlow(nodes::AbstractVector{<:Bus}, branches::AbstractVector{<:Branch}, Pᵢ::AbstractVector{<:Real}, idx::Dict{<:Any, <:Int} = get_nodes_idx(nodes))
+    pf = DCPowerFlow(nodes, branches, idx)
+    calc_θ!(pf, Pᵢ)
+    calc_Pline!(pf)
+    return pf
+end
 get_slack(pf::DCPowerFlow) = pf.slack
 get_DA(pf::DCPowerFlow) = pf.DA
 get_B(pf::DCPowerFlow) = pf.B

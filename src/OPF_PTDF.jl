@@ -4,7 +4,7 @@ using PowerSystems
 using JuMP
 
 """ Run an OPF of a power system """
-function opf(system::System, optimizer; 
+function opf(type::OPF, system::System, optimizer; 
             voll = nothing, 
             contingencies = nothing, 
             prob = nothing,
@@ -95,12 +95,14 @@ function opf(system::System, optimizer;
         add_unit_commit!(opfm)
     end
 
-    ptdf = copy(pf.ϕ)
-    for (c,cont) in enumerate(get_bus_idx.(opfm.contingencies, [idx]))
-        @info "Contingency $(cont[1])-$(cont[2]) is added"
-        islands, island, island_b, ptdf = find_system_state(pf, cont, findfirst(x -> x == opfm.contingencies[c], opfm.branches), branch_rating, short_term_limit_multi, long_term_limit_multi, ptdf)
-        add_short_term_contingencies(opfm, Pc, islands, island, ptdf, list, pr_lim, pd_lim, max_shed, branch_rating * short_term_limit_multi, cont, c)
-        add_long_term_contingencies(opfm, Pcc, islands, island, ptdf, list, pr_lim, pd_lim, max_shed, branch_rating * long_term_limit_multi, ramp_mult, ramp_minutes, rampup, rampdown, dc_lim_min, dc_lim_max, pg_lim_max, cont, c)
+    if type != SC::OPF
+        ptdf = copy(pf.ϕ)
+        for (c,cont) in enumerate(get_bus_idx.(opfm.contingencies, [idx]))
+            @info "Contingency $(cont[1])-$(cont[2]) is added"
+            islands, island, island_b, ptdf = find_system_state(pf, cont, findfirst(x -> x == opfm.contingencies[c], opfm.branches), branch_rating, short_term_limit_multi, long_term_limit_multi, ptdf)
+            add_short_term_contingencies(opfm, Pc, islands, island, ptdf, list, pr_lim, pd_lim, max_shed, branch_rating * short_term_limit_multi, cont, c)
+            add_long_term_contingencies(opfm, Pcc, islands, island, ptdf, list, pr_lim, pd_lim, max_shed, branch_rating * long_term_limit_multi, ramp_mult, ramp_minutes, rampup, rampdown, dc_lim_min, dc_lim_max, pg_lim_max, cont, c)
+        end
     end
 
     return opfm, Pc, Pcc

@@ -429,7 +429,7 @@ function print_contingency_P(opfm, Pc, Pcc, Pccx, idx)
             end
             for (i,val) in enumerate(P)
                 if abs(val) > 0.00001
-                    Printf.@printf "%s,%2d,%5.2f\n" cont.name i val
+                    Printf.@printf "%s,%2d,%7.4f\n" cont.name i val
                 end
             end
         end
@@ -456,7 +456,7 @@ function print_contingency_P(opfm, Pc, Pcc, Pccx, idx)
             end
             for (i,val) in enumerate(P)
                 if abs(val) > 0.00001
-                    Printf.@printf "%s,%2d,%5.2f\n" cont.name i val
+                    Printf.@printf "%s,%2d,%7.4f\n" cont.name i val
                 end
             end
         end

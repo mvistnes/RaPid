@@ -14,13 +14,13 @@ SCOPF.fix_generation_cost!(system);
 #         SCOPF.set_operation_cost!(g, 30)
 #     end
 # end
-# for g in SCOPF.get_generation(system)
+# for g in SCOPF.get_ctrl_generation(system)
 #     n = g.bus.number
 #     active_capacities[n] += g.active_power_limits.max
 #     reactive_capacities[n] += g.reactive_power_limits.max
 #     cost[n] = max(SCOPF.get_generator_cost(g)[2], cost[n])
 # end
-# PowerSystems.remove_component!.([system], SCOPF.get_generation(system))
+# PowerSystems.remove_component!.([system], SCOPF.get_ctrl_generation(system))
 # for (i, (ac, rc, c)) in enumerate(zip(active_capacities, reactive_capacities, cost))
 #     if ac > 0.0
 #         PowerSystems.add_component!(system, PowerSystems.ThermalStandard(string(i), true, true, 
@@ -29,6 +29,7 @@ SCOPF.fix_generation_cost!(system);
 #     end
 # end
 SCOPF.set_ramp_limits!(system, 0.01);
+# SCOPF.set_renewable_prod!(system, 0.5)
 # set_rate!.(SCOPF.get_branches(system), get_rate.(SCOPF.get_branches(system))*0.8);
 
 # voll = fill(6000, length(SCOPF.get_demands(system)))
@@ -46,15 +47,18 @@ SCOPF.set_ramp_limits!(system, 0.01);
 # prob /= 8760
 # prob = prob[c]
 prob = fill(0.01, length(contingencies))
-short = 1.25
+short = 1.2
 long = 1.0
+ramp_minutes = 10
+max_shed = 0.1
+ramp_mult = 10
 
 @time opfm_norm = SCOPF.scopf(SCOPF.SC, system, Gurobi.Optimizer, voll=voll, contingencies=contingencies, prob=prob, max_shed=1.0, 
     ramp_minutes=10, short_term_limit_multi=short, debug=true);
 @time SCOPF.solve_model!(opfm_norm.mod);
 @time opfm, pf, Pc, Pcc, Pccx = SCOPF.run_benders(SCOPF.PCSC, system, voll, prob, contingencies, max_shed=1.0, 
     ramp_minutes=10, branch_short_term_limit_multi=short, branch_long_term_limit_multi=long, p_failure=0.00);
-@time opfm_ptdf, Pc_ptdf, Pcc_ptdf = SCOPF.opf(system, Gurobi.Optimizer, voll=voll, contingencies=contingencies, prob=prob, max_shed=max_shed, 
+@time opfm_ptdf, Pc_ptdf, Pcc_ptdf = SCOPF.opf(SCOPF.PCSC, system, Gurobi.Optimizer, voll=voll, contingencies=contingencies, prob=prob, max_shed=max_shed, 
     ramp_minutes=ramp_minutes, short_term_limit_multi=short, long_term_limit_multi=long);
 @time SCOPF.solve_model!(opfm_ptdf.mod);
 # opfm_norm = SCOPF.scopf(SCOPF.PCSC, system, Gurobi.Optimizer, voll=voll, contingencies=contingencies, prob=prob, max_shed=1.0, 
