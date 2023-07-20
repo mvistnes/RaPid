@@ -146,15 +146,15 @@ function print_contingency_power_flow(opfm::OPFmodel, pf::DCPowerFlow, Pc, Pcc, 
     println("Base case")
     print_power_flow(b_names, pf.F, linerates)
 
-    c_flow = [ptdf[i] * (Pᵢ .+ get_ΔPc(length(opfm.nodes), list, Pc, c)) for (i,(c,cont)) in enumerate(get_branch_bus_idx(opfm.branches, opfm.contingencies, idx))]
+    c_flow = [ptdf[i] * (Pᵢ .+ get_ΔPc(list, zeros(length(opfm.nodes)), Pc, c)) for (i,(c,cont)) in enumerate(get_branch_bus_idx(opfm.branches, opfm.contingencies, idx))]
     println("Short-term post-contingency")
     print_contingency_power_flow(opfm, b_names, c_flow, linerates * short_term_limit)
     
-    cc_flow = [ptdf[i] * (Pᵢ .+ get_ΔPcc(opfm, length(opfm.nodes), list, Pcc, c)) for (i,(c,cont)) in enumerate(get_branch_bus_idx(opfm.branches, opfm.contingencies, idx))]
+    cc_flow = [ptdf[i] * (Pᵢ .+ get_ΔPcc(opfm, list, zeros(length(opfm.nodes)), Pcc, c)) for (i,(c,cont)) in enumerate(get_branch_bus_idx(opfm.branches, opfm.contingencies, idx))]
     println("Long-term post-contingency")
     print_contingency_power_flow(opfm, b_names, cc_flow, linerates * long_term_limit)
     
-    ccx_flow = [ptdf[i] * (Pᵢ .+ get_ΔPccx(opfm, length(opfm.nodes), list, Pccx, c)) for (i,(c,cont)) in enumerate(get_branch_bus_idx(opfm.branches, opfm.contingencies, idx))]
+    ccx_flow = [ptdf[i] * (Pᵢ .+ get_ΔPccx(list, zeros(length(opfm.nodes)), Pccx, c)) for (i,(c,cont)) in enumerate(get_branch_bus_idx(opfm.branches, opfm.contingencies, idx))]
     println("Long-term post-contingency corrective failed")
     print_contingency_power_flow(opfm, b_names, ccx_flow, linerates * long_term_limit)
 end
@@ -188,17 +188,17 @@ function print_contingency_overflow(opfm::OPFmodel, pf::DCPowerFlow, Pc, Pcc, Pc
     list = make_list(opfm, idx, opfm.nodes)
     Pᵢ = calc_Pᵢ(pf)
 
-    c_flow = [ptdf[i] * (Pᵢ .+ get_ΔPc(length(opfm.nodes), list, Pc, c)) for (i,(c,cont)) in enumerate(get_branch_bus_idx(opfm.branches, opfm.contingencies, idx))]
+    c_flow = [ptdf[i] * (Pᵢ .+ get_ΔPc(list, zeros(length(opfm.nodes)), Pc, c)) for (i,(c,cont)) in enumerate(get_branch_bus_idx(opfm.branches, opfm.contingencies, idx))]
     println("Short-term post-contingency")
     println("    Contingency          Branch    Flow  Rating")
     print_all_string_line.(get_name.(opfm.contingencies), [b_names], c_flow, [linerates * short_term_limit])
     
-    cc_flow = [ptdf[i] * (Pᵢ .+ get_ΔPcc(opfm, length(opfm.nodes), list, Pcc, c)) for (i,(c,cont)) in enumerate(get_branch_bus_idx(opfm.branches, opfm.contingencies, idx))]
+    cc_flow = [ptdf[i] * (Pᵢ .+ get_ΔPcc(opfm, list, zeros(length(opfm.nodes)), Pcc, c)) for (i,(c,cont)) in enumerate(get_branch_bus_idx(opfm.branches, opfm.contingencies, idx))]
     println("Long-term post-contingency")
     println("    Contingency          Branch    Flow  Rating")
     print_all_string_line.(get_name.(opfm.contingencies), [b_names], cc_flow, [linerates * long_term_limit])
     
-    ccx_flow = [ptdf[i] * (Pᵢ .+ get_ΔPccx(opfm, length(opfm.nodes), list, Pccx, c)) for (i,(c,cont)) in enumerate(get_branch_bus_idx(opfm.branches, opfm.contingencies, idx))]
+    ccx_flow = [ptdf[i] * (Pᵢ .+ get_ΔPccx(list, zeros(length(opfm.nodes)), Pccx, c)) for (i,(c,cont)) in enumerate(get_branch_bus_idx(opfm.branches, opfm.contingencies, idx))]
     println("Long-term post-contingency corrective failed")
     println("    Contingency          Branch    Flow  Rating")
     print_all_string_line.(get_name.(opfm.contingencies), [b_names], ccx_flow, [linerates * long_term_limit])

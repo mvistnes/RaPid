@@ -212,7 +212,7 @@ sort_components!(branches::AbstractVector{<:Branch}) = sort!(branches,
         by = x -> (get_number(get_arc(x).from), get_number(get_arc(x).to))
     )
 
-get_sorted_angles(model) = JuMP.value.(model[:va0])
+get_sorted_angles(model) = get_value(model, :va0)
 
 # it_name(::Type{T}, mos::Model) where {T <:Component} = get_name.(get_components(T,mod))
 
@@ -295,12 +295,12 @@ end
 
 " Sets the start values of symbols to the previous solution "
 function set_warm_start!(model::JuMP.Model, symb::Symbol) 
-    x_sol = JuMP.value.(model[symb])
+    x_sol = get_value(model, symb)
     JuMP.set_start_value.(model[symb], x_sol)
     return model
 end
 function set_warm_start!(model::JuMP.Model, symbs::AbstractVector{Symbol}) 
-    x_sol = [JuMP.value.(model[symb]) for symb in symbs]
+    x_sol = [get_value(model, symb) for symb in symbs]
     for symb in symbs
         JuMP.set_start_value.(model[symb], x_sol)
     end
@@ -377,24 +377,36 @@ zip_pair(val1::AbstractVector, val2::AbstractVector) = zip_pair((val1, val2))
 get_low_dual(varref::VariableRef) = dual(LowerBoundRef(varref))
 get_high_dual(varref::VariableRef) = dual(UpperBoundRef(varref))
 
+""" This is a faster version of JuMP.value """
+get_value(mod::Model, symb::Symbol) = 
+    MOI.get.([JuMP.backend(mod)], [MOI.VariablePrimal()], JuMP.index.(mod[symb]))
+get_value(mod::Model, var::JuMP.VariableRef) = 
+    MOI.get(JuMP.backend(mod), MOI.VariablePrimal(), JuMP.index(var))
+get_value(mod::Model, var::Vector{JuMP.VariableRef}) = 
+    MOI.get(JuMP.backend(mod), MOI.VariablePrimal(), JuMP.index.(var))
+
 " Fix for name difference in StandardLoad "
 PowerSystems.get_active_power(value::StandardLoad) = value.current_active_power
 
 """ Return the net power injected at each node. """
 function get_net_Pᵢ(opfm::OPFmodel, idx::Dict{<:Any, <:Int} = get_nodes_idx(opfm.nodes))
     P = zeros(length(opfm.nodes))
+    vals = get_value(opfm.mod, :pr0)
     for (i,r) in enumerate(opfm.renewables)
-        P[idx[r.bus.number]] += get_active_power(r) - JuMP.value(opfm.mod[:pr0][i])
+        P[idx[r.bus.number]] += get_active_power(r) - vals[i]
     end
+    vals = get_value(opfm.mod, :ls0)
     for (i,d) in enumerate(opfm.demands)
-        P[idx[d.bus.number]] -= get_active_power(d) + JuMP.value(opfm.mod[:ls0][i])
+        P[idx[d.bus.number]] -= get_active_power(d) + vals[i]
     end
+    vals = get_value(opfm.mod, :pg0)
     for (i,r) in enumerate(opfm.ctrl_generation)
-        P[idx[r.bus.number]] += JuMP.value(opfm.mod[:pg0][i])
+        P[idx[r.bus.number]] += vals[i]
     end
+    vals = get_value(opfm.mod, :pfdc0)
     for (i,d) in enumerate(opfm.dc_branches)
-        P[idx[d.arc.from.number]] += JuMP.value(opfm.mod[:pfdc0][i])
-        P[idx[d.arc.to.number]] -= JuMP.value(opfm.mod[:pfdc0][i])
+        P[idx[d.arc.from.number]] += vals[i]
+        P[idx[d.arc.to.number]] -= vals[i]
     end
     # @assert abs(sum(Pᵢ)) < 0.001
     return P
@@ -416,11 +428,13 @@ end
 
 """ Return power shed at each node. """
 function get_Pshed!(P::Vector{<:Real}, opfm::OPFmodel, idx::Dict{<:Any, <:Int})
+    vals = get_value(opfm.mod, :pr0)
     for (i,r) in enumerate(opfm.renewables)
-        P[idx[r.bus.number]] -= JuMP.value(opfm.mod[:pr0][i])
+        P[idx[r.bus.number]] -= vals[i]
     end
+    vals = get_value(opfm.mod, :ls0)
     for (i,d) in enumerate(opfm.demands)
-        P[idx[d.bus.number]] += JuMP.value(opfm.mod[:ls0][i])
+        P[idx[d.bus.number]] += vals[i]
     end
 end
 function get_Pshed(opfm::OPFmodel, idx::Dict{<:Any, <:Int} = get_nodes_idx(opfm.nodes))
@@ -431,12 +445,14 @@ end
 
 """ Return the power injected by controlled generation at each node. """
 function get_Pgen!(P::Vector{<:Real}, opfm::OPFmodel, idx::Dict{<:Any, <:Int})
+    vals = get_value(opfm.mod, :pg0)
     for (i,r) in enumerate(opfm.ctrl_generation)
-        P[idx[r.bus.number]] += JuMP.value(opfm.mod[:pg0][i])
+        P[idx[r.bus.number]] += vals[i]
     end
+    vals = get_value(opfm.mod, :pfdc0)
     for (i,d) in enumerate(opfm.dc_branches)
-        P[idx[d.arc.from.number]] += JuMP.value(opfm.mod[:pfdc0][i])
-        P[idx[d.arc.to.number]] -= JuMP.value(opfm.mod[:pfdc0][i])
+        P[idx[d.arc.from.number]] += vals[i]
+        P[idx[d.arc.to.number]] -= vals[i]
     end
     return P
 end

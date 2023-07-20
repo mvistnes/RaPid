@@ -114,7 +114,7 @@ function add_short_term_contingencies(opfm, Pc, islands, island, ptdf, list, pr_
     lsc = JuMP.@variable(opfm.mod, [d in 1:length(opfm.demands)], base_name = @sprintf( "lsc%s", c), lower_bound = 0)
     Pc[c] = (pgc, prc, lsc)
 
-    @objective(opfm.mod, Min, objective_function(opfm.mod) + opfm.prob[c] * sum(opfm.voll' * lsc))
+    set_objective_function(opfm.mod, objective_function(opfm.mod) + opfm.prob[c] * sum(opfm.voll' * lsc))
 
     # Add new constraints that limit the corrective variables within operating limits
     JuMP.@constraint(opfm.mod, sum(lsc) == sum(prc) + sum(pgc))
@@ -165,7 +165,7 @@ function add_long_term_contingencies(opfm, Pcc, islands, island, ptdf, list, pr_
     Pcc[c] = (pgu, pgd, pfdccc, prcc, lscc)
 
     # Extend the objective with the corrective variables
-    @objective(opfm.mod, Min, objective_function(opfm.mod) + opfm.prob[c] * 
+    set_objective_function(opfm.mod, objective_function(opfm.mod) + opfm.prob[c] * 
         # (1.0 - p_failure) * (sum(opfm.voll' * lscc) + sum(60 * (pgu + pgd)) # + # TODO: remove 60 and uncomment next lines for non-4-area analysis!!!!
         (sum(opfm.voll' * lscc) + sum(opfm.cost_ctrl_gen' * ramp_mult * (pgu + pgd))
         # (sum(opfm.voll' * lscc) +

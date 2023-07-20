@@ -193,7 +193,7 @@ end
 """ Objective with base case and contingency generation and load shedding """
 function add_obj_cont!(opfm::OPFmodel)
     add_obj!(opfm)
-    @objective(opfm.mod, Min, objective_function(opfm.mod) + 
+    set_objective_function(opfm.mod, objective_function(opfm.mod) + 
             sum(opfm.prob[c] * (
                 sum(x * opfm.mod[:lsc][i,c] for (i,x) in enumerate(opfm.voll)) # +
                 # sum(opfm.voll' * opfm.mod[:lsc][:,c]) # +
@@ -206,7 +206,7 @@ end
 """ Objective with base case and contingency generation and load shedding """
 function add_obj_ccont!(opfm::OPFmodel, ramp_mult = 10)
     add_obj_cont!(opfm)
-    @objective(opfm.mod, Min, objective_function(opfm.mod) + 
+    set_objective_function(opfm.mod, objective_function(opfm.mod) + 
             sum(opfm.prob[c] * (
                 sum(x * ramp_mult * (opfm.mod[:pgu][i,c] .+ opfm.mod[:pgd][i,c]) for (i,x) in enumerate(opfm.cost_ctrl_gen)) + 
                 sum(x * opfm.mod[:lscc][i,c] for (i,x) in enumerate(opfm.voll)) # +
