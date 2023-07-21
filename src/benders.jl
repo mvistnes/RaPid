@@ -47,7 +47,8 @@ function benders(opfm::OPFmodel)
     Pc = Dict{Int, NTuple{3, Any}}() 
     Pcc = Dict{Int, NTuple{5, Any}}() 
     Pccx = Dict{Int, NTuple{2, Any}}() 
-    Pᵢ = get_net_Pᵢ(opfm, idx)
+    # Pᵢ = get_net_Pᵢ(opfm, idx)
+    Pᵢ = get_value(opfm.mod, :p0)
     Pg = get_controllable(opfm, idx)
     Pd = get_Pd(opfm, idx) # Fixed injection
     @assert isapprox(Pg, (Pᵢ - Pd); atol=1e-5) string(Pg - (Pᵢ - Pd))
@@ -92,71 +93,64 @@ function run_benders(type::OPF, system::System, voll=nothing, prob=nothing, cont
     ΔPccx = zeros(length(bd.Pg))
     # print_contingency_overflow(opfm, pf, Pcc, 1.0)
 
-    it = enumerate(get_bus_idx.(opfm.contingencies, [bd.idx]))
-    next = iterate(it)
-    cut_added = 0
-    iterations = 0
-    while next !== nothing || cut_added > 0 # loops until no new cuts are added for the contingencies
-        if next === nothing
-            next = iterate(it)
-            cut_added = 0
-            iterations += 1
-            @info "Iteration $iterations"
-            # print_contingency_overflow(opfm, pf, Pcc, 1.0)
-            if iterations >= length(opfm.branches)^2
-                @error "Reached $(iterations) iterations without a stable solution."
-                return opfm, pf, bd.Pc, bd.Pcc, bd.Pccx
-            end
+    cut_added = 1
+    for iterations in 1:length(opfm.contingencies)
+        if cut_added == 0 # loops until no new cuts are added for the contingencies
+            @printf "END: Total solve time %.4f. Total time %.4f.\n" total_solve_time (time() - total_time)
+            return opfm, pf, bd.Pc, bd.Pcc, bd.Pccx
         end
+        cut_added = 0
+        @info "Iteration $iterations"
 
-        (c, cont), state = next
-        islands, island, island_b, ptdf = find_system_state(pf, cont, findfirst(x -> x == opfm.contingencies[c], opfm.branches), 
-            bd.linerating, branch_short_term_limit_multi, branch_long_term_limit_multi, ptdf)
-        if !isempty(islands) && get(bd.Pc, c, 0) == 0
-            _ = get_Pc(opfm, bd, islands, island, max_shed, cont, c)
+        for (c, cont) in enumerate(get_bus_idx.(opfm.contingencies, [bd.idx]))
+            islands, island, island_b, ptdf = find_system_state(pf, cont, findfirst(x -> x == opfm.contingencies[c], opfm.branches), 
+                bd.linerating, branch_short_term_limit_multi, branch_long_term_limit_multi, ptdf)
+            if !isempty(islands) && get(bd.Pc, c, 0) == 0
+                _ = get_Pc(opfm, bd, islands, island, max_shed, cont, c)
+                if type == PCSC::OPF
+                    _ = get_Pcc(opfm, bd, islands, island, max_shed, ramp_mult, ramp_minutes, p_failure, cont, c)
+                    if p_failure > 0.0
+                        _ = get_Pccx(opfm, bd, islands, island, max_shed, ramp_mult, ramp_minutes, p_failure, cont, c)
+                    end
+                end
+                @info "Island: Contingency line $(cont[1])-$(cont[2])-i_$(c)"
+                bd.Pᵢ, bd.Pg, total_solve_time = update_model!(opfm, pf, bd.Pd, total_solve_time, bd.idx)
+            end
+
+            # Calculate the power flow with the new outage and find if there are any overloads
+            ΔPc = get_ΔPc(opfm, bd.list, ΔPc, bd.Pc, c)
+            overloads_c = filter_overload(ptdf * (bd.Pᵢ .+ ΔPc), bd.linerating * branch_short_term_limit_multi)
             if type == PCSC::OPF
-                _ = get_Pcc(opfm, bd, islands, island, max_shed, ramp_mult, ramp_minutes, p_failure, cont, c)
+                ΔPcc = get_ΔPcc(opfm, bd.list, ΔPcc, bd.Pcc, c)
+                overloads_cc = filter_overload(ptdf * (bd.Pᵢ .+ ΔPcc), bd.linerating * branch_long_term_limit_multi)
                 if p_failure > 0.0
-                    _ = get_Pccx(opfm, bd, islands, island, max_shed, ramp_mult, ramp_minutes, p_failure, cont, c)
+                    ΔPccx = get_ΔPccx(opfm, bd.list, ΔPccx, bd.Pccx, c)
+                    overloads_ccx = filter_overload(ptdf * (bd.Pᵢ .+ ΔPccx), bd.linerating * branch_long_term_limit_multi)
                 end
             end
-            @info "Island: Contingency line $(cont[1])-$(cont[2])-i_$(c)"
-            bd.Pᵢ, bd.Pg, total_solve_time = update_model!(opfm, pf, bd.Pd, total_solve_time, bd.idx)
-        end
 
-        # Calculate the power flow with the new outage and find if there are any overloads
-        ΔPc = get_ΔPc(opfm, bd.list, ΔPc, bd.Pc, c)
-        overloads_c = filter_overload(ptdf * (bd.Pᵢ .+ ΔPc), bd.linerating * branch_short_term_limit_multi)
-        if type == PCSC::OPF
-            ΔPcc = get_ΔPcc(opfm, bd.list, ΔPcc, bd.Pcc, c)
-            overloads_cc = filter_overload(ptdf * (bd.Pᵢ .+ ΔPcc), bd.linerating * branch_long_term_limit_multi)
-            if p_failure > 0.0
-                ΔPccx = get_ΔPccx(opfm, bd.list, ΔPccx, bd.Pccx, c)
-                overloads_ccx = filter_overload(ptdf * (bd.Pᵢ .+ ΔPccx), bd.linerating * branch_long_term_limit_multi)
+            # Cannot change the model before all data is exctracted!
+            if !isempty(overloads_c)
+                # overloads[c] = overload
+                cut_added = set_Pc(opfm, bd, ΔPc, ptdf, overloads_c, islands, island, max_shed, cont, c, cut_added, lim)
             end
-        end
-
-        # Cannot change the model before all data is exctracted!
-        if !isempty(overloads_c)
-            # overloads[c] = overload
-            cut_added = set_Pc(opfm, bd, ΔPc, ptdf, overloads_c, islands, island, max_shed, cont, c, cut_added, lim)
-        end
-        if type == PCSC::OPF 
-            if !isempty(overloads_cc) 
-                cut_added = set_Pcc(opfm, bd, ΔPcc, ptdf, overloads_cc, islands, island, max_shed, ramp_mult, ramp_minutes, p_failure, cont, c, cut_added, lim)
+            if type == PCSC::OPF 
+                if !isempty(overloads_cc) 
+                    cut_added = set_Pcc(opfm, bd, ΔPcc, ptdf, overloads_cc, islands, island, max_shed, ramp_mult, ramp_minutes, p_failure, cont, c, cut_added, lim)
+                end
+                if p_failure > 0.0 && !isempty(overloads_ccx)
+                    cut_added = set_Pccx(opfm, bd, ΔPccx, ptdf, overloads_ccx, islands, island, max_shed, ramp_mult, ramp_minutes, p_failure, cont, c, cut_added, lim)
+                end
             end
-            if p_failure > 0.0 && !isempty(overloads_ccx)
-                cut_added = set_Pccx(opfm, bd, ΔPccx, ptdf, overloads_ccx, islands, island, max_shed, ramp_mult, ramp_minutes, p_failure, cont, c, cut_added, lim)
+            if cut_added > 1
+                bd.Pᵢ, bd.Pg, total_solve_time = update_model!(opfm, pf, bd.Pd, total_solve_time, bd.idx)
+                cut_added = 1
             end
+            termination_status(opfm.mod) != MOI.OPTIMAL && return opfm, pf, bd.Pc, bd.Pcc, bd.Pccx
         end
-        if cut_added > 1
-            bd.Pᵢ, bd.Pg, total_solve_time = update_model!(opfm, pf, bd.Pd, total_solve_time, bd.idx)
-            cut_added = 1
-        end
-        termination_status(opfm.mod) != MOI.OPTIMAL && return opfm, pf, bd.Pc, bd.Pcc, bd.Pccx
-        next = iterate(it, state)
+        
     end
-    @printf "END: Total solve time %.4f. Total time %.4f.\n" total_solve_time (time() - total_time)
+    @warn "Reached $(iterations) iterations without a stable solution."
     return opfm, pf, bd.Pc, bd.Pcc, bd.Pccx
 end         
 
@@ -166,7 +160,8 @@ function update_model!(opfm, pf, Pd, total_solve_time, idx)
     total_solve_time += solve_time(opfm.mod)
 
     # Pᵢ = calc_Pᵢ(pf)
-    Pᵢ = get_net_Pᵢ(opfm, idx)
+    # Pᵢ = get_net_Pᵢ(opfm, idx)
+    Pᵢ = get_value(opfm.mod, :p0)
     Pg = Pᵢ - Pd
     calc_θ!(pf, Pᵢ)
     calc_Pline!(pf)
@@ -224,8 +219,9 @@ function get_Pc(opfm::OPFmodel, bd, islands, island, max_shed, cont, c)
         prc = JuMP.@variable(opfm.mod, [d in 1:length(opfm.renewables)], base_name = @sprintf( "prc%s", c), lower_bound = 0)
         lsc = JuMP.@variable(opfm.mod, [d in 1:length(opfm.demands)], base_name = @sprintf( "lsc%s", c), lower_bound = 0)
         bd.Pc[c] = (pgc, prc, lsc)
-
-        set_objective_function(opfm.mod, objective_function(opfm.mod) + opfm.prob[c] * sum(opfm.voll' * lsc))
+        obj = objective_function(opfm.mod)
+        add_to_expression!.(obj, opfm.prob[c], sum(opfm.voll' * lsc))
+        set_objective_function(opfm.mod, obj)
 
         # Add new constraints that limit the corrective variables within operating limits
         JuMP.@constraint(opfm.mod, sum(lsc) == sum(prc) + sum(pgc))
@@ -332,13 +328,17 @@ function get_Pcc(opfm::OPFmodel, bd, islands, island, max_shed, ramp_mult, ramp_
         bd.Pcc[c] = (pgu, pgd, pfdccc, prcc, lscc)
 
         # Extend the objective with the corrective variables
-        set_objective_function(opfm.mod, objective_function(opfm.mod) + opfm.prob[c] * 
+        obj = objective_function(opfm.mod)
+        add_to_expression!.(obj, opfm.prob[c], 
             # (1.0 - p_failure) * (sum(opfm.voll' * lscc) + sum(60 * (pgu + pgd)) # + # TODO: remove 60 and uncomment next lines for non-4-area analysis!!!!
-            (1.0 - p_failure) * (sum(opfm.voll' * lscc) + sum(opfm.cost_ctrl_gen' * ramp_mult * (pgu + pgd))
+            (1.0 - p_failure) * (sum(opfm.voll' * lscc) # + sum(opfm.cost_ctrl_gen' * ramp_mult * (pgu + pgd))
             # (sum(opfm.voll' * lscc) +
             # sum(opfm.cost_ctrl_gen' * ramp_mult * pgu) # +
             # sum(opfm.cost_ctrl_gen' * pgd)
             ) )
+        add_to_expression!.(obj, opfm.prob[c], (1.0 - p_failure) * (sum(opfm.cost_ctrl_gen' * ramp_mult * pgu)) )
+        add_to_expression!.(obj, opfm.prob[c], (1.0 - p_failure) * (sum(opfm.cost_ctrl_gen' * ramp_mult * pgd)) )
+        set_objective_function(opfm.mod, obj)
 
         # Add new constraints that limit the corrective variables within operating limits
         JuMP.@constraint(opfm.mod, sum(pgu) + sum(lscc) == sum(pgd) + sum(prcc))
@@ -457,9 +457,10 @@ function get_Pccx(opfm::OPFmodel, bd, islands, island, max_shed, ramp_mult, ramp
         bd.Pccx[c] = (pgd, lscc)
 
         # Extend the objective with the corrective variables
-        set_objective_function(opfm.mod, objective_function(opfm.mod) + opfm.prob[c] * 
-            (sum(opfm.voll' * lscc) + sum(60 * pgd)) * p_failure
-            )
+        obj = objective_function(opfm.mod)
+        add_to_expression!.(obj, opfm.prob[c] * p_failure, sum(opfm.voll' * lscc))
+        add_to_expression!.(obj, opfm.prob[c] * p_failure, sum(60 * pgd))
+        set_objective_function(opfm.mod, obj)
 
         # Add new constraints that limit the corrective variables within operating limits
         JuMP.@constraint(opfm.mod, sum(lscc) == sum(pgd))

@@ -15,13 +15,14 @@ function opf(type::OPF, system::System, optimizer;
             max_shed::Float64 = 1.0,
             max_curtail::Float64 = 1.0,
             short_term_limit_multi::Real = 1.5, long_term_limit_multi::Real = 1.2, 
+            debug=false
         )
     contingencies = isnothing(contingencies) ? get_name.(sort_components!(get_branches(system))) : contingencies
     prob = isnothing(prob) ? make_prob(contingencies) : prob
     # set_renewable_prod!(system, renewable_prod)
     # set_active_power_demand!(system)
 
-    opfm = isnothing(voll) ? opfmodel(system, optimizer, time_limit_sec) : opfmodel(system, optimizer, time_limit_sec, voll, contingencies, prob)
+    opfm = isnothing(voll) ? opfmodel(system, optimizer, time_limit_sec, debug=debug) : opfmodel(system, optimizer, time_limit_sec, voll, contingencies, prob, debug=debug)
     idx = get_nodes_idx(opfm.nodes)
     list = make_list(opfm, idx, opfm.nodes)
     pf = DCPowerFlow(opfm.nodes, opfm.branches, idx)
@@ -36,6 +37,7 @@ function opf(type::OPF, system::System, optimizer;
     branch_rating = get_rate.(opfm.branches)
 
     @variables(opfm.mod, begin
+            p0[n in 1:length(opfm.nodes)]
             0 <= pg0[g in 1:length(opfm.ctrl_generation)] <= pg_lim_max[g]
                 # active power variables for the generators
             pfdc0[l in 1:length(opfm.dc_branches)]
@@ -48,36 +50,28 @@ function opf(type::OPF, system::System, optimizer;
     
     @objective(opfm.mod, Min, opfm.cost_ctrl_gen' * pg0 + opfm.voll' * ls0)
 
-    @expression(opfm.mod, inj_p[n = 1:length(opfm.nodes)], 
-        sum(beta(opfm.nodes[n], opfm.dc_branches[l]) * pfdc0[l] for l in list[n].dc_branches) +
-        sum(pg0[g] for g in list[n].ctrl_generation) + 
-        sum((get_active_power(opfm.renewables[d]) - pr0[d] for d in list[n].renewables), init = 0.0) - 
-        sum((get_active_power(opfm.demands[d]) - ls0[d] for d in list[n].demands), init = 0.0)
-    )
-    # Warning: The addition operator has been used on JuMP expressions a large number of times. 
-    # This warning is safe to ignore but may indicate that model generation is slower than necessary. 
-    # For performance reasons, you should not add expressions in a loop. Instead of x += y, use 
-    # add_to_expression!(x,y) to modify x in place. If y is a single variable, you may also use 
-    # add_to_expression!(x, coef, y) for x += coef*y.
-    
-    # @expression(opfm.mod, inj_p[n = 1:length(opfm.nodes)], 0) 
-    # for n = 1:length(opfm.nodes)
-    #     for l in list[n].dc_branches
-    #         add_to_expression!(inj_p[n], beta(opfm.nodes[n], opfm.dc_branches[l]) * pfdc0[l])
-    #     end
-    #     for g in list[n].ctrl_generation
-    #         add_to_expression!(inj_p[n], pg0[g])
-    #     end
-    #     for d in list[n].renewables
-    #         add_to_expression!(inj_p[n], get_active_power(opfm.renewables[d]) - pr0[d])
-    #     end
-    #     for d in list[n].demands
-    #         add_to_expression!(inj_p[n], -get_active_power(opfm.demands[d]) + ls0[d])
-    #     end
-    # end
+    # @expression(opfm.mod, inj_p[n = 1:length(opfm.nodes)], 
+    #     sum(beta(opfm.nodes[n], opfm.dc_branches[l]) * pfdc0[l] for l in list[n].dc_branches) +
+    #     sum(pg0[g] for g in list[n].ctrl_generation) + 
+    #     sum((get_active_power(opfm.renewables[d]) - pr0[d] for d in list[n].renewables), init = 0.0) - 
+    #     sum((get_active_power(opfm.demands[d]) - ls0[d] for d in list[n].demands), init = 0.0)
+    # )
+    @expression(opfm.mod, inj_p, -p0)
+    for n = 1:length(opfm.nodes)
+        add_to_expression!.(inj_p[n], sum((pg0[g] for g in list[n].ctrl_generation), init = 0.0))
+        add_to_expression!.(inj_p[n], sum((get_active_power(opfm.renewables[d]) for d in list[n].renewables), init = 0.0))
+        add_to_expression!.(inj_p[n], -1, sum((get_active_power(opfm.demands[d]) for d in list[n].demands), init = 0.0))
+    end
+    @expression(opfm.mod, inj_p0, inj_p)
+    for n = 1:length(opfm.nodes)
+        add_to_expression!.(inj_p0[n], sum((beta(opfm.nodes[n], opfm.dc_branches[l]) * pfdc0[l] for l in list[n].dc_branches), init = 0.0))
+        add_to_expression!.(inj_p0[n], -1, sum((pr0[d] for d in list[n].renewables), init = 0.0))
+        add_to_expression!.(inj_p0[n], sum((ls0[d] for d in list[n].demands), init = 0.0))
+    end
+    @constraint(opfm.mod, inj_p0 .== 0)
 
-    @constraint(opfm.mod, branch_lim_n, -branch_rating .<= pf.ϕ * inj_p)
-    @constraint(opfm.mod, branch_lim_p, pf.ϕ * inj_p .<= branch_rating)
+    @constraint(opfm.mod, branch_lim_n, -branch_rating .<= pf.ϕ * p0)
+    @constraint(opfm.mod, branch_lim_p, pf.ϕ * p0 .<= branch_rating)
     @constraint(opfm.mod, power_balance, sum(pg0, init=0.0) + sum(ls0, init=0.0) + sum(get_active_power.(opfm.renewables), init=0.0) == 
         sum(get_active_power.(opfm.demands), init=0.0) + sum(pr0, init=0.0))
 
@@ -109,12 +103,15 @@ function opf(type::OPF, system::System, optimizer;
 end
 
 function add_short_term_contingencies(opfm, Pc, islands, island, ptdf, list, pr_lim, pd_lim, max_shed, branch_rating, cont, c)
+    pc = JuMP.@variable(opfm.mod, [n in 1:length(opfm.nodes)], base_name = @sprintf("pc%s", c))
     pgc = JuMP.@variable(opfm.mod, [g in 1:length(opfm.ctrl_generation)], base_name = @sprintf("pgc%s", c), lower_bound = 0)
     prc = JuMP.@variable(opfm.mod, [d in 1:length(opfm.renewables)], base_name = @sprintf( "prc%s", c), lower_bound = 0)
     lsc = JuMP.@variable(opfm.mod, [d in 1:length(opfm.demands)], base_name = @sprintf( "lsc%s", c), lower_bound = 0)
     Pc[c] = (pgc, prc, lsc)
-
-    set_objective_function(opfm.mod, objective_function(opfm.mod) + opfm.prob[c] * sum(opfm.voll' * lsc))
+    
+    obj = objective_function(opfm.mod)
+    add_to_expression!.(obj, opfm.prob[c], sum(opfm.voll' * lsc))
+    set_objective_function(opfm.mod, obj)
 
     # Add new constraints that limit the corrective variables within operating limits
     JuMP.@constraint(opfm.mod, sum(lsc) == sum(prc) + sum(pgc))
@@ -142,18 +139,21 @@ function add_short_term_contingencies(opfm, Pc, islands, island, ptdf, list, pr_
             end
         end
     end
-    inj_pc = @expression(opfm.mod, [n = 1:length(opfm.nodes)], 
-        sum(beta(opfm.nodes[n], opfm.dc_branches[l]) * opfm.mod[:pfdc0][l] for l in list[n].dc_branches) +
-        sum(opfm.mod[:pg0][g] - pgc[g] for g in list[n].ctrl_generation) + 
-        sum((get_active_power(opfm.renewables[d]) - opfm.mod[:pr0][d] + prc[d] for d in list[n].renewables), init = 0.0) - 
-        sum((get_active_power(opfm.demands[d]) - opfm.mod[:ls0][d] + lsc[d] for d in list[n].demands), init = 0.0)
-    )
-    @constraint(opfm.mod, -branch_rating .<= ptdf * inj_pc)
-    @constraint(opfm.mod, ptdf * inj_pc .<= branch_rating)
+    inj_pc = @expression(opfm.mod, opfm.mod[:inj_p] .+ opfm.mod[:p0] .- pc)
+    for n = 1:length(opfm.nodes)
+        add_to_expression!.(inj_pc[n], -1, sum((pgc[g] for g in list[n].ctrl_generation), init = 0.0))
+        add_to_expression!.(inj_pc[n], sum((beta(opfm.nodes[n], opfm.dc_branches[l]) * opfm.mod[:pfdc0][l] for l in list[n].dc_branches), init = 0.0))
+        add_to_expression!.(inj_pc[n], sum((prc[d] for d in list[n].renewables), init = 0.0)) 
+        add_to_expression!.(inj_pc[n], -1, sum((lsc[d] for d in list[n].demands), init = 0.0))
+    end
+    @constraint(opfm.mod, inj_pc .== 0)
+    @constraint(opfm.mod, -branch_rating .<= ptdf * pc)
+    @constraint(opfm.mod, ptdf * pc .<= branch_rating)
     # unregister(opfm.mod, :inj_p)
 end
 
 function add_long_term_contingencies(opfm, Pcc, islands, island, ptdf, list, pr_lim, pd_lim, max_shed, branch_rating, ramp_mult, ramp_minutes, rampup, rampdown, dc_lim_min, dc_lim_max, pg_lim_max, cont, c)
+    pcc = JuMP.@variable(opfm.mod, [n in 1:length(opfm.nodes)], base_name = @sprintf("pcc%s", c))
     pgu = JuMP.@variable(opfm.mod, [g in 1:length(opfm.ctrl_generation)], base_name = @sprintf( "pgu%s", c), lower_bound = 0)
         # active power variables for the generators in contingencies ramp up 
     pgd = JuMP.@variable(opfm.mod, [g in 1:length(opfm.ctrl_generation)], base_name = @sprintf( "pgd%s", c), lower_bound = 0)
@@ -165,13 +165,17 @@ function add_long_term_contingencies(opfm, Pcc, islands, island, ptdf, list, pr_
     Pcc[c] = (pgu, pgd, pfdccc, prcc, lscc)
 
     # Extend the objective with the corrective variables
-    set_objective_function(opfm.mod, objective_function(opfm.mod) + opfm.prob[c] * 
+    obj = objective_function(opfm.mod)
+    add_to_expression!.(obj, opfm.prob[c],
         # (1.0 - p_failure) * (sum(opfm.voll' * lscc) + sum(60 * (pgu + pgd)) # + # TODO: remove 60 and uncomment next lines for non-4-area analysis!!!!
-        (sum(opfm.voll' * lscc) + sum(opfm.cost_ctrl_gen' * ramp_mult * (pgu + pgd))
+        (sum(opfm.voll' * lscc) # + sum(opfm.cost_ctrl_gen' * ramp_mult * (pgu + pgd))
         # (sum(opfm.voll' * lscc) +
         # sum(opfm.cost_ctrl_gen' * ramp_mult * pgu) # +
         # sum(opfm.cost_ctrl_gen' * pgd)
         ) )
+    add_to_expression!.(obj, opfm.prob[c], (sum(opfm.cost_ctrl_gen' * ramp_mult * pgu)) )
+    add_to_expression!.(obj, opfm.prob[c], (sum(opfm.cost_ctrl_gen' * ramp_mult * pgd)) )
+    set_objective_function(opfm.mod, obj)
 
     # Add new constraints that limit the corrective variables within operating limits
     JuMP.@constraint(opfm.mod, sum(pgu) + sum(lscc) == sum(pgd) + sum(prcc))
@@ -216,12 +220,14 @@ function add_long_term_contingencies(opfm, Pcc, islands, island, ptdf, list, pr_
             end
         end
     end
-    inj_p = @expression(opfm.mod, [n = 1:length(opfm.nodes)], 
-        sum(beta(opfm.nodes[n], opfm.dc_branches[l]) * opfm.mod[:pfdccc][l] for l in list[n].dc_branches) +
-        sum(opfm.mod[:pg0][g] + pgu[g] - pgd[g] for g in list[n].ctrl_generation) + 
-        sum((get_active_power(opfm.renewables[d]) - opfm.mod[:pr0][d] + prcc[d] for d in list[n].renewables), init = 0.0) - 
-        sum((get_active_power(opfm.demands[d]) - opfm.mod[:ls0][d] + lscc[d] for d in list[n].demands), init = 0.0)
-    )
-    @constraint(opfm.mod, -branch_rating .<= ptdf * inj_p)
-    @constraint(opfm.mod, ptdf * inj_p .<= branch_rating)
+    inj_pcc = @expression(opfm.mod, opfm.mod[:inj_p] .+ opfm.mod[:p0] .- pcc)
+    for n = 1:length(opfm.nodes)
+        add_to_expression!.(inj_pcc[n], sum((pgu[g] - pgd[g] for g in list[n].ctrl_generation), init = 0.0))
+        add_to_expression!.(inj_pcc[n], sum((beta(opfm.nodes[n], opfm.dc_branches[l]) * opfm.mod[:pfdccc][l] for l in list[n].dc_branches), init = 0.0))
+        add_to_expression!.(inj_pcc[n], sum((prcc[d] for d in list[n].renewables), init = 0.0)) 
+        add_to_expression!.(inj_pcc[n], -1, sum((lscc[d] for d in list[n].demands), init = 0.0))
+    end
+    @constraint(opfm.mod, inj_pcc .== 0)
+    @constraint(opfm.mod, -branch_rating .<= ptdf * pcc)
+    @constraint(opfm.mod, ptdf * pcc .<= branch_rating)
 end
