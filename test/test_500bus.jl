@@ -1,7 +1,8 @@
 # CC BY 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2022
 
+# julia.NumThreads": "4" # On laptop with 4 physical cores
 
-system = System("data\\matpower\\ACTIVSg500.m")
+system = SCOPF.System("data\\matpower\\ACTIVSg500.m")
 # system = System("data\\matpower\\ACTIVSg2000.m")
 voll, prob, contingencies = SCOPF.setup(system, 100, 400);
 SCOPF.fix_generation_cost!(system);
@@ -53,12 +54,12 @@ ramp_minutes = 10
 max_shed = 0.1
 ramp_mult = 10
 
-@time opfm_norm = SCOPF.scopf(SCOPF.SC, system, Gurobi.Optimizer, voll=voll, contingencies=contingencies, prob=prob, max_shed=1.0, 
+@time opfm_norm = SCOPF.scopf(SCOPF.SC, system, SCOPF.Gurobi.Optimizer, voll=voll, contingencies=contingencies, prob=prob, max_shed=1.0, 
     ramp_minutes=ramp_minutes, short_term_limit_multi=short, debug=true);
 @time SCOPF.solve_model!(opfm_norm.mod);
-@time opfm, pf, Pc, Pcc, Pccx = SCOPF.run_benders(SCOPF.PCSC, system, voll, prob, contingencies, max_shed=max_shed, 
+@time opfm, pf, Pc, Pcc, Pccx = SCOPF.run_benders(SCOPF.PCSC, system, SCOPF.Gurobi.Optimizer, voll, prob, contingencies, max_shed=max_shed, 
     ramp_minutes=ramp_minutes, branch_short_term_limit_multi=short, branch_long_term_limit_multi=long, p_failure=0.00);
-@time opfm_ptdf, Pc_ptdf, Pcc_ptdf = SCOPF.opf(SCOPF.PCSC, system, Gurobi.Optimizer, voll=voll, contingencies=contingencies, prob=prob, max_shed=max_shed, 
+@time opfm_ptdf, Pc_ptdf, Pcc_ptdf = SCOPF.opf(SCOPF.PCSC, system, SCOPF.Gurobi.Optimizer, voll=voll, contingencies=contingencies, prob=prob, max_shed=max_shed, 
     ramp_minutes=ramp_minutes, short_term_limit_multi=short, long_term_limit_multi=long);
 @time SCOPF.solve_model!(opfm_ptdf.mod);
 # opfm_norm = SCOPF.scopf(SCOPF.PCSC, system, Gurobi.Optimizer, voll=voll, contingencies=contingencies, prob=prob, max_shed=1.0, 

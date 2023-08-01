@@ -1,10 +1,30 @@
 # CC BY 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2022
-using PowerSystems
-import JuMP
-import Gurobi # LP, SOCP, Integer
-import Test
 
 module SCOPF
+
+using PowerSystems
+using JuMP
+using Plots
+using StatsPlots
+using Printf
+# using PowerSystemCaseBuilder
+using Test
+using Statistics
+
+import SparseArrays
+import StaticArrays
+import Octavian
+import SuiteSparseGraphBLAS
+import Printf
+import MathOptInterface
+const MOI = MathOptInterface
+import LinearAlgebra
+# import Ipopt # LP, SOCP, Nonconvex
+import Gurobi # LP, SOCP, Integer
+# import GLPK # LP, Integer
+# import Tulip
+import Test
+
 
 #=
     Utilities for running and analyzing the SCOPFs.

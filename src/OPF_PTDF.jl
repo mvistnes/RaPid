@@ -1,8 +1,5 @@
 # CC BY 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2022
 
-using PowerSystems
-using JuMP
-
 """ Run an OPF of a power system """
 function opf(type::OPF, system::System, optimizer; 
             voll = nothing, 
@@ -90,10 +87,10 @@ function opf(type::OPF, system::System, optimizer;
     end
 
     if type != SC::OPF
-        ptdf = copy(pf.ϕ)
+        # ptdf = copy(pf.ϕ)
         for (c,cont) in enumerate(get_bus_idx.(opfm.contingencies, [idx]))
             @info "Contingency $(cont[1])-$(cont[2]) is added"
-            islands, island, island_b, ptdf = find_system_state(pf, cont, findfirst(x -> x == opfm.contingencies[c], opfm.branches), branch_rating, short_term_limit_multi, long_term_limit_multi, ptdf)
+            islands, island, ptdf = find_system_state(pf, cont, findfirst(x -> x == opfm.contingencies[c], opfm.branches))
             add_short_term_contingencies(opfm, Pc, islands, island, ptdf, list, pr_lim, pd_lim, max_shed, branch_rating * short_term_limit_multi, cont, c)
             add_long_term_contingencies(opfm, Pcc, islands, island, ptdf, list, pr_lim, pd_lim, max_shed, branch_rating * long_term_limit_multi, ramp_mult, ramp_minutes, rampup, rampdown, dc_lim_min, dc_lim_max, pg_lim_max, cont, c)
         end
@@ -116,26 +113,26 @@ function add_short_term_contingencies(opfm, Pc, islands, island, ptdf, list, pr_
     # Add new constraints that limit the corrective variables within operating limits
     JuMP.@constraint(opfm.mod, sum(lsc) == sum(prc) + sum(pgc))
     if isempty(islands)
-        JuMP.@constraint(opfm.mod, 0 .<= opfm.mod[:pg0] .- pgc)
-        JuMP.@constraint(opfm.mod, prc .<= pr_lim .* max_shed)
-        JuMP.@constraint(opfm.mod, lsc .<= pd_lim .* max_shed)
+        JuMP.@constraints(opfm.mod, begin
+            0 .<= opfm.mod[:pg0] .- pgc
+            prc .<= pr_lim .* max_shed
+            lsc .<= pd_lim .* max_shed
+        end)
     else
         for n in islands[island]
-            JuMP.@constraint(opfm.mod, [g = list[n].ctrl_generation], 
-                0 <= opfm.mod[:pg0][g] - pgc[g])
-            JuMP.@constraint(opfm.mod, [g = list[n].renewables], 
-                prc[g] <= pr_lim[g] * max_shed)
-            JuMP.@constraint(opfm.mod, [d = list[n].demands], 
-                lsc[d] <= pd_lim[d] * max_shed)
+            JuMP.@constraints(opfm.mod, begin
+                [g = list[n].ctrl_generation], 0 <= opfm.mod[:pg0][g] - pgc[g]
+                [g = list[n].renewables], prc[g] <= pr_lim[g] * max_shed
+                [d = list[n].demands], lsc[d] <= pd_lim[d] * max_shed
+            end)
         end
         for in_vec in islands[1:end .!= island]
             for n in in_vec
-                JuMP.@constraint(opfm.mod, [g = list[n].ctrl_generation], 
-                    opfm.mod[:pg0][g] == pgc[g])
-                JuMP.@constraint(opfm.mod, [g = list[n].renewables], 
-                    prc[g] == pr_lim[g])
-                JuMP.@constraint(opfm.mod, [d = list[n].demands], 
-                    lsc[d] == pd_lim[d])
+                JuMP.@constraints(opfm.mod, begin
+                    [g = list[n].ctrl_generation], opfm.mod[:pg0][g] == pgc[g]
+                    [g = list[n].renewables], prc[g] == pr_lim[g]
+                    [d = list[n].demands], lsc[d] == pd_lim[d]
+                end)
             end
         end
     end
@@ -180,43 +177,37 @@ function add_long_term_contingencies(opfm, Pcc, islands, island, ptdf, list, pr_
     # Add new constraints that limit the corrective variables within operating limits
     JuMP.@constraint(opfm.mod, sum(pgu) + sum(lscc) == sum(pgd) + sum(prcc))
     if isempty(islands)
-        JuMP.@constraint(opfm.mod, pgu .<= rampup * ramp_minutes)
-        JuMP.@constraint(opfm.mod, pgd .<= rampdown * ramp_minutes)
-        JuMP.@constraint(opfm.mod, 0 .<= opfm.mod[:pg0] .+ pgu .- pgd)
-        JuMP.@constraint(opfm.mod, opfm.mod[:pg0] .+ pgu .- pgd .<= pg_lim_max)
-        JuMP.@constraint(opfm.mod, dc_lim_min .<= pfdccc)
-        JuMP.@constraint(opfm.mod, pfdccc .<= dc_lim_max)
-        JuMP.@constraint(opfm.mod, prcc .<= pr_lim .* max_shed)
-        JuMP.@constraint(opfm.mod, lscc .<= pd_lim .* max_shed)
+        JuMP.@constraints(opfm.mod, begin
+            pgu .<= rampup * ramp_minutes
+            pgd .<= rampdown * ramp_minutes
+            0 .<= opfm.mod[:pg0] .+ pgu .- pgd
+            opfm.mod[:pg0] .+ pgu .- pgd .<= pg_lim_max
+            dc_lim_min .<= pfdccc
+            pfdccc .<= dc_lim_max
+            prcc .<= pr_lim .* max_shed
+            lscc .<= pd_lim .* max_shed
+        end)
     else
         for n in islands[island]
-            JuMP.@constraint(opfm.mod, [g = list[n].ctrl_generation], 
-                pgu[g] <= rampup[g] * ramp_minutes)
-            JuMP.@constraint(opfm.mod, [g = list[n].ctrl_generation], 
-                pgd[g] <= rampdown[g] * ramp_minutes)
-            JuMP.@constraint(opfm.mod, [g = list[n].ctrl_generation], 
-                0 <= opfm.mod[:pg0][g] + pgu[g] - pgd[g])
-            JuMP.@constraint(opfm.mod, [g = list[n].ctrl_generation], 
-                opfm.mod[:pg0][g] + pgu[g] - pgd[g] <= pg_lim_max[g])
-            JuMP.@constraint(opfm.mod, [g = list[n].dc_branches], 
-                dc_lim_min[g] <= pfdccc[g])
-            JuMP.@constraint(opfm.mod, [g = list[n].dc_branches], 
-                pfdccc[g] <= dc_lim_max[g])
-            JuMP.@constraint(opfm.mod, [g = list[n].renewables], 
-                prcc[g] <= pr_lim[g] * max_shed)
-            JuMP.@constraint(opfm.mod, [d = list[n].demands], 
-                lscc[d] <= pd_lim[d] * max_shed)
+            JuMP.@constraints(opfm.mod, begin
+                [g = list[n].ctrl_generation], pgu[g] <= rampup[g] * ramp_minutes
+                [g = list[n].ctrl_generation], pgd[g] <= rampdown[g] * ramp_minutes
+                [g = list[n].ctrl_generation], 0 <= opfm.mod[:pg0][g] + pgu[g] - pgd[g]
+                [g = list[n].ctrl_generation], opfm.mod[:pg0][g] + pgu[g] - pgd[g] <= pg_lim_max[g]
+                [g = list[n].dc_branches], dc_lim_min[g] <= pfdccc[g]
+                [g = list[n].dc_branches], pfdccc[g] <= dc_lim_max[g]
+                [g = list[n].renewables], prcc[g] <= pr_lim[g] * max_shed
+                [d = list[n].demands], lscc[d] <= pd_lim[d] * max_shed
+            end)
         end
         for in_vec in islands[1:end .!= island]
             for n in in_vec
-                JuMP.@constraint(opfm.mod, [g = list[n].ctrl_generation], 
-                    opfm.mod[:pg0][g] == pgd[g] - pgu[g])
-                JuMP.@constraint(opfm.mod, [g = list[n].dc_branches], 
-                    pfdccc[g] == 0)
-                JuMP.@constraint(opfm.mod, [g = list[n].renewables], 
-                    prcc[g] == pr_lim[g])
-                JuMP.@constraint(opfm.mod, [d = list[n].demands], 
-                    lscc[d] == pd_lim[d])
+                JuMP.@constraints(opfm.mod, begin
+                    [g = list[n].ctrl_generation], opfm.mod[:pg0][g] == pgd[g] - pgu[g]
+                    [g = list[n].dc_branches], pfdccc[g] == 0
+                    [g = list[n].renewables], prcc[g] == pr_lim[g]
+                    [d = list[n].demands], lscc[d] == pd_lim[d]
+                end)
             end
         end
     end

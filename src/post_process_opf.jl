@@ -1,17 +1,4 @@
 # CC BY 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2022
-using PowerSystems
-using JuMP
-# using Ipopt # LP, SOCP, Nonconvex
-using Gurobi # LP, SOCP, Integer
-# using GLPK # LP, Integer
-using Plots
-using StatsPlots
-using Printf
-# using PowerSystemCaseBuilder
-using Test
-using Statistics
-# include("N-1_SCOPF.jl")
-# include("short_long_SCOPF.jl")
 
 scatterplot(model, system, name, type) = 
 scatter(

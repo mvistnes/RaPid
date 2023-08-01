@@ -1,17 +1,4 @@
 # CC BY 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2022
-using PowerSystems
-using JuMP
-# using Ipopt # LP, SOCP, Nonconvex
-import Gurobi # LP, SOCP, Integer
-import GLPK # LP, Integer
-using Plots
-using StatsPlots
-using Printf
-# using PowerSystemCaseBuilder
-using Test
-using Statistics
-# include("N-1_SCOPF.jl")
-# include("short_long_SCOPF.jl")
 
 function add_system_data_to_json(;
         file_name="system_data.json",
@@ -120,16 +107,16 @@ end
 function opfmodel(sys::System, optimizer, time_limit_sec, voll::Vector{<:Real}, 
         contingencies::Vector{<:Branch}=Component[], prob::Vector{<:Real}=[]; debug=false)
     # mod = Model(optimizer)
-    mod = Model(optimizer; add_bridges = false)
+    mod = Model(optimizer_with_attributes(optimizer, "Threads" => Threads.nthreads()); add_bridges = false)
     set_string_names_on_creation(mod, debug)
     # @debug begin
     #     set_string_names_on_creation(mod, true)
     #     "Variable names is on."
     # end
 
-    if GLPK.Optimizer == optimizer 
-        set_optimizer_attribute(mod, "msg_lev", GLPK.GLP_MSG_ON)
-    end
+    # if GLPK.Optimizer == optimizer 
+    #     set_optimizer_attribute(mod, "msg_lev", GLPK.GLP_MSG_ON)
+    # end
 
     ctrl_generation = collect(get_ctrl_generation(sys))
     branches = sort_components!(get_branches(sys))
@@ -205,10 +192,10 @@ get_ctrl_generation(sys::System) = Iterators.flatten((get_gens_t(sys), get_gens_
 get_generation(sys::System) = Iterators.flatten((get_ctrl_generation(sys), get_renewables(sys))) # An iterator of all generation
 
 """ A sorted vector to a type of power system component """
-sort_components!(list::PowerSystems.FlattenIteratorWrapper) = sort_components!(collect(list))
-sort_components!(nodes::AbstractVector{Bus}) = sort!(nodes, by = x -> x.number)
-sort_components!(components::AbstractVector{<:Component}) = sort!(components, by = x -> x.bus.number)
-sort_components!(branches::AbstractVector{<:Branch}) = sort!(branches,
+sort_components!(list::PowerSystems.FlattenIteratorWrapper{T}) where T = sort_components!(collect(T, list))
+sort_components!(nodes::Vector{Bus}) = sort!(nodes, by = x -> x.number)
+sort_components!(components::Vector{<:Component}) = sort!(components, by = x -> x.bus.number)
+sort_components!(branches::Vector{<:Branch}) = sort!(branches,
         by = x -> (get_number(get_arc(x).from), get_number(get_arc(x).to))
     )
 
@@ -336,7 +323,7 @@ get_bus_idx(branches::AbstractVector{<:Branch}, idx::Dict{<:Any, <:Int}) =
     split_pair(get_bus_idx.(branches, [idx]))
 
 get_branch_bus_idx(branches::AbstractVector{<:Branch}, contingencies::AbstractVector{<:Branch}, idx::Dict{<:Any, <:Int}) = 
-    [(findfirst(x -> x == b, branches), get_bus_idx(b, idx)) for b in contingencies]
+    [(x, get_bus_idx(branches[x], idx)) for x in indexin(contingencies, branches)]
 
 function extract_bus_idx(branch::String, idx::Dict{<:Any, <:Int})
     (f,t) = extract_bus(branch)

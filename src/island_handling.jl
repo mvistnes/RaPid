@@ -1,8 +1,5 @@
 # CC BY 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2022 
 
-using PowerSystems
-import SparseArrays
-
 # FIX: Sometimes breaks
 """ Find island(s) in the system returned in a nested Vector.
 Each element of the Vector consists of two lists, nodes and branches, in that island. """
@@ -123,6 +120,13 @@ function get_islands(T::SparseArrays.SparseMatrixCSC{<:Any, Ty}) where Ty <: Int
     return islands
 end
 
+function is_islanded(pf::DCPowerFlow, cont::Tuple{Integer, Integer}, branch::Integer; atol::Real = 1e-5)
+    return isapprox(
+        1/pf.B[cont[1], cont[2]]::Float64 + pf.DA[branch, cont[2]]::Float64 / pf.B[cont[1], cont[2]]::Float64 * 
+        ((pf.X[cont[1],cont[1]]::Float64 - pf.X[cont[1],cont[2]]::Float64) - (pf.X[cont[2],cont[1]]::Float64 - pf.X[cont[2],cont[2]]::Float64)),
+        zero(Float64), atol=atol)
+end
+
 " Find nodes connected to a node "
 function find_connected(branches::AbstractVector{<:Branch}, node::Bus)
     new_branches = Vector{Branch}()
@@ -166,16 +170,36 @@ end
 """
 function island_detection(T::SparseArrays.SparseMatrixCSC{Ty, <:Integer}, i::Integer, j::Integer; atol::Real = 1e-5) where Ty
     val = T[i, j]
-    T[i, j] = zero(Ty)
-    T[j, i] = zero(Ty)
-    T[i, i] = isapprox(T[i, i], val, atol=atol) ? zero(Ty) : T[i, i] + val
-    T[j, j] = isapprox(T[j, j], val, atol=atol) ? zero(Ty) : T[j, j] + val
-        # Values need to be exactly zero to be eliminated from the SparseMatrix in the algorithm
+    SparseArrays.dropstored!(T, i, j)
+    SparseArrays.dropstored!(T, j, i)
+    if isapprox(T[i, i], val, atol=atol) 
+        SparseArrays.dropstored!(T, i, i) 
+        SparseArrays.dropstored!(T, j, j)
+    else
+        T[i, i] += val
+        T[j, j] += val
+    end
+    # Values need to be exactly zero (or dropped) to be eliminated from the SparseMatrix in the algorithm
     islands = island_detection(create_connectivity_matrix(T))
     T[i, j] += val
     T[j, i] += val
     T[i, i] -= val
     T[j, j] -= val
+    if sum(length(i) for i in islands) != size(T, 1) 
+        @warn "Counted nodes $(sum(length(i) for i in islands)) != total nodes $(size(T, 1)) in contingency of line $i-$j !"
+    end
+    return islands
+end
+function island_detection_thread_safe(Y::SparseArrays.SparseMatrixCSC{Ty, <:Integer}, i::Integer, j::Integer; atol::Real = 1e-5) where Ty
+    I, J, val = SparseArrays.findnz(Y)
+    T = SparseArrays.dropzeros!(SparseArrays.sparse(I, J, val .!= 0))
+    val = Y[i, j]
+    SparseArrays.dropstored!(T, i, j)
+    SparseArrays.dropstored!(T, j, i)
+    isapprox(Y[i, i], val, atol=atol) && SparseArrays.dropstored!(T, i, i) 
+    isapprox(Y[j, j], val, atol=atol) && SparseArrays.dropstored!(T, j, j)
+    # Values need to be exactly zero (or dropped) to be eliminated from the SparseMatrix in the algorithm
+    islands = island_detection(T)
     if sum(length(i) for i in islands) != size(T, 1) 
         @warn "Counted nodes $(sum(length(i) for i in islands)) != total nodes $(size(T, 1)) in contingency of line $i-$j !"
     end
@@ -204,23 +228,29 @@ function handle_islands(B::AbstractMatrix, DA::AbstractMatrix, contingency::Tupl
     island = islands[find_ref_island(islands, slack)]
     island_b = find_island_branches(island, DA, branch)
     
-    # Need at least two nodes to make a valid system
-    if length(island) > 1 && length(island_b) > 1
+    # Need at least one node to make a valid system
+    if length(island) > 0
         return island, island_b
     end
     return [], []
 end
 
 function handle_islands(B::AbstractMatrix, contingency::Tuple{Integer, Integer}, slack::Integer)
-    islands = island_detection(B, contingency[1], contingency[2])
+    islands = island_detection_thread_safe(B, contingency[1], contingency[2])
     island = islands[find_ref_island(islands, slack)]
-    return length(island) > 1 ? island : []
-        # Need at least two nodes to make a valid system
+    return length(island) > 0 ? island : []
+        # Need at least one node to make a valid system
 end
 
 " Get all islands with the reference bus from all bx contingencies "
-get_all_islands(B::AbstractMatrix, bx::Vector{<:Tuple{Integer, Integer}}, slack::Integer) = 
-    [handle_islands(B, bx[i], slack) for i in eachindex(bx)]
+function get_all_islands(B::AbstractMatrix, bx::Vector{<:Tuple{Integer, Integer}}, slack::Integer) 
+    res = Vector{Vector{Int64}}(undef, length(bx))
+    Threads.@threads for i in eachindex(bx)
+        island = handle_islands(B, bx[i], slack)
+        res[i] = island
+    end
+    return res
+end
 
 function get_all_islands(opfm::OPFmodel, slack::Integer)
     idx = get_nodes_idx(opfm.nodes)
@@ -271,36 +301,6 @@ function new_islands(T::SparseArrays.SparseMatrixCSC{<:Any, <:Integer}, node::In
     return island
 end
 
-function test_imml_island_handling(pf::DCPowerFlow, bx::Vector{<:Tuple{Integer, Integer}})
-    ptdf1 = copy(pf.ϕ)
-    ptdf2 = copy(pf.ϕ)
-    for (c,cont) in enumerate(bx)
-        island, island_b = handle_islands(pf, cont, c)
-        try
-            flow = SCOPF.calculate_line_flows(pf, cont, c)
-            if length(island) < 500
-                println(c, cont)
-            end
-        catch DivideError
-            if length(island) < 2
-                @warn "Error and no islands!"
-            end
-        end
-        try
-            if isempty(island)
-                ptdf1 = get_isf(pf.DA, pf.B, cont, c, pf.slack)
-                ptdf2 = get_isf(pf, cont, c)
-            end
-            if any(abs.(ptdf1 .- ptdf2) .> 0.0001)
-                @error "Diff $c $(cont[1])-$(cont[2])!"
-            end
-        catch
-            @error "$c $(cont[1])-$(cont[2])!"
-            break
-        end
-    end
-end
-
 
 #################################################################################################
 # The code under this line is created by Sigurd Jakobsen (2023) in SINT_LF
@@ -315,7 +315,7 @@ end
 """
 function create_connectivity_matrix(Y::SparseArrays.SparseMatrixCSC)
     I, J, val = SparseArrays.findnz(Y)
-    T = SparseArrays.dropzeros!(SparseArrays.sparse(I, J, val.!=0))
+    T = SparseArrays.dropzeros!(SparseArrays.sparse(I, J, val .!= 0))
 end
 
 """
