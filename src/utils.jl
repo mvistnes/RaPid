@@ -199,7 +199,7 @@ sort_components!(branches::Vector{<:Branch}) = sort!(branches,
         by = x -> (get_number(get_arc(x).from), get_number(get_arc(x).to))
     )
 
-get_sorted_angles(model) = get_value(model, :va0)
+get_sorted_angles(model::Model) = get_value(model, :va0)
 
 # it_name(::Type{T}, mos::Model) where {T <:Component} = get_name.(get_components(T,mod))
 
@@ -209,17 +209,17 @@ make_named_array(value_func, list) = JuMP.Containers.DenseAxisArray(
     [value_func(x) for x in list], get_name.(list) 
 )
 
-struct CTypes
-    node
-    ctrl_generation
-    renewables
-    demands
-    branches
-    dc_branches
+struct CTypes{T<:Integer}
+    node::Bus
+    ctrl_generation::Vector{T}
+    renewables::Vector{T}
+    demands::Vector{T}
+    branches::Vector{T}
+    dc_branches::Vector{T}
 end
 
 """ Make a list where all components distributed on their node """
-function make_list(opfm::OPFmodel, idx::Dict{<:Any, <:Int}, nodes::AbstractVector{Bus}) 
+function make_list(opfm::OPFmodel, idx::Dict{<:Int, <:Int}, nodes::AbstractVector{Bus}) 
     list = [CTypes(n, [Int[] for _ in 1:5]...) for n in nodes]
     for (i,r) in enumerate(opfm.ctrl_generation)
         push!(list[idx[r.bus.number]].ctrl_generation, i)
@@ -266,6 +266,7 @@ function find_slack(nodes::AbstractVector{Bus})
         x.bustype == BusTypes.REF && return i,x
     end
     @error "No slack bus found!"
+    return 0,Bus()
 end
 find_slack(sys::System) = find_slack(sort_components!(get_nodes(sys)))
 
@@ -275,7 +276,7 @@ function solve_model!(model::Model)
     if termination_status(model) != MOI.OPTIMAL 
         @warn "Model not optimally solved with status $(termination_status(model))!"
     else
-        @info @sprintf "Model solved in %.6fs with objective value %.4f" solve_time(model) objective_value(model)
+        @info @sprintf "Model solved in %.6fs with objective value %.4f" MOI.get(model, MOI.SolveTimeSec()) objective_value(model)
     end
     return model
 end
@@ -298,8 +299,8 @@ end
 get_nodes_idx(nodes::AbstractVector{Bus}) = _make_ax_ref(get_number.(nodes))
 
 """ Return a Dict of bus name number to index. Deprecated in PowerSystems """
-function _make_ax_ref(ax::AbstractVector)
-    ref = Dict{eltype(ax), Int}()
+function _make_ax_ref(ax::AbstractVector{T}) where T
+    ref = Dict{T, Int}()
     for (ix, el) in enumerate(ax)
         if haskey(ref, el)
             @error("Repeated index element $el. Index sets must have unique elements.")
@@ -315,17 +316,18 @@ end
 get_bus_id(branch::Branch) = (branch.arc.from.number, branch.arc.to.number)
 
 " Get the bus number index of the from-bus and to-bus from a branch "
-get_bus_idx(branch::Branch, idx::Dict{<:Any, <:Int}) = 
-    (idx[branch.arc.from.number], idx[branch.arc.to.number])
+get_bus_idx(branch::Branch, idx::Dict{<:Int, T}) where T<:Int = 
+    (idx[branch.arc.from.number]::T, idx[branch.arc.to.number]::T)
 
 " Get the bus number index of the from-bus and to-bus from all branches "
-get_bus_idx(branches::AbstractVector{<:Branch}, idx::Dict{<:Any, <:Int}) =
-    split_pair(get_bus_idx.(branches, [idx]))
+function get_bus_idx(branches::AbstractVector{<:Branch}, idx::Dict{<:Int, <:Int})
+    return get_bus_idx.(branches, [idx])
+end
 
-get_branch_bus_idx(branches::AbstractVector{<:Branch}, contingencies::AbstractVector{<:Branch}, idx::Dict{<:Any, <:Int}) = 
+get_branch_bus_idx(branches::AbstractVector{<:Branch}, contingencies::AbstractVector{<:Branch}, idx::Dict{<:Int, <:Int}) = 
     [(x, get_bus_idx(branches[x], idx)) for x in indexin(contingencies, branches)]
 
-function extract_bus_idx(branch::String, idx::Dict{<:Any, <:Int})
+function extract_bus_idx(branch::String, idx::Dict{<:Int, <:Int})
     (f,t) = extract_bus(branch)
     return (idx[f], idx[t])
 end
@@ -336,17 +338,17 @@ function extract_bus(branch::String)
 end
 
 " Get the bus number index of the from-bus and to-bus from all branches "
-function get_bus_idx(A::AbstractMatrix)
+function get_bus_idx(A::SparseArrays.SparseMatrixCSC{T}) where T
     m, n = size(A)
-    ix = [[0,0] for _ in 1:m]
+    ix = [(0,0) for _ in 1:m]
     rows = SparseArrays.rowvals(A)
     for j = 1:n
         for i in SparseArrays.nzrange(A, j)
             row = rows[i]
             if iszero(ix[row][1])
-                ix[row][1] = j
+                ix[row] = (j, 0)
             else
-                ix[row][2] = j
+                ix[row] = (ix[row][1], j)
             end
         end
     end
@@ -376,7 +378,7 @@ get_value(mod::Model, var::Vector{JuMP.VariableRef}) =
 PowerSystems.get_active_power(value::StandardLoad) = value.current_active_power
 
 """ Return the net power injected at each node. """
-function get_net_Pᵢ(opfm::OPFmodel, idx::Dict{<:Any, <:Int} = get_nodes_idx(opfm.nodes))
+function get_net_Pᵢ(opfm::OPFmodel, idx::Dict{<:Int, <:Int} = get_nodes_idx(opfm.nodes))
     P = zeros(length(opfm.nodes))
     vals = get_value(opfm.mod, :pr0)
     for (i,r) in enumerate(opfm.renewables)
@@ -399,7 +401,7 @@ function get_net_Pᵢ(opfm::OPFmodel, idx::Dict{<:Any, <:Int} = get_nodes_idx(op
     return P
 end
 
-function get_Pd!(P::Vector{<:Real}, opfm::OPFmodel, idx::Dict{<:Any, <:Int})
+function get_Pd!(P::Vector{<:Real}, opfm::OPFmodel, idx::Dict{<:Int, <:Int})
     for r in opfm.renewables
         P[idx[r.bus.number]] += get_active_power(r)
     end
@@ -407,14 +409,14 @@ function get_Pd!(P::Vector{<:Real}, opfm::OPFmodel, idx::Dict{<:Any, <:Int})
         P[idx[d.bus.number]] -= get_active_power(d)
     end
 end
-function get_Pd(opfm::OPFmodel, idx::Dict{<:Any, <:Int} = get_nodes_idx(opfm.nodes))
+function get_Pd(opfm::OPFmodel, idx::Dict{<:Int, <:Int} = get_nodes_idx(opfm.nodes))
     P = zeros(length(opfm.nodes))
     get_Pd!(P, opfm, idx)
     return P
 end
 
 """ Return power shed at each node. """
-function get_Pshed!(P::Vector{<:Real}, opfm::OPFmodel, idx::Dict{<:Any, <:Int})
+function get_Pshed!(P::Vector{<:Real}, opfm::OPFmodel, idx::Dict{<:Int, <:Int})
     vals = get_value(opfm.mod, :pr0)
     for (i,r) in enumerate(opfm.renewables)
         P[idx[r.bus.number]] -= vals[i]
@@ -424,14 +426,14 @@ function get_Pshed!(P::Vector{<:Real}, opfm::OPFmodel, idx::Dict{<:Any, <:Int})
         P[idx[d.bus.number]] += vals[i]
     end
 end
-function get_Pshed(opfm::OPFmodel, idx::Dict{<:Any, <:Int} = get_nodes_idx(opfm.nodes))
+function get_Pshed(opfm::OPFmodel, idx::Dict{<:Int, <:Int} = get_nodes_idx(opfm.nodes))
     P = zeros(length(opfm.nodes))
     get_Pshed!(P, opfm, idx)
     return P
 end
 
 """ Return the power injected by controlled generation at each node. """
-function get_Pgen!(P::Vector{<:Real}, opfm::OPFmodel, idx::Dict{<:Any, <:Int})
+function get_Pgen!(P::Vector{<:Real}, opfm::OPFmodel, idx::Dict{<:Int, <:Int})
     vals = get_value(opfm.mod, :pg0)
     for (i,r) in enumerate(opfm.ctrl_generation)
         P[idx[r.bus.number]] += vals[i]
@@ -443,13 +445,13 @@ function get_Pgen!(P::Vector{<:Real}, opfm::OPFmodel, idx::Dict{<:Any, <:Int})
     end
     return P
 end
-function get_Pgen(opfm::OPFmodel, idx::Dict{<:Any, <:Int} = get_nodes_idx(opfm.nodes))
+function get_Pgen(opfm::OPFmodel, idx::Dict{<:Int, <:Int} = get_nodes_idx(opfm.nodes))
     P = zeros(length(opfm.nodes))
     get_Pgen!(P, opfm, idx)
     return P
 end
 
-function get_controllable(opfm::OPFmodel, idx::Dict{<:Any, <:Int} = get_nodes_idx(opfm.nodes))
+function get_controllable(opfm::OPFmodel, idx::Dict{<:Int, <:Int} = get_nodes_idx(opfm.nodes))
     P = get_Pgen(opfm, idx)
     get_Pshed!(P, opfm, idx)
     return P

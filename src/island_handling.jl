@@ -191,8 +191,7 @@ function island_detection(T::SparseArrays.SparseMatrixCSC{Ty, <:Integer}, i::Int
     return islands
 end
 function island_detection_thread_safe(Y::SparseArrays.SparseMatrixCSC{Ty, <:Integer}, i::Integer, j::Integer; atol::Real = 1e-5) where Ty
-    I, J, val = SparseArrays.findnz(Y)
-    T = SparseArrays.dropzeros!(SparseArrays.sparse(I, J, val .!= 0))
+    T = create_connectivity_matrix(Y)
     val = Y[i, j]
     SparseArrays.dropstored!(T, i, j)
     SparseArrays.dropstored!(T, j, i)
@@ -332,7 +331,7 @@ end
 """
 function island_detection(T::SparseArrays.SparseMatrixCSC{<:Any, Ty}) where Ty <: Integer
     n_buses = size(T, 1)
-    bus_islands = []
+    bus_islands = Vector{Vector{Int64}}(undef, 0)
     islands = 0
     conn = SparseArrays.spzeros(Bool, n_buses)
     idx = 1 

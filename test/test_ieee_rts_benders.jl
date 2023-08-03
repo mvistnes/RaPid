@@ -60,7 +60,7 @@ max_shed = 0.1
 ramp_mult = 10
 
 println("Start PTDF")
-@time opfm_ptdf, Pc_ptdf, Pcc_ptdf = SCOPF.opf(SCOPF.PCSC, system, Gurobi.Optimizer, voll=voll, contingencies=contingencies, prob=prob, max_shed=max_shed, 
+@time opfm_ptdf, pf_ptdf, Pc_ptdf, Pcc_ptdf = SCOPF.opf(SCOPF.PCSC, system, Gurobi.Optimizer, voll=voll, contingencies=contingencies, prob=prob, max_shed=max_shed, 
     ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_limit_multi=short, long_term_limit_multi=long);
 @time SCOPF.solve_model!(opfm_ptdf.mod);
 println("Objective value PTDF: ", JuMP.objective_value(opfm_ptdf.mod))
