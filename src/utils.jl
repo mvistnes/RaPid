@@ -74,6 +74,38 @@ function set_ramp_limits!(system::System, ramp_mult::Real = 0.01)
     PowerSystems.set_ramp_limits!.(gens,ramp_lim)
 end
 
+get_generator_cost(gen) = get_operation_cost(gen) |> get_variable |> get_cost |> _get_g_value
+_get_g_value(x::AbstractVector{<:Tuple{Real, Real}}) = x[1]
+_get_g_value(x::Tuple{<:Real, <:Real}) = x
+
+get_y(value::Branch) = 1 / (get_r(value) + get_x(value)*im)
+
+function get_specs(branch::Line)
+    y = get_y(branch)
+    return real(y), imag(y), get_b(branch), 1., 1., 0.
+end
+function get_specs(branch::Transformer2W)
+    y = get_y(branch)
+    B = (from = PowerSystems.get_primary_shunt(branch), to = 0.0)
+    return real(y), imag(y), B, 1., 1., 0.
+end
+function get_specs(branch::TapTransformer)
+    y = get_y(branch)
+    B = (from = PowerSystems.get_primary_shunt(branch), to = 0.0)
+    tap = get_tap(branch)
+    tr = tap 
+    return real(y), imag(y), B, tap, tap, 0.
+end
+function get_specs(branch::PhaseShiftingTransformer)
+    y = get_y(branch)
+    B = (from = PowerSystems.get_primary_shunt(branch), to = 0.0)
+    tap = get_tap(branch)
+    angle = get_α(branch)
+    tr = tap * cos(angle)
+    ti = tap * sin(angle)
+    return real(y), imag(y), B, tap, tr, ti
+end
+
 """ An array of the Value Of Lost Load for the demand and renewables """
 make_voll(sys::System, x_range::UnitRange=1000:3000) = rand(x_range, length(get_demands(sys)))
 make_cost_renewables(sys::System, x_range::UnitRange=1:30) = rand(x_range, length(get_renewables(sys)))
@@ -107,7 +139,11 @@ end
 function opfmodel(sys::System, optimizer, time_limit_sec, voll::Vector{<:Real}, 
         contingencies::Vector{<:Branch}=Component[], prob::Vector{<:Real}=[]; debug=false)
     # mod = Model(optimizer)
-    mod = Model(optimizer_with_attributes(optimizer, "Threads" => Threads.nthreads()); add_bridges = false)
+    if Gurobi.Optimizer == optimizer
+        mod = Model(optimizer_with_attributes(optimizer, "Threads" => Threads.nthreads()); add_bridges = false)
+    else
+        mod = Model(optimizer; add_bridges = false)
+    end
     set_string_names_on_creation(mod, debug)
     # @debug begin
     #     set_string_names_on_creation(mod, true)
@@ -175,10 +211,6 @@ function beta(sys::System, branch::String)
 end
 
 a(line::String, contingency::String) = ifelse(line != contingency, 1, 0)
-
-get_generator_cost(gen) = get_operation_cost(gen) |> get_variable |> get_cost |> _get_g_value
-_get_g_value(x::AbstractVector{<:Tuple{Real, Real}}) = x[1]
-_get_g_value(x::Tuple{<:Real, <:Real}) = x
 
 """ An iterator to a type of power system component """
 get_gens_t(sys::System) = get_components(ThermalGen, sys)
@@ -288,10 +320,7 @@ function set_warm_start!(model::JuMP.Model, symb::Symbol)
     return model
 end
 function set_warm_start!(model::JuMP.Model, symbs::AbstractVector{Symbol}) 
-    x_sol = [get_value(model, symb) for symb in symbs]
-    for symb in symbs
-        JuMP.set_start_value.(model[symb], x_sol)
-    end
+    set_warm_start!.([model], symbs)
     return model
 end
 

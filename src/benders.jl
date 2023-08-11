@@ -62,6 +62,7 @@ function run_benders(type::OPF, system::System, optimizer, voll=nothing, prob=no
         branch_short_term_limit_multi::Real = 1.5, branch_long_term_limit_multi::Real = 1.2, 
         gen_short_term_limit_multi::Real = 2.0, gen_long_term_limit_multi::Real = 1.0, p_failure = 0.0, branch_c = nothing, rate_c = 0.0, debug = false)
     total_time = time()
+    LinearAlgebra.BLAS.set_num_threads(Threads.nthreads())
     # opfm = scopf(SC, system, optimizer, voll=voll, prob=prob, contingencies=contingencies, ramp_minutes=ramp_minutes, max_shed=max_shed, 
     #     renewable_prod = 1.0, debug = debug)
     opfm, pf, _, _ = SCOPF.opf(SC, system, optimizer, voll=voll, contingencies=contingencies, prob=prob, max_shed=max_shed)
@@ -96,6 +97,7 @@ function run_benders(type::OPF, system::System, optimizer, voll=nothing, prob=no
     bufs_X = [similar(pf.X) for _ in 1:Threads.nthreads()]
     # num_islands = is_islanded.([pf], getindex.(contids, 2), getindex.(contids, 1))
     # if sum(num_islands) > 0.1 * length(opfm.contingencies) 
+    LinearAlgebra.BLAS.set_num_threads(1)
     mod_lock = Threads.ReentrantLock();
     # for contid in contids 
     Threads.@threads for contid in contids 
@@ -131,7 +133,7 @@ function run_benders(type::OPF, system::System, optimizer, voll=nothing, prob=no
                     end
                 end
             end
-            @info "Island: Contingency line $(cont[1])-$(cont[2])-i_$(c)"
+            @debug "Island: Contingency line $(cont[1])-$(cont[2])-i_$(c)"
         end
     end
     set_objective_function(opfm.mod, bd.obj)
@@ -139,6 +141,7 @@ function run_benders(type::OPF, system::System, optimizer, voll=nothing, prob=no
     termination_status(opfm.mod) != MOI.OPTIMAL && return opfm, pf, bd.Pc, bd.Pcc, bd.Pccx
     GC.safepoint()
     # end
+    LinearAlgebra.BLAS.set_num_threads(Threads.nthreads())
 
     ptdf = copy(pf.ϕ)
     X = copy(pf.X)

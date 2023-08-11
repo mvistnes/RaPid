@@ -5,7 +5,7 @@ abstract type PowerFlow end
 mutable struct DCPowerFlow{T1<:Real, T2<:Integer} <: PowerFlow 
     DA::SparseArrays.SparseMatrixCSC{T1, T2} # Diagonal admittance matrix times the connectivity matrix
     B::SparseArrays.SparseMatrixCSC{T1, T2} # The admittance matrix
-    fact_B::LinearAlgebra.Cholesky{T1, Matrix{T1}} # A factorization of the admittance matrix
+    fact_B::LinearAlgebra.Factorization{T1} # A factorization of the admittance matrix
     X::Matrix{T1} # Inverse of the admittance matrix
     ϕ::Matrix{T1} # PTDF matrix
     θ::Vector{T1} # Bus voltage angles
@@ -21,7 +21,7 @@ function DCPowerFlow(branches::AbstractVector{<:Tuple{T2, T2}}, x::AbstractVecto
     X = calc_X(B, slack)
     ϕ = zeros(eltype(X), size(A))
     calc_isf!(ϕ, DA, X)
-    fact_B = LinearAlgebra.cholesky(Matrix(B))
+    fact_B = LinearAlgebra.factorize(Matrix(B))
     return DCPowerFlow{T1, T2}(DA, B, fact_B, X, ϕ, zeros(T1, numnodes), zeros(T1, length(branches)), slack)
 end
 DCPowerFlow(nodes::AbstractVector{<:Bus}, branches::AbstractVector{<:Branch}, idx::Dict{<:Int, <:Int} = get_nodes_idx(nodes)) =
@@ -113,7 +113,7 @@ calc_A(branches::AbstractVector{<:Branch}, numnodes::Integer, idx::Dict{<:Int, <
 calc_D(x::AbstractVector{<:Real}) = LinearAlgebra.Diagonal(1. ./ x)
 calc_D(branches::AbstractVector{<:Branch}) = calc_D(get_x.(branches))
 
-calc_B(A::AbstractMatrix{<:Real}, D::AbstractMatrix{<:Real}) = A' * D * A
+# calc_B(A::AbstractMatrix{<:Real}, D::AbstractMatrix{<:Real}) = A' * D * A
 calc_B(A::AbstractMatrix{<:Real}, DA::AbstractMatrix{<:Real}) = A' * DA
 
 """ Builds an admittance matrix with the line series reactance of the lines. """
@@ -170,7 +170,7 @@ calc_X(DA::AbstractMatrix{<:Real}, B::AbstractMatrix{T}, cont::Tuple{Integer, In
     cont[1] (from_bus), cont[2] (to_bus), i_branch branch number, and island is index numbers 
 """
 function calc_X(DA::AbstractMatrix{<:Real}, B::AbstractMatrix{<:Real}, cont::Tuple{Integer, Integer}, 
-        i_branch::Integer, slack::Integer, island::AbstractVector{<:Integer}) where T<:Real
+        i_branch::Integer, slack::Integer, island::AbstractVector{<:Integer})
     (fbus, tbus) = cont
     x = B[fbus, tbus] * DA[i_branch, tbus] / B[fbus, tbus]
     X = Matrix(B[island, island])

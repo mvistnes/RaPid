@@ -12,19 +12,23 @@ using Test
 using Statistics
 
 import SparseArrays
-import StaticArrays
-import Octavian
-import SuiteSparseGraphBLAS
-import Printf
+# import StaticArrays
+# import Octavian
+# import SuiteSparseGraphBLAS
 import MathOptInterface
 const MOI = MathOptInterface
 import LinearAlgebra
-# import Ipopt # LP, SOCP, Nonconvex
+import Ipopt # LP, SOCP, Nonconvex
 import Gurobi # LP, SOCP, Integer
 # import GLPK # LP, Integer
 # import Tulip
 import Test
 
+## For timing functions (with allocations)
+# using TimerOutputs
+# const tmr = TimerOutput();
+## SCOPF.tmr
+## SCOPF.reset_timer!(SCOPF.tmr)
 
 #=
     Utilities for running and analyzing the SCOPFs.
@@ -44,15 +48,18 @@ export add_system_data_to_json, get_system, OPFmodel, opfmodel, beta, solve_mode
 include("N-1_SCOPF.jl")
 export scopf, p_scopf, pc_scopf
 
+include("AC_N-1_SCOPF.jl")
+export ac_scopf
+
 include("OPF_PTDF.jl")
 export opf
 
-#=
-    A formulation of a PC-SCOPF where first a P-SCOPF is run,
-    then a C-SCOPF is run using the results.
-=#
-include("short_long_SCOPF.jl")
-export sl_scopf, c_scopf
+# #=
+#     A formulation of a PC-SCOPF where first a P-SCOPF is run,
+#     then a C-SCOPF is run using the results.
+# =#
+# include("short_long_SCOPF.jl")
+# export sl_scopf, c_scopf
 
 #=
     DC power flow functions.
@@ -72,7 +79,7 @@ export get_islands, find_connected
     A formulation of a PC_SCOPF using Benders' decomposition.
 =#
 include("benders.jl")
-export run_benders, run_benders2, get_overload, get_islands, find_connected, calc_all_line_flows
+export run_benders, get_overload, get_islands, find_connected, calc_all_line_flows
 
 #=
     Functions using the Inverse Matrix Modification Lemma.
@@ -87,7 +94,5 @@ export IMML, get_changed_angles, calc_Pline, get_changed_X, get_isf, calculate_l
 include("post_process_opf.jl")
 export scatterplot, make_save_plot, scatter_all, print_variabel, print_results, print_active_power, 
     print_power_flow, print_contingency_power_flow, print_contingency_overflow
-
-include("IterativeDCContAnal.jl")
 
 end

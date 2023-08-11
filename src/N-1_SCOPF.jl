@@ -11,7 +11,6 @@ function scopf(type::OPF, system::System, optimizer;
             unit_commit::Bool = false,
             max_shed::Real = 1.0,
             max_curtail::Real = 1.0,
-            renewable_prod::Real= 0.5, 
             circuit_breakers::Bool=false,
             short_term_limit_multi::Real = 1.5,
             ramp_minutes::Real = 10,
@@ -20,8 +19,6 @@ function scopf(type::OPF, system::System, optimizer;
         )
     contingencies = isnothing(contingencies) ? sort_components!(get_branches(system)) : contingencies
     prob = isnothing(prob) ? make_prob(contingencies) : prob
-    # set_renewable_prod!(system, renewable_prod)
-    # set_active_power_demand!(system)
 
     opfm = isnothing(voll) ? opfmodel(system, optimizer, time_limit_sec, debug=debug) : opfmodel(system, optimizer, time_limit_sec, voll, contingencies, prob, debug=debug)
     idx = get_nodes_idx(opfm.nodes)

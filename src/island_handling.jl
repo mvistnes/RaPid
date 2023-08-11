@@ -219,8 +219,13 @@ function find_ref_island(islands::Vector, slack::Integer)
     return 0
 end
 
-find_island_branches(island::Vector{<:Integer}, DA::AbstractMatrix, c_branch::Integer) = 
-    sort!(unique!(DA[:,island].rowval))[1:end .!= c_branch]
+function find_island_branches(island::Vector{<:Integer}, DA::SparseArrays.SparseMatrixCSC{<:Any, <:Integer}, c_branch::Integer)
+    res = sort!(unique!(DA[:,island].rowval))
+    if insorted(c_branch, res)
+        deleteat!(res, searchsortedfirst(res, c_branch))
+    end
+    return res
+end
 
 function handle_islands(B::AbstractMatrix, DA::AbstractMatrix, contingency::Tuple{Integer, Integer}, branch::Integer, slack::Integer)
     islands = island_detection(B, contingency[1], contingency[2])

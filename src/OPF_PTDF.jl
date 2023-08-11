@@ -89,7 +89,7 @@ function opf(type::OPF, system::System, optimizer;
     if type != SC::OPF
         ptdf = similar(pf.ϕ)
         X = similar(pf.X)
-        for (c,cont) in get_branch_bus_idx(opfm.branches, opfm.contingencies, bd.idx)
+        for (c,cont) in get_branch_bus_idx(opfm.branches, opfm.contingencies, idx)
             @info "Contingency $(cont[1])-$(cont[2]) is added"
             islands, island = find_system_state(ptdf, X, pf, cont, c)
             add_short_term_contingencies(opfm, Pc, islands, island, ptdf, list, pr_lim, pd_lim, max_shed, branch_rating * short_term_limit_multi, cont, c)

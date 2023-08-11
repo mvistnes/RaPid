@@ -48,10 +48,10 @@ SCOPF.set_ramp_limits!(system, 0.01);
 # prob /= 8760
 # prob = prob[c]
 prob = fill(0.01, length(contingencies))
-short = 1.2
-long = 1.0
+short = 1.5
+long = 1.25
 ramp_minutes = 10
-max_shed = 0.1
+max_shed = 0.5
 ramp_mult = 10
 
 @time opfm_norm = SCOPF.scopf(SCOPF.SC, system, SCOPF.Gurobi.Optimizer, voll=voll, contingencies=contingencies, prob=prob, max_shed=1.0, 

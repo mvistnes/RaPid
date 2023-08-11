@@ -149,14 +149,6 @@ function interiorpointmethod(alpha::Float64, err::Float64, A::Matrix{Float64}, b
         x1[i+2*(i-1)+length(b)+length(c)-1] = b1[i] - sum(A[i,:])
         x1[2*i+length(b)+length(c)-1] = -b1[i] + sum(A[i,:])
     end
-    
-    for i in 1:size(A0,1)
-        for j in 1:size(A0,2)
-            @printf("%7.1f ", A0[i,j])
-        end
-        println(' ')
-    end
-    println(c1, x1)
 
     # Solver
     println("-------- Begin --------")

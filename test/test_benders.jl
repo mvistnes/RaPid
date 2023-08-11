@@ -1,4 +1,4 @@
-include("src\\SCOPF.jl")
+
 
 function run_benders(fname::String)
     system = System(fname)

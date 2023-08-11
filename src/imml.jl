@@ -22,9 +22,6 @@ Input:
     - θ₀: Inital voltage angles
     - from_bus: From bus index
     - to_bus: To bus index
-    - branch: Branch index
-    - change: The amount of reactance change between the buses, <=1. 
-        Default is 1 and this removes all lines
 """
 @views function get_changed_angles(
         X::AbstractMatrix{<:Real}, 
@@ -66,14 +63,13 @@ end
 Calculation of the inverse admittance matrix in a contingency case using IMML
 
 Input:
-    - X: The inverse admittance matrix
+    - X: Container for the output matrix
+    - X0: The inverse admittance matrix
     - B: Suseptance matrix
     - DA: Diagonal suseptance matrix times the connectivity matrix
     - from_bus: From bus index
     - to_bus: To bus index
     - branch: Branch index
-    - change: The amount of reactance change between the buses, <=1. 
-        Default is 1 and this removes all lines
 """
 @views function get_changed_X!(
         X::AbstractMatrix{<:Real}, 
@@ -98,7 +94,8 @@ Input:
     LinearAlgebra.mul!(X, x, x', -change * 1/c⁻¹, true) # mul!(C, A, B, α, β) -> C == $A B α + C β$
 end
 
-" Get the isf-matrix after a line outage using IMML "
+""" Get the isf-matrix after a line outage using IMML. 
+    isf and X are containers for output and calculation and will be overwritten """
 function get_isf!(
         isf::AbstractMatrix{<:Real}, 
         X::AbstractMatrix{<:Real}, 
@@ -111,8 +108,11 @@ function get_isf!(
     get_changed_X!(X, X0, B, DA, cont[1], cont[2], branch)
     calc_isf!(isf, DA, X)
     isf[branch,:] .= 0
+    nothing
 end
 
+""" Get the isf-matrix after a line outage using IMML. 
+     """
 function get_isf(
         pf::DCPowerFlow, 
         cont::Tuple{Integer, Integer}, 
@@ -129,16 +129,16 @@ Calculation of line flow in a contingency case using IMML.
 If DivideError, there are island(s) in the system.
 
 Input:
+    - Pl: Container for output
     - Pl0: Initial line power flow
     - ptdf: Power Transfer Distribution Factor matrix
     - B: Suseptance matrix
     - DA: Diagonal suseptance matrix times the connectivity matrix
-    - θ₀: Inital voltage angles
+    - X: The inverse admittance matrix
+    - θ: Voltage angles
     - from_bus: From bus index
     - to_bus: To bus index
-    - slack: Slack bus index
-    - change: The amount of reactance change between the buses, <=1. 
-        Default is 1 and this removes all lines
+    - branch: Contingency branch index
 """
 @views function calculate_line_flows!(
         Pl::AbstractVector{<:Real},
@@ -147,7 +147,7 @@ Input:
         B::AbstractMatrix{<:Real},
         DA::AbstractMatrix{<:Real},
         X::AbstractMatrix{<:Real}, 
-        θ₀::AbstractVector{<:Real}, 
+        θ::AbstractVector{<:Real}, 
         from_bus::Integer, 
         to_bus::Integer, 
         branch::Integer; 
@@ -159,9 +159,10 @@ Input:
     if isapprox(c⁻¹, zero(typeof(c⁻¹)); atol=atol)
         return throw(DivideError())
     end
-    delta = 1/c⁻¹ * (θ₀[from_bus] - θ₀[to_bus])
+    delta = 1/c⁻¹ * (θ[from_bus] - θ[to_bus])
     @. Pl = Pl0 - (ptdf[:, from_bus] - ptdf[:, to_bus]) * change * delta
     Pl[branch] = 0.0
+    return nothing
 end
 
 function calculate_line_flows!(

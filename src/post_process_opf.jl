@@ -399,7 +399,8 @@ function print_contingency_P(opfm, idx)
     end
 end
 
-function print_contingency_P(opfm, Pc, Pcc, Pccx, idx)
+function print_contingency_P(opfm, Pc, Pcc, Pccx = Dict())
+    idx = SCOPF.get_nodes_idx(opfm.nodes)
     println("Pc")
     for (c,cont) in enumerate(opfm.contingencies)
         P = zeros(length(opfm.nodes))

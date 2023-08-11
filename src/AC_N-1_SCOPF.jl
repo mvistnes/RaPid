@@ -1,9 +1,4 @@
-using PowerSystems
-const PSY = PowerSystems
-using JuMP
-using Ipopt
-using Printf
-using PowerSystemCaseBuilder
+# CC BY 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2022
 
 function add_system_data_to_json(;
         file_name="system_data.json",
@@ -17,6 +12,152 @@ function add_system_data_to_json(;
     system_data = System(joinpath(DATA_DIR, data_name))
     add_time_series!(system_data, joinpath(DATA_DIR,time_series))
     to_json(system_data, file_name, force=true)
+end
+
+function ac_scopf(type::OPF, system::System, optimizer; 
+        voll = nothing, 
+        contingencies = nothing, 
+        prob = nothing,
+        time_limit_sec::Integer = 600,
+        unit_commit::Bool = false,
+        max_shed::Real = 1.0,
+        max_curtail::Real = 1.0,
+        circuit_breakers::Bool=false,
+        short_term_limit_multi::Real = 1.5,
+        ramp_minutes::Real = 10,
+        ramp_mult::Real = 10,
+        debug=false
+    )
+    contingencies = isnothing(contingencies) ? sort_components!(get_branches(system)) : contingencies
+    prob = isnothing(prob) ? make_prob(contingencies) : prob
+
+    opfm = isnothing(voll) ? opfmodel(system, optimizer, time_limit_sec, debug=debug) : opfmodel(system, optimizer, time_limit_sec, voll, contingencies, prob, debug=debug)
+    idx = get_nodes_idx(opfm.nodes)
+    list = make_list(opfm, idx, opfm.nodes)
+    slack = find_slack(opfm.nodes)
+
+    vm0_limit::NamedTuple{(:min, :max), Tuple{Float64, Float64}} = (0.90, 1.05)
+    p_lim = get_active_power_limits.(opfm.ctrl_generation)
+    q_lim = get_reactive_power_limits.(opfm.ctrl_generation)
+    pr = get_active_power.(opfm.renewables)
+    qr = get_reactive_power.(opfm.renewables)
+    pd = get_active_power.(opfm.demands)
+    qd = get_reactive_power.(opfm.demands)
+    @variables(opfm.mod, begin
+        0 <= pg0[g in 1:length(opfm.ctrl_generation)] <= p_lim[g].max
+            # active power variables for the generators
+        q_lim[g].min <= qg0[g in 1:length(opfm.ctrl_generation)] <= q_lim[g].max
+                # and reactive
+        pf0_fr[l in 1:length(opfm.branches)]
+            # active power flow from bus on lines in base case 
+        qf0_fr[l in 1:length(opfm.branches)]
+                # and reactive 
+        pf0_to[l in 1:length(opfm.branches)]
+            # active power flow to bus on lines in base case 
+        qf0_to[l in 1:length(opfm.branches)]
+                # and reactive 
+        pfdc0[l in 1:length(opfm.dc_branches)]
+            # power flow on DC branches
+        qfdc0[l in 1:length(opfm.dc_branches)]
+                # and reactive 
+        vm0_limit.min <= vm0[b in 1:length(opfm.nodes)] <= vm0_limit.max
+            # voltage magnitude at a node in base case 
+        va0[b in 1:length(opfm.nodes)]
+            # voltage angle at a node in base case 
+        0 <= ls0[b in 1:length(opfm.demands)] <= pd[b] * max_shed
+            # load curtailment variables
+        0 <= pr0[b in 1:length(opfm.renewables)] <= pr[b] * max_curtail
+            # renewable curtailment variables
+    end)
+
+    register(opfm.mod, :sum, 1, sum; autodiff = true)
+
+    # minimize cost of generation
+    @objective(opfm.mod, Min, # opfm.cost_ctrl_gen' * opfm.mod[:pg0] + opfm.voll' * opfm.mod[:ls0]
+        sum(x * opfm.mod[:pg0][i] #= x[2] * opfm.mod[:pg0][i]^2 =# for (i,x) in enumerate(opfm.cost_ctrl_gen))+ 
+        # opfm.cost_renewables' * opfm.mod[:pr0] + 
+        sum(x * opfm.mod[:ls0][i] for (i,x) in enumerate(opfm.voll))
+    )
+
+    k = [idx[l.arc.from.number] for l in opfm.branches]
+    m = [idx[l.arc.to.number] for l in opfm.branches]
+    # incerted power at each bus for the base case and contingencies
+    @constraint(opfm.mod, inj_p[n = 1:length(opfm.nodes)], 
+        sum(isequal(k[l], n) * opfm.mod[:pf0_fr][l] - isequal(m[l], n) * opfm.mod[:pf0_to][l] for l in list[n].branches) == 
+        sum(opfm.mod[:pfdc0][l] for l in list[n].dc_branches) +
+        sum(opfm.mod[:pg0][g] for g in list[n].ctrl_generation) + 
+        sum((pr[d] - opfm.mod[:pr0][d] for d in list[n].renewables), init = 0.0) - 
+        sum((pd[d] - opfm.mod[:ls0][d] for d in list[n].demands), init = 0.0)
+    )
+    @constraint(opfm.mod, inj_q[n = 1:length(opfm.nodes)], 
+        sum(isequal(k[l], n) * opfm.mod[:qf0_fr][l] - isequal(m[l], n) * opfm.mod[:qf0_to][l] for l in list[n].branches) == 
+        sum(opfm.mod[:qfdc0][l] for l in list[n].dc_branches) +
+        sum(opfm.mod[:qg0][g] for g in list[n].ctrl_generation) + 
+        sum((qr[d] * (1 - opfm.mod[:pr0][d] / pr[d]) for d in list[n].renewables), init = 0.0) - 
+        sum((qd[d] * (1 - opfm.mod[:ls0][d] / pd[d]) for d in list[n].demands), init = 0.0)
+    )
+    # @constraint(opfm.mod, va_lim, -π/2 <= opfm.mod[:va0] <= π/2) # Not really needed, could be implemented with spesific line angle limits
+    @constraint(opfm.mod, opfm.mod[:va0][slack[1]] == 0) # Set voltage angle at reference bus
+    
+    # power flow on line and line limits
+    for (l, branch) in enumerate(opfm.branches)
+        branch_rating = get_rate(branch)
+        g, b, B, tap, tr, ti = get_specs(branch)
+
+        pf = opfm.mod[:pf0_fr][l]
+        pt = opfm.mod[:pf0_to][l]
+        qf = opfm.mod[:qf0_fr][l]
+        qt = opfm.mod[:qf0_to][l]
+
+        vm_fr = opfm.mod[:vm0][k[l]]
+        vm_to = opfm.mod[:vm0][m[l]]
+        va_fr = opfm.mod[:va0][k[l]]
+        va_to = opfm.mod[:va0][m[l]]
+
+        @NLconstraint(opfm.mod, pf^2 + qf^2 <= branch_rating^2)
+        @NLconstraint(opfm.mod, pt^2 + qt^2 <= branch_rating^2)
+        
+        @NLconstraint(opfm.mod, pf == g * vm_fr^2 / tap^2 + 
+            (-g * tr + b * ti) / tap^2 * (vm_fr * vm_to * cos(va_fr - va_to)) +
+            (-b * tr - g * ti) / tap^2 * (vm_fr * vm_to * sin(va_fr - va_to))
+        )
+        @NLconstraint(opfm.mod, qf == -(b + B.from) * vm_fr^2 / tap^2 - 
+            (-b * tr - g * ti) / tap^2 * (vm_fr * vm_to * cos(va_fr - va_to)) +
+            (-g * tr + b * ti) / tap^2 * (vm_fr * vm_to * sin(va_fr - va_to))
+        )
+        @NLconstraint(opfm.mod, pt == g * vm_to^2 + 
+            (-g * tr - b * ti) / tap^2 * (vm_to * vm_fr * cos(va_to - va_fr)) +
+            (-b * tr + g * ti) / tap^2 * (vm_to * vm_fr * sin(va_to - va_fr))
+        )
+        @NLconstraint(opfm.mod, qt == -(b + B.to) * vm_to^2 - 
+            (-b * tr + g * ti) / tap^2 * (vm_to * vm_fr * cos(va_to - va_fr)) +
+            (-g * tr - b * ti) / tap^2 * (vm_to * vm_fr * sin(va_to - va_fr))
+        )
+    end
+    # @NLconstraint(opfm.mod, pb0[l = 1:length(opfm.branches)], opfm.mod[:pf0][l] - opfm.mod[:vm0][k[l]] * 
+    #     (opfm.mod[:vm0][m[l]] * (g[l] * cos(opfm.mod[:va0][k[l]] - opfm.mod[:va0][m[l]]) + 
+    #     b[l] * sin(opfm.mod[:va0][k[l]] - opfm.mod[:va0][m[l]]))) == 0
+    # )
+    # @NLconstraint(opfm.mod, qb0[l = 1:length(opfm.branches)], opfm.mod[:qf0][l] - opfm.mod[:vm0][k[l]] * 
+    #     (opfm.mod[:vm0][m[l]] * (g[l] * sin(opfm.mod[:va0][k[l]] - opfm.mod[:va0][m[l]]) - 
+    #     b[l] * cos(opfm.mod[:va0][k[l]] - opfm.mod[:va0][m[l]]))) == 0
+    # )
+
+    if length(opfm.dc_branches) > 0 
+        @error "Check constraints before run!"
+        p_dc_lim_from = get_active_power_limits_from.(opfm.dc_branches)
+        p_dc_lim_to = get_active_power_limits_to.(opfm.dc_branches)
+        q_dc_lim_from  = get_reactive_power_limits_from.(opfm.dc_branches)
+        q_dc_lim_to = get_reactive_power_limits_to.(opfm.dc_branches)
+        @constraints(opfm.mod, begin
+            pfdc0_lim_n[l = 1:length(opfm.dc_branches)], p_dc_lim_from[l].min <= opfm.mod[:pfdc0][l]
+            pfdc0_lim_p[l = 1:length(opfm.dc_branches)], opfm.mod[:pfdc0][l] <= p_dc_lim_from[l].max
+            qfdc0_lim_n[l = 1:length(opfm.dc_branches)], q_dc_lim_from[l].min <= opfm.mod[:qfdc0][l]
+            qfdc0_lim_p[l = 1:length(opfm.dc_branches)], opfm.mod[:qfdc0][l] <= q_dc_lim_from[l].max
+        end)
+    end
+
+    return opfm
 end
 
 function p_scopf(system::System, optimizer; pen = 10000, time_limit_sec = 120)

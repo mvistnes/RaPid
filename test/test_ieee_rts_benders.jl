@@ -7,9 +7,9 @@ import Gurobi
 # open("output.txt", "w") do out
 #     redirect_stdout(out) do
 
-system = System("data\\matpower\\IEEE_RTS.m")
+system = SCOPF.System("data\\matpower\\IEEE_RTS.m")
 # SCOPF.fix_generation_cost!(system);
-# nodes = SCOPF.sort_components!(SCOPF.get_nodes(system))
+nodes = SCOPF.sort_components!(SCOPF.get_nodes(system))
 # idx = SCOPF.get_nodes_idx(nodes)
 # active_capacities = zeros(length(nodes))
 # reactive_capacities = zeros(length(nodes))
@@ -34,7 +34,7 @@ system = System("data\\matpower\\IEEE_RTS.m")
 #     end
 # end
 # SCOPF.set_ramp_limits!(system, 0.01)
-set_rate!.(SCOPF.get_branches(system), get_rate.(SCOPF.get_branches(system))*0.8);
+SCOPF.set_rate!.(SCOPF.get_branches(system), SCOPF.get_rate.(SCOPF.get_branches(system))*0.8);
 SCOPF.set_operation_cost!.(SCOPF.get_gens_h(system), [15.0, 16.0, 17.0, 18.0, 19.0, 20.0])
 
 # voll, prob, contingencies = SCOPF.setup(system, 10, 40);
@@ -64,7 +64,7 @@ println("Start PTDF")
     ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_limit_multi=short, long_term_limit_multi=long);
 @time SCOPF.solve_model!(opfm_ptdf.mod);
 println("Objective value PTDF: ", JuMP.objective_value(opfm_ptdf.mod))
-SCOPF.print_contingency_P(opfm_ptdf, Pc_ptdf, Pcc_ptdf, Pccx, SCOPF.get_nodes_idx(opfm_ptdf.nodes))
+SCOPF.print_contingency_P(opfm_ptdf, Pc_ptdf, Pcc_ptdf)
 # @time opfm_norm = SCOPF.scopf(SCOPF.PCSC, system, Gurobi.Optimizer, voll=voll, contingencies=contingencies, prob=prob, max_shed=max_shed, 
 #     ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_limit_multi=short);
 # @time SCOPF.solve_model!(opfm_norm.mod);
@@ -73,11 +73,28 @@ println("Start Benders")
 @time opfm, pf, Pc, Pcc, Pccx = SCOPF.run_benders(SCOPF.PCSC, system, Gurobi.Optimizer, voll, prob, contingencies, max_shed=max_shed, 
     ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, branch_short_term_limit_multi=short, branch_long_term_limit_multi=long, p_failure=0.00);
 println("Objective value Benders: ", JuMP.objective_value(opfm.mod))
-SCOPF.print_contingency_P(opfm, Pc, Pcc, Pccx, SCOPF.get_nodes_idx(opfm.nodes))
+SCOPF.print_contingency_P(opfm, Pc, Pcc, Pccx)
 
 # SCOPF.print_corrective_results(opfm_norm)
 # SCOPF.print_benders_results(opfm_ptdf, Pc_ptdf, Pcc_ptdf)
 # SCOPF.print_benders_results(opfm, Pc, Pcc)
+
+slack = SCOPF.find_slack(nodes)[1]
+slacktype = BusTypes.PV
+res = []
+for n in eachindex(nodes)
+    nodes[slack].bustype = slacktype
+    slacktype = nodes[n].bustype
+    nodes[n].bustype = BusTypes.REF
+    slack = n
+    println(SCOPF.find_slack(nodes)[1])
+    opfm, pf, Pc, Pcc, Pccx = SCOPF.run_benders(SCOPF.PCSC, system, Gurobi.Optimizer, voll, prob, contingencies, max_shed=max_shed, 
+        ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, branch_short_term_limit_multi=short, branch_long_term_limit_multi=long, p_failure=0.00);
+    push!(res, JuMP.objective_value(opfm.mod))
+end
+for r in res
+    SCOPF.@printf "%12.9f\t" r
+end
 
 # end
 # end
