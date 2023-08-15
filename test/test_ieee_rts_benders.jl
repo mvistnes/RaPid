@@ -34,21 +34,21 @@ nodes = SCOPF.sort_components!(SCOPF.get_nodes(system))
 #     end
 # end
 # SCOPF.set_ramp_limits!(system, 0.01)
-SCOPF.set_rate!.(SCOPF.get_branches(system), SCOPF.get_rate.(SCOPF.get_branches(system))*0.8);
+SCOPF.set_rate!.(SCOPF.get_branches(system), SCOPF.get_rate.(SCOPF.get_branches(system)) * 0.8);
 SCOPF.set_operation_cost!.(SCOPF.get_gens_h(system), [15.0, 16.0, 17.0, 18.0, 19.0, 20.0])
 
 # voll, prob, contingencies = SCOPF.setup(system, 10, 40);
-voll = [4304,5098,5245,5419,4834,5585,5785,5192,4575,5244,4478,5698,4465,4859,5032,5256,4598]
+voll = [4304, 5098, 5245, 5419, 4834, 5585, 5785, 5192, 4575, 5244, 4478, 5698, 4465, 4859, 5032, 5256, 4598]
 branches = SCOPF.sort_components!(SCOPF.get_branches(system));
 # c = [7,12,13,21,22,23,27]
 contingencies = branches
-prob = 
+prob =
     [ # spesified for the RTS-96
-    # 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01,
-    # 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, # generators
-    0.24, 0.51, 0.33, 0.39, 0.48, 0.38, 0.02, 0.36, 0.34, 0.33, 0.30, 0.44, 0.44,  
-    0.02, 0.02, 0.02, 0.02, 0.40, 0.39, 0.40, 0.52, 0.49, 0.38, 0.33, 0.41, 0.41, 
-    0.41, 0.35, 0.34, 0.32, 0.54, 0.35, 0.35, 0.38, 0.38, 0.34, 0.34, 0.45 # branches
+        # 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01,
+        # 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, # generators
+        0.24, 0.51, 0.33, 0.39, 0.48, 0.38, 0.02, 0.36, 0.34, 0.33, 0.30, 0.44, 0.44,
+        0.02, 0.02, 0.02, 0.02, 0.40, 0.39, 0.40, 0.52, 0.49, 0.38, 0.33, 0.41, 0.41,
+        0.41, 0.35, 0.34, 0.32, 0.54, 0.35, 0.35, 0.38, 0.38, 0.34, 0.34, 0.45 # branches
     ]
 # prob /= 8760
 prob /= 100
@@ -60,7 +60,7 @@ max_shed = 0.1
 ramp_mult = 10
 
 println("Start PTDF")
-@time opfm_ptdf, pf_ptdf, Pc_ptdf, Pcc_ptdf = SCOPF.opf(SCOPF.PCSC, system, Gurobi.Optimizer, voll=voll, contingencies=contingencies, prob=prob, max_shed=max_shed, 
+@time opfm_ptdf, pf_ptdf, Pc_ptdf, Pcc_ptdf = SCOPF.opf(SCOPF.PCSC, system, Gurobi.Optimizer, voll=voll, contingencies=contingencies, prob=prob, max_shed=max_shed,
     ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_limit_multi=short, long_term_limit_multi=long);
 @time SCOPF.solve_model!(opfm_ptdf.mod);
 println("Objective value PTDF: ", JuMP.objective_value(opfm_ptdf.mod))
@@ -70,7 +70,7 @@ SCOPF.print_contingency_P(opfm_ptdf, Pc_ptdf, Pcc_ptdf)
 # @time SCOPF.solve_model!(opfm_norm.mod);
 
 println("Start Benders")
-@time opfm, pf, Pc, Pcc, Pccx = SCOPF.run_benders(SCOPF.PCSC, system, Gurobi.Optimizer, voll, prob, contingencies, max_shed=max_shed, 
+@time opfm, pf, Pc, Pcc, Pccx = SCOPF.run_benders(SCOPF.PCSC, system, Gurobi.Optimizer, voll, prob, contingencies, max_shed=max_shed,
     ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, branch_short_term_limit_multi=short, branch_long_term_limit_multi=long, p_failure=0.00);
 println("Objective value Benders: ", JuMP.objective_value(opfm.mod))
 SCOPF.print_contingency_P(opfm, Pc, Pcc, Pccx)
@@ -79,21 +79,23 @@ SCOPF.print_contingency_P(opfm, Pc, Pcc, Pccx)
 # SCOPF.print_benders_results(opfm_ptdf, Pc_ptdf, Pcc_ptdf)
 # SCOPF.print_benders_results(opfm, Pc, Pcc)
 
-slack = SCOPF.find_slack(nodes)[1]
-slacktype = BusTypes.PV
-res = []
-for n in eachindex(nodes)
-    nodes[slack].bustype = slacktype
-    slacktype = nodes[n].bustype
-    nodes[n].bustype = BusTypes.REF
-    slack = n
-    println(SCOPF.find_slack(nodes)[1])
-    opfm, pf, Pc, Pcc, Pccx = SCOPF.run_benders(SCOPF.PCSC, system, Gurobi.Optimizer, voll, prob, contingencies, max_shed=max_shed, 
-        ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, branch_short_term_limit_multi=short, branch_long_term_limit_multi=long, p_failure=0.00);
-    push!(res, JuMP.objective_value(opfm.mod))
-end
-for r in res
-    SCOPF.@printf "%12.9f\t" r
+function change_slack(system, nodes, voll, prob, contingencies, max_shed, ramp_mult, ramp_minutes, short, long)
+    slack = SCOPF.find_slack(nodes)[1]
+    slacktype = BusTypes.PV
+    res = []
+    for n in eachindex(nodes)
+        nodes[slack].bustype = slacktype
+        slacktype = nodes[n].bustype
+        nodes[n].bustype = BusTypes.REF
+        slack = n
+        println(SCOPF.find_slack(nodes)[1])
+        opfm, pf, Pc, Pcc, Pccx = SCOPF.run_benders(SCOPF.PCSC, system, Gurobi.Optimizer, voll, prob, contingencies, max_shed=max_shed,
+            ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, branch_short_term_limit_multi=short, branch_long_term_limit_multi=long, p_failure=0.00)
+        push!(res, JuMP.objective_value(opfm.mod))
+    end
+    for r in res
+        SCOPF.@printf "%12.9f\t" r
+    end
 end
 
 # end

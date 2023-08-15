@@ -1,0 +1,38 @@
+ACTIVSg500
+
+[ Info: Model solved in 0.204903s with objective value 862.7317
+[ Info: Model solved in 0.275063s with objective value 3989.8069
+[ Info: Iteration 1
+[ Info: Pre 1: Contingency line 144-143-i_183; overload on YORK 2 1-YORK 2 0-i_228 of 0.3830
+[ Info: Corr 1: Contingency line 144-143-i_183; overload on YORK 2 1-YORK 2 0-i_228 of 1.2230
+[ Info: Model solved in 0.097582s with objective value 3991.3637
+[ Info: Corr 2: Contingency line 144-143-i_184; overload on YORK 2 1-YORK 2 0-i_227 of 0.0100
+[ Info: Model solved in 0.092651s with objective value 3991.3637
+[ Info: Corr 3: Contingency line 17-14-i_24; overload on SENECA 3 3-SENECA 3 0-i_27 of 0.4640
+[ Info: Model solved in 0.100018s with objective value 3992.0263
+[ Info: Corr 4: Contingency line 17-14-i_25; overload on SENECA 3 3-SENECA 3 0-i_26 of 0.4640
+[ Info: Model solved in 0.110991s with objective value 3992.6888
+[ Info: Corr 5: Contingency line 37-176-i_53; overload on ROCK HILL 3 0-ROCK HILL 2 0-i_144 of 0.0125
+[ Info: Model solved in 0.094767s with objective value 3992.7126
+[ Info: Corr 6: Contingency line 76-37-i_100; overload on ROCK HILL 3 0-ROCK HILL 2 0-i_144 of 0.0134
+[ Info: Model solved in 0.093245s with objective value 3992.7383
+[ Info: Corr 7: Contingency line 87-143-i_114; overload on ROCK HILL 1 0-FORT MILL 1 0-i_549 of -0.1015
+[ Info: Model solved in 0.095316s with objective value 3993.0986
+[ Info: Corr 8: Contingency line 143-401-i_181; overload on ROCK HILL 3 0-ROCK HILL 2 0-i_144 of 0.1083
+[ Info: Model solved in 0.095413s with objective value 3993.3457
+[ Info: Corr 9: Contingency line 143-452-i_182; overload on ROCK HILL 3 0-ROCK HILL 2 0-i_144 of 0.1422
+[ Info: Model solved in 0.092859s with objective value 3993.6180
+[ Info: Pre 2: Contingency line 145-143-i_185; overload on YORK 2 2-YORK 2 0-i_229 of 0.2550
+[ Info: Corr 10: Contingency line 145-143-i_185; overload on YORK 2 2-YORK 2 0-i_229 of 1.0600
+[ Info: Model solved in 0.099344s with objective value 3995.0411
+[ Info: Corr 11: Contingency line 145-143-i_186; overload on YORK 2 2-YORK 2 0-i_230 of 0.5216
+[ Info: Model solved in 0.098717s with objective value 3995.6965
+[ Info: Corr 12: Contingency line 162-220-i_207; overload on BLACKSTOCK 0-BLAIR 0-i_154 of 0.0323
+[ Info: Model solved in 0.102257s with objective value 3995.7189
+[ Info: Corr 13: Contingency line 423-496-i_519; overload on ROCK HILL 3 0-YORK 2 0-i_145 of -0.5726
+[ Info: Model solved in 0.127577s with objective value 3999.6296
+[ Info: Corr 14: Contingency line 452-76-i_553; overload on ROCK HILL 3 0-ROCK HILL 2 0-i_144 of 0.0598
+[ Info: Model solved in 0.098774s with objective value 3999.7435
+[ Info: Iteration 2
+END: Total solve time 1.8795. Total time 14.7880.
+ 14.789157 seconds (38.78 M allocations: 5.786 GiB, 7.81% gc time, 1.84% compilation time)

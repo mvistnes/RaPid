@@ -1,11 +1,11 @@
 # CC BY 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2022
 
 function add_system_data_to_json(;
-        file_name="system_data.json",
-        data_name=joinpath("matpower","IEEE_RTS.m"),
-        # time_series=joinpath("forecasts","5bus_ts","timeseries_pointers_da.json"),
-        DATA_DIR="data"
-    )
+    file_name="system_data.json",
+    data_name=joinpath("matpower", "IEEE_RTS.m"),
+    # time_series=joinpath("forecasts","5bus_ts","timeseries_pointers_da.json"),
+    DATA_DIR="data"
+)
     # if !isdir(DATA_DIR)
     #     download(PowerSystems.UtilsData.TestData, folder = DATA_DIR)
     # end
@@ -15,23 +15,23 @@ function add_system_data_to_json(;
 end
 
 function get_system(
-        data_dir = "data\\RTS_GMLC",
-        base_power = 100.0,
-        descriptors = "data\\RTS_GMLC\\user_descriptors.yaml",
-        timeseries_metadata_file = "data\\RTS_GMLC\\timeseries_pointers.json",
-        generator_mapping_file = "data\\RTS_GMLC\\generator_mapping.yaml"
-        )
+    data_dir="data\\RTS_GMLC",
+    base_power=100.0,
+    descriptors="data\\RTS_GMLC\\user_descriptors.yaml",
+    timeseries_metadata_file="data\\RTS_GMLC\\timeseries_pointers.json",
+    generator_mapping_file="data\\RTS_GMLC\\generator_mapping.yaml"
+)
     data = PowerSystemTableData(
         data_dir,
         base_power,
         descriptors;
-        timeseries_metadata_file = timeseries_metadata_file,
-        generator_mapping_file = generator_mapping_file,
+        timeseries_metadata_file=timeseries_metadata_file,
+        generator_mapping_file=generator_mapping_file
     )
     return System(data)
 end
 
-function setup(system::System, prob_min = 0.1, prob_max = 0.4)
+function setup(system::System, prob_min=0.1, prob_max=0.4)
     voll = make_voll(system)
     contingencies = sort_components!(get_branches(system))
     prob = make_prob(contingencies, prob_min, prob_max)
@@ -43,62 +43,62 @@ function fix_generation_cost!(sys::System)
     # set_operation_cost!.(get_renewables(sys), make_cost_renewables(sys))
     cost = [get_generator_cost(g)[2] for g in get_gens_t(sys)]
     c_mean = Statistics.mean(cost)
-    set_operation_cost!.(get_ctrl_generation(sys), 
-        [[iszero(c) ? c_mean * (rand() + 0.5) : c for c in cost]; 
-        [c_mean * (rand() + 0.1) for _ in get_gens_h(sys)]])
+    set_operation_cost!.(get_ctrl_generation(sys),
+        [[iszero(c) ? c_mean * (rand() + 0.5) : c for c in cost]
+            [c_mean * (rand() + 0.1) for _ in get_gens_h(sys)]])
 end
 
-set_operation_cost!(gen::Generator, val::Real) = 
+set_operation_cost!(gen::Generator, val::Real) =
     PowerSystems.set_operation_cost!(gen, ThreePartCost(VariableCost((0.0, val)), 0.0, 0.0, 0.0))
-set_operation_cost!(gen::RenewableGen, val::Real) = 
+set_operation_cost!(gen::RenewableGen, val::Real) =
     PowerSystems.set_operation_cost!(gen, TwoPartCost(VariableCost((0.0, val)), 0.0))
 
 """ Set the renewable production to a ratio of maximum active power """
 function set_renewable_prod!(system::System, ratio::Real=0.5)
     for g in get_renewables(system)
-        set_active_power!(g, get_max_active_power(g)*ratio)
+        set_active_power!(g, get_max_active_power(g) * ratio)
     end
 end
 
 """ Set the active power demand """
-function set_active_power_demand!(system::System, demands = get_max_active_power.(get_demands(system)))
+function set_active_power_demand!(system::System, demands=get_max_active_power.(get_demands(system)))
     set_active_power!.(get_demands(system), demands)
 end
 
-PowerSystems.set_active_power!(dem::StandardLoad, val::Real) = 
+PowerSystems.set_active_power!(dem::StandardLoad, val::Real) =
     PowerSystems.set_current_active_power!(dem, val)
 
-function set_ramp_limits!(system::System, ramp_mult::Real = 0.01)
+function set_ramp_limits!(system::System, ramp_mult::Real=0.01)
     gens = get_ctrl_generation(system)
-    ramp_lim = [(up=(x.max*ramp_mult), down=(x.max*ramp_mult)) for x in get_active_power_limits.(gens)]
-    PowerSystems.set_ramp_limits!.(gens,ramp_lim)
+    ramp_lim = [(up=(x.max * ramp_mult), down=(x.max * ramp_mult)) for x in get_active_power_limits.(gens)]
+    PowerSystems.set_ramp_limits!.(gens, ramp_lim)
 end
 
 get_generator_cost(gen) = get_operation_cost(gen) |> get_variable |> get_cost |> _get_g_value
-_get_g_value(x::AbstractVector{<:Tuple{Real, Real}}) = x[1]
-_get_g_value(x::Tuple{<:Real, <:Real}) = x
+_get_g_value(x::AbstractVector{<:Tuple{Real,Real}}) = x[1]
+_get_g_value(x::Tuple{<:Real,<:Real}) = x
 
-get_y(value::Branch) = 1 / (get_r(value) + get_x(value)*im)
+get_y(value::Branch) = 1 / (get_r(value) + get_x(value) * im)
 
 function get_specs(branch::Line)
     y = get_y(branch)
-    return real(y), imag(y), get_b(branch), 1., 1., 0.
+    return real(y), imag(y), get_b(branch), 1.0, 1.0, 0.0
 end
 function get_specs(branch::Transformer2W)
     y = get_y(branch)
-    B = (from = PowerSystems.get_primary_shunt(branch), to = 0.0)
-    return real(y), imag(y), B, 1., 1., 0.
+    B = (from=PowerSystems.get_primary_shunt(branch), to=0.0)
+    return real(y), imag(y), B, 1.0, 1.0, 0.0
 end
 function get_specs(branch::TapTransformer)
     y = get_y(branch)
-    B = (from = PowerSystems.get_primary_shunt(branch), to = 0.0)
+    B = (from=PowerSystems.get_primary_shunt(branch), to=0.0)
     tap = get_tap(branch)
-    tr = tap 
-    return real(y), imag(y), B, tap, tap, 0.
+    tr = tap
+    return real(y), imag(y), B, tap, tap, 0.0
 end
 function get_specs(branch::PhaseShiftingTransformer)
     y = get_y(branch)
-    B = (from = PowerSystems.get_primary_shunt(branch), to = 0.0)
+    B = (from=PowerSystems.get_primary_shunt(branch), to=0.0)
     tap = get_tap(branch)
     angle = get_α(branch)
     tr = tap * cos(angle)
@@ -111,10 +111,29 @@ make_voll(sys::System, x_range::UnitRange=1000:3000) = rand(x_range, length(get_
 make_cost_renewables(sys::System, x_range::UnitRange=1:30) = rand(x_range, length(get_renewables(sys)))
 
 """ An array of the outage probability of the contingencies """
-make_prob(contingencies::AbstractVector, prob_min = 0.1, prob_max = 0.4) = 
-    (rand(length(contingencies)).*(prob_max - prob_min) .+ prob_min)./8760
+make_prob(contingencies::AbstractVector, prob_min=0.1, prob_max=0.4) =
+    (rand(length(contingencies)) .* (prob_max - prob_min) .+ prob_min) ./ 8760
 
-get_system(fname::String) = System(joinpath("data",fname))
+get_system(fname::String) = System(joinpath("data", fname))
+
+function create_model(optimizer, time_limit_sec; debug=false)
+    # mod = Model(optimizer)
+    if Gurobi.Optimizer == optimizer
+        mod = Model(optimizer_with_attributes(optimizer, "Threads" => Threads.nthreads()); add_bridges=false)
+    else
+        mod = Model(optimizer; add_bridges=false)
+    end
+    set_string_names_on_creation(mod, debug)
+    # @debug begin
+    #     set_string_names_on_creation(mod, true)
+    #     "Variable names is on."
+    # end
+
+    # if GLPK.Optimizer == optimizer 
+    #     set_optimizer_attribute(mod, "msg_lev", GLPK.GLP_MSG_ON)
+    # end
+    return mod
+end
 
 """ OPF model type """
 mutable struct OPFmodel
@@ -136,23 +155,9 @@ mutable struct OPFmodel
 end
 
 """ Constructor for OPFmodel """
-function opfmodel(sys::System, optimizer, time_limit_sec, voll::Vector{<:Real}, 
-        contingencies::Vector{<:Branch}=Component[], prob::Vector{<:Real}=[]; debug=false)
-    # mod = Model(optimizer)
-    if Gurobi.Optimizer == optimizer
-        mod = Model(optimizer_with_attributes(optimizer, "Threads" => Threads.nthreads()); add_bridges = false)
-    else
-        mod = Model(optimizer; add_bridges = false)
-    end
-    set_string_names_on_creation(mod, debug)
-    # @debug begin
-    #     set_string_names_on_creation(mod, true)
-    #     "Variable names is on."
-    # end
-
-    # if GLPK.Optimizer == optimizer 
-    #     set_optimizer_attribute(mod, "msg_lev", GLPK.GLP_MSG_ON)
-    # end
+function opfmodel(sys::System, optimizer, time_limit_sec, voll::Vector{<:Real},
+    contingencies::Vector{<:Branch}=Component[], prob::Vector{<:Real}=[]; debug=false)
+    mod = create_model(optimizer, time_limit_sec, debug=debug)
 
     ctrl_generation = collect(get_ctrl_generation(sys))
     branches = sort_components!(get_branches(sys))
@@ -184,7 +189,7 @@ function opfmodel(sys::System, optimizer, time_limit_sec, voll::Vector{<:Real},
         @info "The system is separated into islands" islands
     end
 
-    return OPFmodel(sys, mod, cost_ctrl_gen, cost_renewables, voll, prob, 
+    return OPFmodel(sys, mod, cost_ctrl_gen, cost_renewables, voll, prob,
         ctrl_generation, branches, dc_branches, nodes, demands, renewables, contingencies)
 end
 
@@ -205,7 +210,7 @@ check_values(val, var, name; atol=1e-5) = check_values.(val, var, [name], atol=a
 """Find value of β, β = 1 if from-bus is the bus, β = -1 if to-bus is the bus, 0 else"""
 beta(bus::Bus, branch::Branch) = bus == branch.arc.from ? 1 : bus == branch.arc.to ? -1 : 0
 beta(bus::String, branch::Branch) = bus == branch.arc.from.name ? 1 : bus == branch.arc.to.name ? -1 : 0
-function beta(sys::System, branch::String) 
+function beta(sys::System, branch::String)
     l = get_component(ACBranch, sys, branch)
     return [beta(b, l) for b in get_nodes(sys)]
 end
@@ -216,7 +221,7 @@ a(line::String, contingency::String) = ifelse(line != contingency, 1, 0)
 get_gens_t(sys::System) = get_components(ThermalGen, sys)
 get_gens_h(sys::System) = get_components(HydroGen, sys)
 get_branches(sys::System) = get_components(ACBranch, sys) # Includes both Line, Transformer, and Phase Shifting Transformer
-get_dc_branches(sys::System) = get_components(DCBranch, sys) 
+get_dc_branches(sys::System) = get_components(DCBranch, sys)
 get_nodes(sys::System) = get_components(Bus, sys)
 get_demands(sys::System) = get_components(StaticLoad, sys)
 get_renewables(sys::System) = get_components(RenewableGen, sys) # Renewable modelled as negative demand
@@ -224,12 +229,12 @@ get_ctrl_generation(sys::System) = Iterators.flatten((get_gens_t(sys), get_gens_
 get_generation(sys::System) = Iterators.flatten((get_ctrl_generation(sys), get_renewables(sys))) # An iterator of all generation
 
 """ A sorted vector to a type of power system component """
-sort_components!(list::PowerSystems.FlattenIteratorWrapper{T}) where T = sort_components!(collect(T, list))
-sort_components!(nodes::Vector{Bus}) = sort!(nodes, by = x -> x.number)
-sort_components!(components::Vector{<:Component}) = sort!(components, by = x -> x.bus.number)
+sort_components!(list::PowerSystems.FlattenIteratorWrapper{T}) where {T} = sort_components!(collect(T, list))
+sort_components!(nodes::Vector{Bus}) = sort!(nodes, by=x -> x.number)
+sort_components!(components::Vector{<:Component}) = sort!(components, by=x -> x.bus.number)
 sort_components!(branches::Vector{<:Branch}) = sort!(branches,
-        by = x -> (get_number(get_arc(x).from), get_number(get_arc(x).to))
-    )
+    by=x -> (get_number(get_arc(x).from), get_number(get_arc(x).to))
+)
 
 get_sorted_angles(model::Model) = get_value(model, :va0)
 
@@ -238,7 +243,7 @@ get_sorted_angles(model::Model) = get_value(model, :va0)
 
 """ Make a DenseAxisArray using the list and function for the value of each element """
 make_named_array(value_func, list) = JuMP.Containers.DenseAxisArray(
-    [value_func(x) for x in list], get_name.(list) 
+    [value_func(x) for x in list], get_name.(list)
 )
 
 struct CTypes{T<:Integer}
@@ -251,22 +256,22 @@ struct CTypes{T<:Integer}
 end
 
 """ Make a list where all components distributed on their node """
-function make_list(opfm::OPFmodel, idx::Dict{<:Int, <:Int}, nodes::AbstractVector{Bus}) 
+function make_list(opfm::OPFmodel, idx::Dict{<:Int,<:Int}, nodes::AbstractVector{Bus})
     list = [CTypes(n, [Int[] for _ in 1:5]...) for n in nodes]
-    for (i,r) in enumerate(opfm.ctrl_generation)
+    for (i, r) in enumerate(opfm.ctrl_generation)
         push!(list[idx[r.bus.number]].ctrl_generation, i)
     end
-    for (i,r) in enumerate(opfm.renewables)
+    for (i, r) in enumerate(opfm.renewables)
         push!(list[idx[r.bus.number]].renewables, i)
     end
-    for (i,d) in enumerate(opfm.demands)
+    for (i, d) in enumerate(opfm.demands)
         push!(list[idx[d.bus.number]].demands, i)
     end
-    for (i,d) in enumerate(opfm.branches)
+    for (i, d) in enumerate(opfm.branches)
         push!(list[idx[d.arc.from.number]].branches, i)
         push!(list[idx[d.arc.to.number]].branches, i)
     end
-    for (i,d) in enumerate(opfm.dc_branches)
+    for (i, d) in enumerate(opfm.dc_branches)
         push!(list[idx[d.arc.from.number]].dc_branches, i)
         push!(list[idx[d.arc.to.number]].dc_branches, i)
     end
@@ -274,7 +279,7 @@ function make_list(opfm::OPFmodel, idx::Dict{<:Int, <:Int}, nodes::AbstractVecto
 end
 
 """ A list with type_func componentes distributed on their node """
-function make_list(system::System, type_func, nodes = get_nodes(system)) 
+function make_list(system::System, type_func, nodes=get_nodes(system))
     list = JuMP.Containers.DenseAxisArray(
         [[] for _ in 1:length(nodes)], get_name.(nodes)
     )
@@ -294,18 +299,18 @@ find_in_model(mod::Model, dc::DCBranch, name::String) = mod[:pfdc0][name]
 Return: slack bus number in nodes. The slack bus.
 """
 function find_slack(nodes::AbstractVector{Bus})
-    for (i,x) in enumerate(nodes)
-        x.bustype == BusTypes.REF && return i,x
+    for (i, x) in enumerate(nodes)
+        x.bustype == BusTypes.REF && return i, x
     end
     @error "No slack bus found!"
-    return 0,Bus()
+    return 0, Bus()
 end
 find_slack(sys::System) = find_slack(sort_components!(get_nodes(sys)))
 
 """ Run optimizer to solve the model and check for optimality """
 function solve_model!(model::Model)
     optimize!(model)
-    if termination_status(model) != MOI.OPTIMAL 
+    if termination_status(model) != MOI.OPTIMAL
         @warn "Model not optimally solved with status $(termination_status(model))!"
     else
         @info @sprintf "Model solved in %.6fs with objective value %.4f" MOI.get(model, MOI.SolveTimeSec()) objective_value(model)
@@ -314,12 +319,12 @@ function solve_model!(model::Model)
 end
 
 " Sets the start values of symbols to the previous solution "
-function set_warm_start!(model::JuMP.Model, symb::Symbol) 
+function set_warm_start!(model::JuMP.Model, symb::Symbol)
     x_sol = get_value(model, symb)
     JuMP.set_start_value.(model[symb], x_sol)
     return model
 end
-function set_warm_start!(model::JuMP.Model, symbs::AbstractVector{Symbol}) 
+function set_warm_start!(model::JuMP.Model, symbs::AbstractVector{Symbol})
     set_warm_start!.([model], symbs)
     return model
 end
@@ -328,8 +333,8 @@ end
 get_nodes_idx(nodes::AbstractVector{Bus}) = _make_ax_ref(get_number.(nodes))
 
 """ Return a Dict of bus name number to index. Deprecated in PowerSystems """
-function _make_ax_ref(ax::AbstractVector{T}) where T
-    ref = Dict{T, Int}()
+function _make_ax_ref(ax::AbstractVector{T}) where {T}
+    ref = Dict{T,Int}()
     for (ix, el) in enumerate(ax)
         if haskey(ref, el)
             @error("Repeated index element $el. Index sets must have unique elements.")
@@ -345,31 +350,31 @@ end
 get_bus_id(branch::Branch) = (branch.arc.from.number, branch.arc.to.number)
 
 " Get the bus number index of the from-bus and to-bus from a branch "
-get_bus_idx(branch::Branch, idx::Dict{<:Int, T}) where T<:Int = 
+get_bus_idx(branch::Branch, idx::Dict{<:Int,T}) where {T<:Int} =
     (idx[branch.arc.from.number]::T, idx[branch.arc.to.number]::T)
 
 " Get the bus number index of the from-bus and to-bus from all branches "
-function get_bus_idx(branches::AbstractVector{<:Branch}, idx::Dict{<:Int, <:Int})
+function get_bus_idx(branches::AbstractVector{<:Branch}, idx::Dict{<:Int,<:Int})
     return get_bus_idx.(branches, [idx])
 end
 
-get_branch_bus_idx(branches::AbstractVector{<:Branch}, contingencies::AbstractVector{<:Branch}, idx::Dict{<:Int, <:Int}) = 
+get_branch_bus_idx(branches::AbstractVector{<:Branch}, contingencies::AbstractVector{<:Branch}, idx::Dict{<:Int,<:Int}) =
     [(x, get_bus_idx(branches[x], idx)) for x in indexin(contingencies, branches)]
 
-function extract_bus_idx(branch::String, idx::Dict{<:Int, <:Int})
-    (f,t) = extract_bus(branch)
+function extract_bus_idx(branch::String, idx::Dict{<:Int,<:Int})
+    (f, t) = extract_bus(branch)
     return (idx[f], idx[t])
 end
 
 function extract_bus(branch::String)
     x = split(branch, "-")
-    return (parse(Int,x[1]), parse(Int,x[2]))
+    return (parse(Int, x[1]), parse(Int, x[2]))
 end
 
 " Get the bus number index of the from-bus and to-bus from all branches "
-function get_bus_idx(A::SparseArrays.SparseMatrixCSC{T}) where T
+function get_bus_idx(A::SparseArrays.SparseMatrixCSC{T}) where {T}
     m, n = size(A)
-    ix = [(0,0) for _ in 1:m]
+    ix = [(0, 0) for _ in 1:m]
     rows = SparseArrays.rowvals(A)
     for j = 1:n
         for i in SparseArrays.nzrange(A, j)
@@ -388,41 +393,51 @@ end
 split_pair(val::AbstractVector) = map(first, val), map(last, val)
 
 " zip a Pair{Vector, Vector} into a Vector{Pair}"
-zip_pair(val::Pair{AbstractVector, AbstractVector}) = [(a,b) for (a,b) in zip(first(val),last(val))]
+zip_pair(val::Pair{AbstractVector,AbstractVector}) = [(a, b) for (a, b) in zip(first(val), last(val))]
 zip_pair(val1::AbstractVector, val2::AbstractVector) = zip_pair((val1, val2))
+
+""" Return the overload of a line, else return 0.0 """
+find_overload(flow::T, rate::Real, atol::Real=1e-6) where {T<:Real} =
+    abs(flow) - rate > atol ? sign(flow) * (abs(flow) - rate) : zero(T)
+
+filter_overload(flow::AbstractVector{<:Real}, linerating::AbstractVector{<:Real}, atol::Real=1e-6) =
+    [(i, ol) for (i, ol) in enumerate(find_overload.(flow, linerating)) if abs(ol) > atol]
+
+filter_overload(Δflow::AbstractVector{<:Tuple}, linerating::AbstractVector{<:Real}, atol::Real=1e-6) =
+    [(i, find_overload(ol, linerating[i])) for (i, ol) in Δflow if abs(find_overload(ol, linerating[i])) > atol]
 
 " Get dual value (upper or lower bound) from model reference "
 get_low_dual(varref::VariableRef) = dual(LowerBoundRef(varref))
 get_high_dual(varref::VariableRef) = dual(UpperBoundRef(varref))
 
 """ This is a faster version of JuMP.value """
-get_value(mod::Model, symb::Symbol) = 
+get_value(mod::Model, symb::Symbol) =
     MOI.get.([JuMP.backend(mod)], [MOI.VariablePrimal()], JuMP.index.(mod[symb]))
-get_value(mod::Model, var::JuMP.VariableRef) = 
+get_value(mod::Model, var::JuMP.VariableRef) =
     MOI.get(JuMP.backend(mod), MOI.VariablePrimal(), JuMP.index(var))
-get_value(mod::Model, var::Vector{JuMP.VariableRef}) = 
+get_value(mod::Model, var::Vector{JuMP.VariableRef}) =
     MOI.get(JuMP.backend(mod), MOI.VariablePrimal(), JuMP.index.(var))
 
 " Fix for name difference in StandardLoad "
 PowerSystems.get_active_power(value::StandardLoad) = value.current_active_power
 
 """ Return the net power injected at each node. """
-function get_net_Pᵢ(opfm::OPFmodel, idx::Dict{<:Int, <:Int} = get_nodes_idx(opfm.nodes))
+function get_net_Pᵢ(opfm::OPFmodel, idx::Dict{<:Int,<:Int}=get_nodes_idx(opfm.nodes))
     P = zeros(length(opfm.nodes))
     vals = get_value(opfm.mod, :pr0)
-    for (i,r) in enumerate(opfm.renewables)
+    for (i, r) in enumerate(opfm.renewables)
         P[idx[r.bus.number]] += get_active_power(r) - vals[i]
     end
     vals = get_value(opfm.mod, :ls0)
-    for (i,d) in enumerate(opfm.demands)
+    for (i, d) in enumerate(opfm.demands)
         P[idx[d.bus.number]] -= get_active_power(d) + vals[i]
     end
     vals = get_value(opfm.mod, :pg0)
-    for (i,r) in enumerate(opfm.ctrl_generation)
+    for (i, r) in enumerate(opfm.ctrl_generation)
         P[idx[r.bus.number]] += vals[i]
     end
     vals = get_value(opfm.mod, :pfdc0)
-    for (i,d) in enumerate(opfm.dc_branches)
+    for (i, d) in enumerate(opfm.dc_branches)
         P[idx[d.arc.from.number]] += vals[i]
         P[idx[d.arc.to.number]] -= vals[i]
     end
@@ -430,7 +445,7 @@ function get_net_Pᵢ(opfm::OPFmodel, idx::Dict{<:Int, <:Int} = get_nodes_idx(op
     return P
 end
 
-function get_Pd!(P::Vector{<:Real}, opfm::OPFmodel, idx::Dict{<:Int, <:Int})
+function get_Pd!(P::Vector{<:Real}, opfm::OPFmodel, idx::Dict{<:Int,<:Int})
     for r in opfm.renewables
         P[idx[r.bus.number]] += get_active_power(r)
     end
@@ -438,78 +453,78 @@ function get_Pd!(P::Vector{<:Real}, opfm::OPFmodel, idx::Dict{<:Int, <:Int})
         P[idx[d.bus.number]] -= get_active_power(d)
     end
 end
-function get_Pd(opfm::OPFmodel, idx::Dict{<:Int, <:Int} = get_nodes_idx(opfm.nodes))
+function get_Pd(opfm::OPFmodel, idx::Dict{<:Int,<:Int}=get_nodes_idx(opfm.nodes))
     P = zeros(length(opfm.nodes))
     get_Pd!(P, opfm, idx)
     return P
 end
 
 """ Return power shed at each node. """
-function get_Pshed!(P::Vector{<:Real}, opfm::OPFmodel, idx::Dict{<:Int, <:Int})
+function get_Pshed!(P::Vector{<:Real}, opfm::OPFmodel, idx::Dict{<:Int,<:Int})
     vals = get_value(opfm.mod, :pr0)
-    for (i,r) in enumerate(opfm.renewables)
+    for (i, r) in enumerate(opfm.renewables)
         P[idx[r.bus.number]] -= vals[i]
     end
     vals = get_value(opfm.mod, :ls0)
-    for (i,d) in enumerate(opfm.demands)
+    for (i, d) in enumerate(opfm.demands)
         P[idx[d.bus.number]] += vals[i]
     end
 end
-function get_Pshed(opfm::OPFmodel, idx::Dict{<:Int, <:Int} = get_nodes_idx(opfm.nodes))
+function get_Pshed(opfm::OPFmodel, idx::Dict{<:Int,<:Int}=get_nodes_idx(opfm.nodes))
     P = zeros(length(opfm.nodes))
     get_Pshed!(P, opfm, idx)
     return P
 end
 
 """ Return the power injected by controlled generation at each node. """
-function get_Pgen!(P::Vector{<:Real}, opfm::OPFmodel, idx::Dict{<:Int, <:Int})
+function get_Pgen!(P::Vector{<:Real}, opfm::OPFmodel, idx::Dict{<:Int,<:Int})
     vals = get_value(opfm.mod, :pg0)
-    for (i,r) in enumerate(opfm.ctrl_generation)
+    for (i, r) in enumerate(opfm.ctrl_generation)
         P[idx[r.bus.number]] += vals[i]
     end
     vals = get_value(opfm.mod, :pfdc0)
-    for (i,d) in enumerate(opfm.dc_branches)
+    for (i, d) in enumerate(opfm.dc_branches)
         P[idx[d.arc.from.number]] += vals[i]
         P[idx[d.arc.to.number]] -= vals[i]
     end
     return P
 end
-function get_Pgen(opfm::OPFmodel, idx::Dict{<:Int, <:Int} = get_nodes_idx(opfm.nodes))
+function get_Pgen(opfm::OPFmodel, idx::Dict{<:Int,<:Int}=get_nodes_idx(opfm.nodes))
     P = zeros(length(opfm.nodes))
     get_Pgen!(P, opfm, idx)
     return P
 end
 
-function get_controllable(opfm::OPFmodel, idx::Dict{<:Int, <:Int} = get_nodes_idx(opfm.nodes))
+function get_controllable(opfm::OPFmodel, idx::Dict{<:Int,<:Int}=get_nodes_idx(opfm.nodes))
     P = get_Pgen(opfm, idx)
     get_Pshed!(P, opfm, idx)
     return P
 end
 
 " Calculate the severity index for the system based on line loading "
-function calc_severity(opfm::OPFmodel, lim::Real = 0.9)
+function calc_severity(opfm::OPFmodel, lim::Real=0.9)
     rate = make_named_array(get_rate, get_branches(opfm.sys))
     sev = 0
     for c in 1:length(opfm.contingencies)
         for l in get_name.(get_branches(opfm.sys))
-            sev += calc_line_severity(value(opfm.mod[:pfc][l,c]), rate[l], lim)
+            sev += calc_line_severity(value(opfm.mod[:pfc][l, c]), rate[l], lim)
         end
-    end 
+    end
     return sev
 end
 
 calc_severity(
-        rate::AbstractVector{<:Real}, 
-        contingencies::AbstractVector, 
-        branches::AbstractVector, 
-        pfc, 
-        lim::Real = 0.9
-        ) = 
-    sum(calc_line_severity(pfc[l,c], rate[l], lim) for c in 1:length(opfm.contingencies), l in branches)
+    rate::AbstractVector{<:Real},
+    contingencies::AbstractVector,
+    branches::AbstractVector,
+    pfc,
+    lim::Real=0.9
+) =
+    sum(calc_line_severity(pfc[l, c], rate[l], lim) for c in 1:length(opfm.contingencies), l in branches)
 
-calc_severity(values::AbstractVector{<:Real}, rate::AbstractVector{<:Real}, lim::Real = 0.9) = 
+calc_severity(values::AbstractVector{<:Real}, rate::AbstractVector{<:Real}, lim::Real=0.9) =
     sum(calc_line_severity.(values, rate, [lim]))
 
 " Calculate the severity index for a component based on the rating "
-calc_line_severity(value::Real, rate::Real, lim::Real = 0.9) = 
-    abs(value) > lim * rate ? (1/(1-lim)) * (abs(value) / rate - lim) : 0
+calc_line_severity(value::Real, rate::Real, lim::Real=0.9) =
+    abs(value) > lim * rate ? (1 / (1 - lim)) * (abs(value) / rate - lim) : 0
