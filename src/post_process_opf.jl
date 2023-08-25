@@ -103,7 +103,7 @@ function get_contingency_power_flow(opfm::OPFmodel)
     idx = get_nodes_idx(opfm.nodes)
     slack = find_slack(opfm.nodes)
     θ = SCOPF.get_sorted_angles(opfm.mod)
-    P = calc_Pᵢ(calc_B(opfm.branches, length(opfm.nodes), idx), θ)
+    P = calc_Pᵢ(calc_B(opfm.branches, idx), θ)
     flow = Vector{Vector{Float64}}(undef, length(opfm.contingencies))
     for c in 1:length(opfm.contingencies)
         flow[c] = get_isf(opfm.branches[1:end.!=c], opfm.nodes, idx, slack[1]) * P
@@ -201,7 +201,7 @@ function print_contingency_overflow(opfm::OPFmodel, rate_limit_multi::Float64=1.
     b_names = get_name.(opfm.branches)
     linerates = get_rate.(opfm.branches)
     θ = SCOPF.get_sorted_angles(opfm.mod)
-    P = calc_Pᵢ(calc_B(opfm.branches, length(opfm.nodes), idx), θ)
+    P = calc_Pᵢ(calc_B(opfm.branches, idx), θ)
     print_string_line(opfm.branches[c].name, n, f, r)
 end
 
@@ -434,7 +434,8 @@ function print_contingency_P(opfm, Pc, Pcc, Pccx=Dict())
                 P[idx[g.bus.number]] -= JuMP.value(x[2][i_g])
             end
             for (i_g, g) in enumerate(opfm.dc_branches)
-                P[idx[g.bus.number]] -= beta(g.bus, g) * JuMP.value(x[3][i_g])
+                P[idx[g.arc.from.number]] += JuMP.value(x[3][i_g])
+                P[idx[g.arc.to.number]] -= JuMP.value(x[3][i_g])
             end
             for (i_g, g) in enumerate(opfm.renewables)
                 P[idx[g.bus.number]] -= JuMP.value(x[4][i_g])

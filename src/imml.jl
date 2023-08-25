@@ -23,23 +23,25 @@ Input:
     - from_bus: From bus index
     - to_bus: To bus index
 """
-@views function get_changed_angles(
-    X::AbstractMatrix{<:Real},
-    b::Real,
-    change::Real,
-    θ₀::AbstractVector{<:Real},
+@views function get_changed_angles!(
+    θ::AbstractVector{T},
+    X::AbstractMatrix{T},
+    B::AbstractMatrix{T},
+    DA::AbstractMatrix{T},
+    θ₀::AbstractVector{T},
     from_bus::Integer,
-    to_bus::Integer;
+    to_bus::Integer,
+    branch::Integer;
     atol::Real=1e-5
-)
-    # change = DA[branch, to_bus] / B[from_bus, to_bus]
-    x = change * (X[:, from_bus] - X[:, to_bus])
-    c⁻¹ = 1 / b + x[from_bus] - x[to_bus]
-    if isapprox(c⁻¹, zero(typeof(c⁻¹)); atol=atol)
+) where {T<:Real}
+    change = DA[branch, to_bus] / B[from_bus, to_bus]
+    # x = change * (X[:, from_bus] - X[:, to_bus])
+    c⁻¹ = inv(B[from_bus, to_bus]) + change * (X[from_bus, from_bus] - X[from_bus, to_bus] - X[to_bus, from_bus] + X[to_bus, to_bus])
+    if isapprox(c⁻¹, zero(T); atol=atol)
         return throw(DivideError())
     end
-    delta = 1 / c⁻¹ * (θ₀[from_bus] - θ₀[to_bus])
-    return θ₀ - x * delta
+    delta = inv(c⁻¹) * (θ₀[from_bus] - θ₀[to_bus])
+    @. θ = θ₀ - (X[:, from_bus] - X[:, to_bus]) * delta * change
 end
 
 """ 
@@ -47,16 +49,26 @@ Calculate the power flow on the lines from the connectivity
 and the diagonal admittance matrices and the voltage angles
 in a contingency of the branch number.
 """
+function calc_Pline!(
+    F::AbstractVector{<:Real},
+    θ::AbstractVector{<:Real},
+    X::AbstractMatrix{<:Real},
+    B::AbstractMatrix{<:Real},
+    DA::AbstractMatrix{<:Real},
+    θ₀::AbstractVector{<:Real},
+    cont::Tuple{Integer,Integer},
+    branch::Integer
+)
+    get_changed_angles!(θ, X, B, DA, θ₀, cont[1], cont[2], branch)
+    LinearAlgebra.mul!(F, DA, θ)
+    F[branch] = 0.0
+    return F
+end
 function calc_Pline(pf::DCPowerFlow, cont::Tuple{Integer,Integer}, branch::Integer)
-    θ = get_changed_angles(pf.X, pf.B[cont[1], cont[2]], pf.DA[branch, cont[2]] / pf.B[cont[1], cont[2]],
-        pf.θ, cont[1], cont[2])
-    if θ == zero(typeof(pf.X))
-        return θ
-    else
-        P = calc_Pline(pf.DA, θ)
-        P[branch] = 0.0
-        return P
-    end
+    θ = similar(pf.θ)
+    F = similar(pf.F)
+    calc_Pline!(F, θ, pf.X, pf.B, pf.DA, pf.θ, cont, branch)
+    return F
 end
 
 """
@@ -72,26 +84,26 @@ Input:
     - branch: Branch index
 """
 @views function get_changed_X!(
-    X::AbstractMatrix{<:Real},
-    X0::AbstractMatrix{<:Real},
-    B::AbstractMatrix{<:Real},
-    DA::AbstractMatrix{<:Real},
+    X::AbstractMatrix{T},
+    X₀::AbstractMatrix{T},
+    B::AbstractMatrix{T},
+    DA::AbstractMatrix{T},
     from_bus::Integer,
     to_bus::Integer,
     branch::Integer;
     atol::Real=1e-5
-)
+) where {T<:Real}
 
     # X_new = X - (X*A[from_bus,:]*DA[from_bus,to_bus]*x)/(1+DA[from_bus,to_bus]*x*A[from_bus,:])
     change = DA[branch, to_bus] / B[from_bus, to_bus]
-    x = X0[:, from_bus] - X0[:, to_bus]
-    c⁻¹ = 1 / B[to_bus, from_bus] + change * (x[from_bus] - x[to_bus])
-    if isapprox(c⁻¹, zero(typeof(c⁻¹)); atol=atol)
+    x = X₀[:, from_bus] - X₀[:, to_bus]
+    c⁻¹ = inv(B[to_bus, from_bus]) + change * (x[from_bus] - x[to_bus])
+    if isapprox(c⁻¹, zero(T); atol=atol)
         throw(DivideError())
     end
     # delta = 1/c⁻¹ * x
-    copy!(X, X0)
-    LinearAlgebra.mul!(X, x, x', -change * 1 / c⁻¹, true) # mul!(C, A, B, α, β) -> C == $A B α + C β$
+    copy!(X, X₀)
+    LinearAlgebra.mul!(X, x, x', -change * inv(c⁻¹), true) # mul!(C, A, B, α, β) -> C == $A B α + C β$
 end
 
 """ Get the isf-matrix after a line outage using IMML. 
@@ -99,13 +111,13 @@ end
 function get_isf!(
     isf::AbstractMatrix{<:Real},
     X::AbstractMatrix{<:Real},
-    X0::AbstractMatrix{<:Real},
+    X₀::AbstractMatrix{<:Real},
     B::AbstractMatrix{<:Real},
     DA::AbstractMatrix{<:Real},
     cont::Tuple{Integer,Integer},
     branch::Integer
 )
-    get_changed_X!(X, X0, B, DA, cont[1], cont[2], branch)
+    get_changed_X!(X, X₀, B, DA, cont[1], cont[2], branch)
     calc_isf!(isf, DA, X)
     isf[branch, :] .= 0
     nothing
@@ -141,25 +153,25 @@ Input:
     - branch: Contingency branch index
 """
 @views function calculate_line_flows!(
-    Pl::AbstractVector{<:Real},
-    Pl0::AbstractVector{<:Real},
-    ptdf::AbstractMatrix{<:Real},
-    B::AbstractMatrix{<:Real},
-    DA::AbstractMatrix{<:Real},
-    X::AbstractMatrix{<:Real},
-    θ::AbstractVector{<:Real},
+    Pl::AbstractVector{T},
+    Pl0::AbstractVector{T},
+    ptdf::AbstractMatrix{T},
+    B::AbstractMatrix{T},
+    DA::AbstractMatrix{T},
+    X::AbstractMatrix{T},
+    θ::AbstractVector{T},
     from_bus::Integer,
     to_bus::Integer,
     branch::Integer;
     atol::Real=1e-5
-)
+) where {T<:Real}
     change = DA[branch, to_bus] / B[from_bus, to_bus]
     # x = change * (X[:,from_bus] - X[:,to_bus])
-    c⁻¹ = 1 / B[from_bus, to_bus] + change * (X[from_bus, from_bus] - X[from_bus, to_bus] - X[to_bus, from_bus] + X[to_bus, to_bus])
-    if isapprox(c⁻¹, zero(typeof(c⁻¹)); atol=atol)
+    c⁻¹ = inv(B[from_bus, to_bus]) + change * (X[from_bus, from_bus] - X[from_bus, to_bus] - X[to_bus, from_bus] + X[to_bus, to_bus])
+    if isapprox(c⁻¹, zero(T); atol=atol)
         return throw(DivideError())
     end
-    delta = 1 / c⁻¹ * (θ[from_bus] - θ[to_bus])
+    delta = inv(c⁻¹) * (θ[from_bus] - θ[to_bus])
     @. Pl = Pl0 - (ptdf[:, from_bus] - ptdf[:, to_bus]) * change * delta
     Pl[branch] = 0.0
     return nothing

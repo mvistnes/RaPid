@@ -289,6 +289,14 @@ function make_list(system::System, type_func, nodes=get_nodes(system))
     return list
 end
 
+function get_in_list(type::Symbol, nodes::Vector{Int}, list::Vector)
+    res = Int[]
+    for n in nodes 
+        push!(res, getproperty(getindex(list, n), type)...)
+    end
+    return res
+end
+
 find_in_model(mod::Model, ctrl::ThermalGen, name::String) = mod[:pg0][name]
 find_in_model(mod::Model, ctrl::HydroGen, name::String) = mod[:pg0][name]
 find_in_model(mod::Model, r::RenewableGen, name::String) = mod[:pr0][name]
@@ -389,6 +397,19 @@ function get_bus_idx(A::SparseArrays.SparseMatrixCSC{T}) where {T}
     return ix
 end
 
+function sorted_missing(vals::AbstractVector{T}, maxval::Int) where {T<:Int}
+    res = T[]
+    i = 1
+    for x in 1:maxval
+        if get(vals, i, 0) == x
+            i += 1
+        else
+            push!(res, x)
+        end
+    end
+    return res
+end
+
 " Split a Vector{Pair} into a Pair{Vector}"
 split_pair(val::AbstractVector) = map(first, val), map(last, val)
 
@@ -415,7 +436,7 @@ get_value(mod::Model, symb::Symbol) =
     MOI.get.([JuMP.backend(mod)], [MOI.VariablePrimal()], JuMP.index.(mod[symb]))
 get_value(mod::Model, var::JuMP.VariableRef) =
     MOI.get(JuMP.backend(mod), MOI.VariablePrimal(), JuMP.index(var))
-get_value(mod::Model, var::Vector{JuMP.VariableRef}) =
+get_value(mod::Model, var::Vector{JuMP.VariableRef})::Vector{Float64} =
     MOI.get(JuMP.backend(mod), MOI.VariablePrimal(), JuMP.index.(var))
 
 " Fix for name difference in StandardLoad "

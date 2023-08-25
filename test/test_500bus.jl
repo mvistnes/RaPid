@@ -62,8 +62,15 @@ ramp_mult = 10
 
 @time opfm, pf, Pc, Pcc, Pccx = SCOPF.run_benders(SCOPF.PCSC, system, SCOPF.Gurobi.Optimizer, voll, prob, contingencies, max_shed=max_shed,
     ramp_minutes=ramp_minutes, branch_short_term_limit_multi=short, branch_long_term_limit_multi=long, p_failure=0.00);
+
+println("Start Contingency select")
+@time opfm_cont, pf_cont, Pc_cont, Pcc_cont, Pccx_cont = SCOPF.run_contingency_select(SCOPF.PCSC, system, SCOPF.Gurobi.Optimizer, voll, prob, contingencies, 
+    max_shed=max_shed, ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, branch_short_term_limit_multi=short, branch_long_term_limit_multi=long, p_failure=0.00)
+println("Objective value Contingency select: ", JuMP.objective_value(opfm_cont.mod))
+SCOPF.print_contingency_P(opfm_cont, Pc_cont, Pcc_cont, Pccx_cont)
+
 @time opfm_ptdf, pf_ptdf, Pc_ptdf, Pcc_ptdf = SCOPF.opf(SCOPF.PCSC, system, SCOPF.Gurobi.Optimizer, voll=voll, contingencies=contingencies, prob=prob, max_shed=max_shed,
-    ramp_minutes=ramp_minutes, short_term_limit_multi=short, long_term_limit_multi=long);
+ramp_minutes=ramp_minutes, short_term_limit_multi=short, long_term_limit_multi=long);
 @time SCOPF.solve_model!(opfm_ptdf.mod);
 # opfm_norm = SCOPF.scopf(SCOPF.PCSC, system, Gurobi.Optimizer, voll=voll, contingencies=contingencies, prob=prob, max_shed=1.0, 
 #     ramp_minutes=10, short_term_limit_multi=short, debug=true);
