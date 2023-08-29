@@ -46,17 +46,17 @@ function print_variabel(model::Model, list::AbstractVector, name::Symbol)
     end
 end
 
-function print_active_power(opfm::OPFmodel)
-    idx = get_nodes_idx(opfm.nodes)
-    list = make_list(opfm, idx, opfm.nodes)
+function print_active_power(opf::OPFsystem)
+    idx = get_nodes_idx(opf.nodes)
+    list = make_list(opf, idx, opf.nodes)
     xprint(x, val) = @printf("%7s:%6.2f, ", split(x.name, "_", limit=2)[end], val)
     sort_x!(list) = sort!(list, by=x -> x.name)
-    get_injection(g::Union{ThermalGen,HydroGen}) = value(opfm.mod[:pg0][get_name(g)])
-    get_injection(r::RenewableGen) = get_active_power(r) - value(opfm.mod[:ls0][get_name(r)])
-    get_injection(d::StaticLoad) = -get_active_power(d) + value(opfm.mod[:ls0][get_name(d)])
+    get_injection(g::Union{ThermalGen,HydroGen}) = value(mod[:pg0][get_name(g)])
+    get_injection(r::RenewableGen) = get_active_power(r) - value(mod[:ls0][get_name(r)])
+    get_injection(d::StaticLoad) = -get_active_power(d) + value(mod[:ls0][get_name(d)])
     print("       Bus   Total  Injections...")
     tot = 0.0
-    for (n, g, d, r) in zip(opfm.nodes, list_gen, list_d, list_r)
+    for (n, g, d, r) in zip(opf.nodes, list_gen, list_d, list_r)
         sort_x!(g)
         sort_x!(d)
         sort_x!(r)
@@ -73,16 +73,16 @@ function print_active_power(opfm::OPFmodel)
     @printf("\n       Sum  %6.2f\n", tot)
 end
 
-function get_power_flow(opfm::OPFmodel, sep::String=" ")
+function get_power_flow(opf::OPFsystem, mod::Model, sep::String=" ")
     try
-        return value.(opfm.mod[:pf0])
+        return value.(mod[:pf0])
     catch KeyError
-        return calculate_line_flows(get_isf(opfm.branches, opfm.nodes), get_net_Pᵢ(opfm))
+        return calculate_line_flows(get_isf(opf.branches, opf.nodes), get_net_Pᵢ(opf, mod))
     end
 end
-function print_power_flow(opfm::OPFmodel, sep::String=" ")
-    print_power_flow(get_name.(opfm.branches), get_power_flow(opfm, sep),
-        get_rate.(opfm.branches), sep=sep)
+function print_power_flow(opf::OPFsystem, mod::Model, sep::String=" ")
+    print_power_flow(get_name.(opf.branches), get_power_flow(opf, mod, sep),
+        get_rate.(opf.branches), sep=sep)
 end
 function print_power_flow(names::AbstractVector{String}, flow::AbstractVector,
     rate::AbstractVector{<:Real}; sep::String=" ", risky_flow=0.9)
@@ -99,139 +99,139 @@ function print_power_flow(names::AbstractVector{String}, flow::AbstractVector,
     end
 end
 
-function get_contingency_power_flow(opfm::OPFmodel)
-    idx = get_nodes_idx(opfm.nodes)
-    slack = find_slack(opfm.nodes)
-    θ = SCOPF.get_sorted_angles(opfm.mod)
-    P = calc_Pᵢ(calc_B(opfm.branches, idx), θ)
-    flow = Vector{Vector{Float64}}(undef, length(opfm.contingencies))
-    for c in 1:length(opfm.contingencies)
-        flow[c] = get_isf(opfm.branches[1:end.!=c], opfm.nodes, idx, slack[1]) * P
+function get_contingency_power_flow(opf::OPFsystem, mod::Model)
+    idx = get_nodes_idx(opf.nodes)
+    slack = find_slack(opf.nodes)
+    θ = SCOPF.get_sorted_angles(mod)
+    P = calc_Pᵢ(calc_B(opf.branches, idx), θ)
+    flow = Vector{Vector{Float64}}(undef, length(opf.contingencies))
+    for c in 1:length(opf.contingencies)
+        flow[c] = get_isf(opf.branches[1:end.!=c], opf.nodes, idx, slack[1]) * P
     end
     return flow
 end
 
-function print_contingency_power_flow(opfm::OPFmodel, b_names::Vector{String}, flow::Vector{Vector{Float64}}, linerates::Vector{<:Float64})
-    for c in 1:length(opfm.contingencies)
+function print_contingency_power_flow(opf::OPFsystem, b_names::Vector{String}, flow::Vector{Vector{Float64}}, linerates::Vector{<:Float64})
+    for c in 1:length(opf.contingencies)
         if isempty(flow)
-            println("Contingency ", opfm.contingencies[c].name, " resulted in a disconnected reference bus.")
+            println("Contingency ", opf.contingencies[c].name, " resulted in a disconnected reference bus.")
         else
-            println("Contingency ", opfm.contingencies[c].name)
+            println("Contingency ", opf.contingencies[c].name)
             print_power_flow(b_names, flow[c], linerates)
         end
     end
 end
 
-function print_contingency_power_flow(opfm::OPFmodel, pf::DCPowerFlow, Pc, Pcc, Pccx=Dict{Int,NTuple{2,Any}}(), short_term_limit::Float64=1.5, long_term_limit::Float64=1.0)
-    b_names = get_name.(opfm.branches)
-    linerates = get_rate.(opfm.branches)
-    ptdf = get_contingency_ptdf(opfm, pf)
-    idx = get_nodes_idx(opfm.nodes)
-    list = make_list(opfm, idx, opfm.nodes)
+function print_contingency_power_flow(opf::OPFsystem, mod::Model, pf::DCPowerFlow, Pc, Pcc, Pccx=Dict{Int,NTuple{2,Any}}(), short_term_limit::Float64=1.5, long_term_limit::Float64=1.0)
+    b_names = get_name.(opf.branches)
+    linerates = get_rate.(opf.branches)
+    ptdf = get_contingency_ptdf(opf, pf)
+    idx = get_nodes_idx(opf.nodes)
+    list = make_list(opf, idx, opf.nodes)
     Pᵢ = calc_Pᵢ(pf)
 
     println("Base case")
     print_power_flow(b_names, pf.F, linerates)
 
-    c_flow = [ptdf[i] * (Pᵢ .+ get_ΔPc(opfm.mod, list, zeros(length(opfm.nodes)), Pc, c)) for (i, (c, cont)) in enumerate(get_branch_bus_idx(opfm.branches, opfm.contingencies, idx))]
+    c_flow = [ptdf[i] * (Pᵢ .+ get_ΔPc(mod, list, zeros(length(opf.nodes)), Pc, c)) for (i, (c, cont)) in enumerate(get_branch_bus_idx(opf.branches, opf.contingencies, idx))]
     println("Short-term post-contingency")
-    print_contingency_power_flow(opfm, b_names, c_flow, linerates * short_term_limit)
+    print_contingency_power_flow(opf, b_names, c_flow, linerates * short_term_limit)
 
-    cc_flow = [ptdf[i] * (Pᵢ .+ get_ΔPcc(opfm.mod, opfm.nodes, opfm.dc_branches, list, zeros(length(opfm.nodes)), Pcc, c)) for (i, (c, cont)) in enumerate(get_branch_bus_idx(opfm.branches, opfm.contingencies, idx))]
+    cc_flow = [ptdf[i] * (Pᵢ .+ get_ΔPcc(mod, opf.nodes, opf.dc_branches, list, zeros(length(opf.nodes)), Pcc, c)) for (i, (c, cont)) in enumerate(get_branch_bus_idx(opf.branches, opf.contingencies, idx))]
     println("Long-term post-contingency")
-    print_contingency_power_flow(opfm, b_names, cc_flow, linerates * long_term_limit)
+    print_contingency_power_flow(opf, b_names, cc_flow, linerates * long_term_limit)
 
-    ccx_flow = [ptdf[i] * (Pᵢ .+ get_ΔPccx(opfm.mod, list, zeros(length(opfm.nodes)), Pccx, c)) for (i, (c, cont)) in enumerate(get_branch_bus_idx(opfm.branches, opfm.contingencies, idx))]
+    ccx_flow = [ptdf[i] * (Pᵢ .+ get_ΔPccx(mod, list, zeros(length(opf.nodes)), Pccx, c)) for (i, (c, cont)) in enumerate(get_branch_bus_idx(opf.branches, opf.contingencies, idx))]
     println("Long-term post-contingency corrective failed")
-    print_contingency_power_flow(opfm, b_names, ccx_flow, linerates * long_term_limit)
+    print_contingency_power_flow(opf, b_names, ccx_flow, linerates * long_term_limit)
 end
 
-function print_contingency_power_flow(opfm::OPFmodel, rate_limit_multi::Float64=1.5)
-    b_names = get_name.(opfm.branches)
-    linerates = get_rate.(opfm.branches)
-    idx = get_nodes_idx(opfm.nodes)
+function print_contingency_power_flow(opf::OPFsystem, mod::Model, rate_limit_multi::Float64=1.5)
+    b_names = get_name.(opf.branches)
+    linerates = get_rate.(opf.branches)
+    idx = get_nodes_idx(opf.nodes)
     println("Base case")
-    print_power_flow(b_names, JuMP.value.(opfm.mod[:pf0]), linerates)
+    print_power_flow(b_names, JuMP.value.(mod[:pf0]), linerates)
     println("Short-term post-contingency")
-    for (c, cont) in get_branch_bus_idx(opfm.branches, opfm.contingencies, idx)
-        println("Contingency ", opfm.branches[c].name)
-        print_power_flow(b_names, JuMP.value.(opfm.mod[:pfc][:, c]), linerates * rate_limit_multi)
+    for (c, cont) in get_branch_bus_idx(opf.branches, opf.contingencies, idx)
+        println("Contingency ", opf.branches[c].name)
+        print_power_flow(b_names, JuMP.value.(mod[:pfc][:, c]), linerates * rate_limit_multi)
     end
     println("Long-term post-contingency")
-    for (c, cont) in get_branch_bus_idx(opfm.branches, opfm.contingencies, idx)
-        println("Contingency ", opfm.branches[c].name)
-        print_power_flow(b_names, JuMP.value.(opfm.mod[:pfcc][:, c]), linerates)
+    for (c, cont) in get_branch_bus_idx(opf.branches, opf.contingencies, idx)
+        println("Contingency ", opf.branches[c].name)
+        print_power_flow(b_names, JuMP.value.(mod[:pfcc][:, c]), linerates)
     end
 end
 
-function print_contingency_overflow(opfm::OPFmodel, pf::DCPowerFlow, Pc, Pcc, Pccx=Dict{Int,NTuple{2,Any}}(), short_term_limit::Float64=1.5, long_term_limit::Float64=1.0)
+function print_contingency_overflow(opf::OPFsystem, mod::Model, pf::DCPowerFlow, Pc, Pcc, Pccx=Dict{Int,NTuple{2,Any}}(), short_term_limit::Float64=1.5, long_term_limit::Float64=1.0)
     string_line(c, n, f, r) = @sprintf("%15s %15s  %6.2f  %6.2f\n", c, n, f, r)
     print_string_line(c, n, f, r) = abs(f) > r + 0.0001 && print(string_line(c, n, f, r))
     print_all_string_line(c, n, f, r) = print_string_line.(c, n, f, r)
-    b_names = get_name.(opfm.branches)
-    linerates = get_rate.(opfm.branches)
-    ptdf = get_contingency_ptdf(opfm, pf)
-    idx = get_nodes_idx(opfm.nodes)
-    list = make_list(opfm, idx, opfm.nodes)
+    b_names = get_name.(opf.branches)
+    linerates = get_rate.(opf.branches)
+    ptdf = get_contingency_ptdf(opf, pf)
+    idx = get_nodes_idx(opf.nodes)
+    list = make_list(opf, idx, opf.nodes)
     Pᵢ = calc_Pᵢ(pf)
 
-    c_flow = [ptdf[i] * (Pᵢ .+ get_ΔPc(opfm.mod, list, zeros(length(opfm.nodes)), Pc, c)) for (i, (c, cont)) in enumerate(get_branch_bus_idx(opfm.branches, opfm.contingencies, idx))]
+    c_flow = [ptdf[i] * (Pᵢ .+ get_ΔPc(mod, list, zeros(length(opf.nodes)), Pc, c)) for (i, (c, cont)) in enumerate(get_branch_bus_idx(opf.branches, opf.contingencies, idx))]
     println("Short-term post-contingency")
     println("    Contingency          Branch    Flow  Rating")
-    print_all_string_line.(get_name.(opfm.contingencies), [b_names], c_flow, [linerates * short_term_limit])
+    print_all_string_line.(get_name.(opf.contingencies), [b_names], c_flow, [linerates * short_term_limit])
 
-    cc_flow = [ptdf[i] * (Pᵢ .+ get_ΔPcc(opfm.mod, opfm.nodes, opfm.dc_branches, list, zeros(length(opfm.nodes)), Pcc, c)) for (i, (c, cont)) in enumerate(get_branch_bus_idx(opfm.branches, opfm.contingencies, idx))]
+    cc_flow = [ptdf[i] * (Pᵢ .+ get_ΔPcc(mod, opf.nodes, opf.dc_branches, list, zeros(length(opf.nodes)), Pcc, c)) for (i, (c, cont)) in enumerate(get_branch_bus_idx(opf.branches, opf.contingencies, idx))]
     println("Long-term post-contingency")
     println("    Contingency          Branch    Flow  Rating")
-    print_all_string_line.(get_name.(opfm.contingencies), [b_names], cc_flow, [linerates * long_term_limit])
+    print_all_string_line.(get_name.(opf.contingencies), [b_names], cc_flow, [linerates * long_term_limit])
 
-    ccx_flow = [ptdf[i] * (Pᵢ .+ get_ΔPccx(opfm.mod, list, zeros(length(opfm.nodes)), Pccx, c)) for (i, (c, cont)) in enumerate(get_branch_bus_idx(opfm.branches, opfm.contingencies, idx))]
+    ccx_flow = [ptdf[i] * (Pᵢ .+ get_ΔPccx(mod, list, zeros(length(opf.nodes)), Pccx, c)) for (i, (c, cont)) in enumerate(get_branch_bus_idx(opf.branches, opf.contingencies, idx))]
     println("Long-term post-contingency corrective failed")
     println("    Contingency          Branch    Flow  Rating")
-    print_all_string_line.(get_name.(opfm.contingencies), [b_names], ccx_flow, [linerates * long_term_limit])
+    print_all_string_line.(get_name.(opf.contingencies), [b_names], ccx_flow, [linerates * long_term_limit])
     return
 end
 
-function print_contingency_overflow(opfm::OPFmodel, rate_limit_multi::Float64=1.5)
+function print_contingency_overflow(opf::OPFsystem, mod::Model, rate_limit_multi::Float64=1.5)
     string_line(c, n, f, r) = @sprintf("%15s %15s  %6.2f  %6.2f\n", c, n, f, r)
     print_string_line(c, n, f, r) = abs(f) > r + 0.0001 && print(string_line(c, n, f, r))
     println("    Contingency          Branch    Flow  Rating")
-    idx = get_nodes_idx(opfm.nodes)
-    slack = find_slack(opfm.nodes)
-    b_names = get_name.(opfm.branches)
-    linerates = get_rate.(opfm.branches)
-    θ = SCOPF.get_sorted_angles(opfm.mod)
-    P = calc_Pᵢ(calc_B(opfm.branches, idx), θ)
-    print_string_line(opfm.branches[c].name, n, f, r)
+    idx = get_nodes_idx(opf.nodes)
+    slack = find_slack(opf.nodes)
+    b_names = get_name.(opf.branches)
+    linerates = get_rate.(opf.branches)
+    θ = SCOPF.get_sorted_angles(mod)
+    P = calc_Pᵢ(calc_B(opf.branches, idx), θ)
+    print_string_line(opf.branches[c].name, n, f, r)
 end
 
-function print_results(opfm::OPFmodel)
-    print_variabel(opfm.mod, opfm.ctrl_generation, :pg0)
-    print_variabel(opfm.mod, opfm.dc_branches, :pfdc0)
-    print_variabel(opfm.mod, opfm.renewables, :pr0)
-    print_variabel(opfm.mod, opfm.demands, :ls0)
+function print_results(opf::OPFsystem, mod::Model)
+    print_variabel(mod, opf.ctrl_generation, :pg0)
+    print_variabel(mod, opf.dc_branches, :pfdc0)
+    print_variabel(mod, opf.renewables, :pr0)
+    print_variabel(mod, opf.demands, :ls0)
 end
 
-function print_preventive_results(opfm::OPFmodel)
-    for (i_g, g) in enumerate(opfm.ctrl_generation)
-        @printf("%12s: %.3f\n", g.name, JuMP.value(opfm.mod[:pg0][i_g]))
-        for (i, c) in enumerate(JuMP.value.(opfm.mod[:pgc][i_g, :]))
+function print_preventive_results(opf::OPFsystem, mod::Model)
+    for (i_g, g) in enumerate(opf.ctrl_generation)
+        @printf("%12s: %.3f\n", g.name, JuMP.value(mod[:pg0][i_g]))
+        for (i, c) in enumerate(JuMP.value.(mod[:pgc][i_g, :]))
             if c > 0.0001
                 @printf("           %4dc: pgc: %.3f\n", i, c)
             end
         end
     end
-    for (i_g, g) in enumerate(opfm.renewables)
-        @printf("%12s: %.3f\n", g.name, JuMP.value(opfm.mod[:pr0][i_g]))
-        for (i, c) in enumerate(JuMP.value.(opfm.mod[:prc][i_g, :]))
+    for (i_g, g) in enumerate(opf.renewables)
+        @printf("%12s: %.3f\n", g.name, JuMP.value(mod[:pr0][i_g]))
+        for (i, c) in enumerate(JuMP.value.(mod[:prc][i_g, :]))
             if c > 0.0001
                 @printf("           %4dc: prc: %.3f\n", i, c)
             end
         end
     end
-    for (i_g, g) in enumerate(opfm.demands)
-        @printf("%12s: %.3f\n", g.name, JuMP.value(opfm.mod[:ls0][i_g]))
-        for (i, c) in enumerate(JuMP.value.(opfm.mod[:lsc][i_g, :]))
+    for (i_g, g) in enumerate(opf.demands)
+        @printf("%12s: %.3f\n", g.name, JuMP.value(mod[:ls0][i_g]))
+        for (i, c) in enumerate(JuMP.value.(mod[:lsc][i_g, :]))
             if c > 0.0001
                 @printf("           %4dc: lsc: %.3f\n", i, c)
             end
@@ -239,114 +239,114 @@ function print_preventive_results(opfm::OPFmodel)
     end
 end
 
-function print_corrective_results(opfm::OPFmodel)
-    for (i_g, g) in enumerate(opfm.ctrl_generation)
-        @printf("%12s: %.3f (%.3f)\n", g.name, JuMP.value(opfm.mod[:pg0][i_g]), get_active_power_limits(g).max)
-        for (i, c) in enumerate(JuMP.value.(opfm.mod[:pgc][i_g, :]))
+function print_corrective_results(opf::OPFsystem, mod::Model)
+    for (i_g, g) in enumerate(opf.ctrl_generation)
+        @printf("%12s: %.3f (%.3f)\n", g.name, JuMP.value(mod[:pg0][i_g]), get_active_power_limits(g).max)
+        for (i, c) in enumerate(JuMP.value.(mod[:pgc][i_g, :]))
             if c > 0.0001
-                @printf("          c %12s: pgc: %.3f\n", opfm.contingencies[i].name, c)
+                @printf("          c %12s: pgc: %.3f\n", opf.contingencies[i].name, c)
             end
         end
-        for (i, c) in enumerate(zip(JuMP.value.(opfm.mod[:pgu][i_g, :]), JuMP.value.(opfm.mod[:pgd][i_g, :])))
+        for (i, c) in enumerate(zip(JuMP.value.(mod[:pgu][i_g, :]), JuMP.value.(mod[:pgd][i_g, :])))
             if c[1] > 0.0001
-                @printf("          c %12s: pgu: %.3f\n", opfm.contingencies[i].name, c[1])
+                @printf("          c %12s: pgu: %.3f\n", opf.contingencies[i].name, c[1])
             end
             if c[2] > 0.0001
-                @printf("          c %12s: pgd: %.3f\n", opfm.contingencies[i].name, c[2])
+                @printf("          c %12s: pgd: %.3f\n", opf.contingencies[i].name, c[2])
             end
         end
     end
-    for (i_g, g) in enumerate(opfm.dc_branches)
-        @printf("%12s: %.3f (%.3f)\n", g.name, JuMP.value(opfm.mod[:pfdc0][i_g]), get_active_power_limits(g).max)
-        for (i, c) in enumerate(JuMP.value.(opfm.mod[:pfdccc][i_g, :]))
+    for (i_g, g) in enumerate(opf.dc_branches)
+        @printf("%12s: %.3f (%.3f)\n", g.name, JuMP.value(mod[:pfdc0][i_g]), get_active_power_limits(g).max)
+        for (i, c) in enumerate(JuMP.value.(mod[:pfdccc][i_g, :]))
             if c > 0.0001
-                @printf("          c %12s: pfdccc: %.3f\n", opfm.contingencies[i].name, c)
+                @printf("          c %12s: pfdccc: %.3f\n", opf.contingencies[i].name, c)
             end
         end
     end
-    for (i_g, g) in enumerate(opfm.renewables)
-        @printf("%12s: %.3f (%.3f)\n", g.name, JuMP.value(opfm.mod[:pr0][i_g]), get_active_power_limits(g).max)
-        for (i, c) in enumerate(JuMP.value.(opfm.mod[:prc][i_g, :]))
+    for (i_g, g) in enumerate(opf.renewables)
+        @printf("%12s: %.3f (%.3f)\n", g.name, JuMP.value(mod[:pr0][i_g]), get_active_power_limits(g).max)
+        for (i, c) in enumerate(JuMP.value.(mod[:prc][i_g, :]))
             if c > 0.0001
-                @printf("          c %12s: prc: %.3f\n", opfm.contingencies[i].name, c)
+                @printf("          c %12s: prc: %.3f\n", opf.contingencies[i].name, c)
             end
         end
-        for (i, c) in enumerate(JuMP.value.(opfm.mod[:prcc][i_g, :]))
+        for (i, c) in enumerate(JuMP.value.(mod[:prcc][i_g, :]))
             if c > 0.0001
-                @printf("          c %12s: prcc: %.3f\n", opfm.contingencies[i].name, c)
+                @printf("          c %12s: prcc: %.3f\n", opf.contingencies[i].name, c)
             end
         end
     end
-    for (i_g, g) in enumerate(opfm.demands)
-        @printf("%12s: %.3f (%.3f)\n", g.name, JuMP.value(opfm.mod[:ls0][i_g]), get_active_power(g))
-        for (i, c) in enumerate(JuMP.value.(opfm.mod[:lsc][i_g, :]))
+    for (i_g, g) in enumerate(opf.demands)
+        @printf("%12s: %.3f (%.3f)\n", g.name, JuMP.value(mod[:ls0][i_g]), get_active_power(g))
+        for (i, c) in enumerate(JuMP.value.(mod[:lsc][i_g, :]))
             if c > 0.0001
-                @printf("          c %12s: lsc: %.3f\n", opfm.contingencies[i].name, c)
+                @printf("          c %12s: lsc: %.3f\n", opf.contingencies[i].name, c)
             end
         end
-        for (i, c) in enumerate(JuMP.value.(opfm.mod[:lscc][i_g, :]))
+        for (i, c) in enumerate(JuMP.value.(mod[:lscc][i_g, :]))
             if c > 0.0001
-                @printf("          c %12s: lscc: %.3f\n", opfm.contingencies[i].name, c)
+                @printf("          c %12s: lscc: %.3f\n", opf.contingencies[i].name, c)
             end
         end
     end
 end
 
-function print_sorted_corrective_results(opfm::OPFmodel)
-    for (i_g, g) in enumerate(opfm.ctrl_generation)
-        @printf("%12s: %.3f\n", g.name, JuMP.value(opfm.mod[:pg0][i_g]))
+function print_sorted_corrective_results(opf::OPFsystem, mod::Model)
+    for (i_g, g) in enumerate(opf.ctrl_generation)
+        @printf("%12s: %.3f\n", g.name, JuMP.value(mod[:pg0][i_g]))
     end
-    for (i_g, g) in enumerate(opfm.dc_branches)
-        @printf("%12s: %.3f\n", g.name, JuMP.value(opfm.mod[:pfdc0][i_g]))
+    for (i_g, g) in enumerate(opf.dc_branches)
+        @printf("%12s: %.3f\n", g.name, JuMP.value(mod[:pfdc0][i_g]))
     end
-    for (i_g, g) in enumerate(opfm.renewables)
-        @printf("%12s: %.3f\n", g.name, JuMP.value(opfm.mod[:pr0][i_g]))
+    for (i_g, g) in enumerate(opf.renewables)
+        @printf("%12s: %.3f\n", g.name, JuMP.value(mod[:pr0][i_g]))
     end
-    for (i_g, g) in enumerate(opfm.demands)
-        @printf("%12s: %.3f\n", g.name, JuMP.value(opfm.mod[:ls0][i_g]))
+    for (i_g, g) in enumerate(opf.demands)
+        @printf("%12s: %.3f\n", g.name, JuMP.value(mod[:ls0][i_g]))
     end
 
-    for (i, c) in enumerate(opfm.contingencies)
-        for (i_g, g) in enumerate(opfm.ctrl_generation)
-            if JuMP.value(opfm.mod[:pgc][i_g, i]) > 0.0001
-                @printf("%4dc: %12s:  pgc: %.3f\n", i, g.name, JuMP.value(opfm.mod[:pgc][i_g, i]))
+    for (i, c) in enumerate(opf.contingencies)
+        for (i_g, g) in enumerate(opf.ctrl_generation)
+            if JuMP.value(mod[:pgc][i_g, i]) > 0.0001
+                @printf("%4dc: %12s:  pgc: %.3f\n", i, g.name, JuMP.value(mod[:pgc][i_g, i]))
             end
         end
-        for (i_g, g) in enumerate(opfm.renewables)
-            if JuMP.value(opfm.mod[:prc][i_g, i]) > 0.0001
-                @printf("%4dc: %12s:  prc: %.3f\n", i, g.name, JuMP.value(opfm.mod[:prc][i_g, i]))
+        for (i_g, g) in enumerate(opf.renewables)
+            if JuMP.value(mod[:prc][i_g, i]) > 0.0001
+                @printf("%4dc: %12s:  prc: %.3f\n", i, g.name, JuMP.value(mod[:prc][i_g, i]))
             end
         end
-        for (i_g, g) in enumerate(opfm.demands)
-            if JuMP.value(opfm.mod[:lsc][i_g, i]) > 0.0001
-                @printf("%4dc: %12s:  lsc: %.3f\n", i, g.name, JuMP.value(opfm.mod[:lsc][i_g, i]))
+        for (i_g, g) in enumerate(opf.demands)
+            if JuMP.value(mod[:lsc][i_g, i]) > 0.0001
+                @printf("%4dc: %12s:  lsc: %.3f\n", i, g.name, JuMP.value(mod[:lsc][i_g, i]))
             end
         end
     end
 
     try
-        for (i, c) in enumerate(opfm.contingencies)
-            for (i_g, g) in enumerate(opfm.ctrl_generation)
-                if JuMP.value(opfm.mod[:pgu][i_g, i]) > 0.0001
-                    @printf("%4dc: %12s:  pgu: %.3f\n", i, g.name, JuMP.value(opfm.mod[:pgu][i_g, i]))
+        for (i, c) in enumerate(opf.contingencies)
+            for (i_g, g) in enumerate(opf.ctrl_generation)
+                if JuMP.value(mod[:pgu][i_g, i]) > 0.0001
+                    @printf("%4dc: %12s:  pgu: %.3f\n", i, g.name, JuMP.value(mod[:pgu][i_g, i]))
                 end
-                if JuMP.value(opfm.mod[:pgd][i_g, i]) > 0.0001
-                    @printf("%4dc: %12s:  pgd: %.3f\n", i, g.name, JuMP.value(opfm.mod[:pgd][i_g, i]))
-                end
-            end
-            for (i_g, g) in enumerate(opfm.dc_branches)
-                if JuMP.value(opfm.mod[:pfdccc][i_g, i]) > 0.0001
-                    @printf("%4dc: %12s: pfdccc: %.3f\n", i, g.name, JuMP.value(opfm.mod[:pfdccc][i_g, i]))
+                if JuMP.value(mod[:pgd][i_g, i]) > 0.0001
+                    @printf("%4dc: %12s:  pgd: %.3f\n", i, g.name, JuMP.value(mod[:pgd][i_g, i]))
                 end
             end
-            for (i_g, g) in enumerate(opfm.renewables)
-                if JuMP.value(opfm.mod[:prcc][i_g, i]) > 0.0001
-                    @printf("%4dc: %12s: prcc: %.3f\n", i, g.name, JuMP.value(opfm.mod[:prcc][i_g, i]))
+            for (i_g, g) in enumerate(opf.dc_branches)
+                if JuMP.value(mod[:pfdccc][i_g, i]) > 0.0001
+                    @printf("%4dc: %12s: pfdccc: %.3f\n", i, g.name, JuMP.value(mod[:pfdccc][i_g, i]))
                 end
             end
-            for (i_g, g) in enumerate(opfm.demands)
-                if JuMP.value(opfm.mod[:lscc][i_g, i]) > 0.0001
-                    @printf("%4dc: %12s: lscc: %.3f\n", i, g.name, JuMP.value(opfm.mod[:lscc][i_g, i]))
+            for (i_g, g) in enumerate(opf.renewables)
+                if JuMP.value(mod[:prcc][i_g, i]) > 0.0001
+                    @printf("%4dc: %12s: prcc: %.3f\n", i, g.name, JuMP.value(mod[:prcc][i_g, i]))
+                end
+            end
+            for (i_g, g) in enumerate(opf.demands)
+                if JuMP.value(mod[:lscc][i_g, i]) > 0.0001
+                    @printf("%4dc: %12s: lscc: %.3f\n", i, g.name, JuMP.value(mod[:lscc][i_g, i]))
                 end
             end
         end
@@ -354,18 +354,18 @@ function print_sorted_corrective_results(opfm::OPFmodel)
     end
 end
 
-function print_contingency_P(opfm, idx)
+function print_contingency_P(opf::OPFsystem, mod::Model, idx)
     println("Pc")
-    for (c, cont) in enumerate(opfm.contingencies)
-        P = zeros(length(opfm.nodes))
-        for (i_g, g) in enumerate(opfm.ctrl_generation)
-            P[idx[g.bus.number]] -= JuMP.value(opfm.mod[:pgc][i_g, c])
+    for (c, cont) in enumerate(opf.contingencies)
+        P = zeros(length(opf.nodes))
+        for (i_g, g) in enumerate(opf.ctrl_generation)
+            P[idx[g.bus.number]] -= JuMP.value(mod[:pgc][i_g, c])
         end
-        for (i_g, g) in enumerate(opfm.renewables)
-            P[idx[g.bus.number]] -= JuMP.value(opfm.mod[:prc][i_g, c])
+        for (i_g, g) in enumerate(opf.renewables)
+            P[idx[g.bus.number]] -= JuMP.value(mod[:prc][i_g, c])
         end
-        for (i_g, g) in enumerate(opfm.demands)
-            P[idx[g.bus.number]] += JuMP.value(opfm.mod[:lsc][i_g, c])
+        for (i_g, g) in enumerate(opf.demands)
+            P[idx[g.bus.number]] += JuMP.value(mod[:lsc][i_g, c])
         end
         for (i, x) in enumerate(P)
             if abs(x) > 0.00001
@@ -376,20 +376,20 @@ function print_contingency_P(opfm, idx)
 
 
     println("Pcc")
-    for (c, cont) in enumerate(opfm.contingencies)
-        P = zeros(length(opfm.nodes))
-        for (i_g, g) in enumerate(opfm.ctrl_generation)
-            P[idx[g.bus.number]] += JuMP.value(opfm.mod[:pgu][i_g, c])
-            P[idx[g.bus.number]] -= JuMP.value(opfm.mod[:pgd][i_g, c])
+    for (c, cont) in enumerate(opf.contingencies)
+        P = zeros(length(opf.nodes))
+        for (i_g, g) in enumerate(opf.ctrl_generation)
+            P[idx[g.bus.number]] += JuMP.value(mod[:pgu][i_g, c])
+            P[idx[g.bus.number]] -= JuMP.value(mod[:pgd][i_g, c])
         end
-        for (i_g, g) in enumerate(opfm.dc_branches)
-            P[idx[g.bus.number]] -= beta(g.bus, g) * JuMP.value(opfm.mod[:pfdccc][i_g, c])
+        for (i_g, g) in enumerate(opf.dc_branches)
+            P[idx[g.bus.number]] -= beta(g.bus, g) * JuMP.value(mod[:pfdccc][i_g, c])
         end
-        for (i_g, g) in enumerate(opfm.renewables)
-            P[idx[g.bus.number]] -= JuMP.value(opfm.mod[:prcc][i_g, c])
+        for (i_g, g) in enumerate(opf.renewables)
+            P[idx[g.bus.number]] -= JuMP.value(mod[:prcc][i_g, c])
         end
-        for (i_g, g) in enumerate(opfm.demands)
-            P[idx[g.bus.number]] += JuMP.value(opfm.mod[:lscc][i_g, c])
+        for (i_g, g) in enumerate(opf.demands)
+            P[idx[g.bus.number]] += JuMP.value(mod[:lscc][i_g, c])
         end
         for (i, x) in enumerate(P)
             if abs(x) > 0.00001
@@ -399,21 +399,21 @@ function print_contingency_P(opfm, idx)
     end
 end
 
-function print_contingency_P(opfm, Pc, Pcc, Pccx=Dict())
-    idx = SCOPF.get_nodes_idx(opfm.nodes)
+function print_contingency_P(opf::OPFsystem, Pc, Pcc, Pccx=Dict())
+    idx = SCOPF.get_nodes_idx(opf.nodes)
     println("Pc")
-    for (c, cont) in enumerate(opfm.contingencies)
-        P = zeros(length(opfm.nodes))
+    for (c, cont) in enumerate(opf.contingencies)
+        P = zeros(length(opf.nodes))
         x = get(Pc, c, 0)
         if x != 0
-            for (i_g, g) in enumerate(opfm.ctrl_generation)
-                P[idx[g.bus.number]] -= JuMP.value(x[1][i_g])
+            for (i_g, g) in enumerate(opf.ctrl_generation)
+                P[idx[g.bus.number]] -= JuMP.value(x.pgc[i_g])
             end
-            for (i_g, g) in enumerate(opfm.renewables)
-                P[idx[g.bus.number]] -= JuMP.value(x[2][i_g])
+            for (i_g, g) in enumerate(opf.renewables)
+                P[idx[g.bus.number]] -= JuMP.value(x.prc[i_g])
             end
-            for (i_g, g) in enumerate(opfm.demands)
-                P[idx[g.bus.number]] += JuMP.value(x[3][i_g])
+            for (i_g, g) in enumerate(opf.demands)
+                P[idx[g.bus.number]] += JuMP.value(x.lsc[i_g])
             end
             for (i, val) in enumerate(P)
                 if abs(val) > 0.00001
@@ -425,23 +425,23 @@ function print_contingency_P(opfm, Pc, Pcc, Pccx=Dict())
 
 
     println("Pcc")
-    for (c, cont) in enumerate(opfm.contingencies)
-        P = zeros(length(opfm.nodes))
+    for (c, cont) in enumerate(opf.contingencies)
+        P = zeros(length(opf.nodes))
         x = get(Pcc, c, 0)
         if x != 0
-            for (i_g, g) in enumerate(opfm.ctrl_generation)
-                P[idx[g.bus.number]] += JuMP.value(x[1][i_g])
-                P[idx[g.bus.number]] -= JuMP.value(x[2][i_g])
+            for (i_g, g) in enumerate(opf.ctrl_generation)
+                P[idx[g.bus.number]] += JuMP.value(x.pgu[i_g])
+                P[idx[g.bus.number]] -= JuMP.value(x.pgd[i_g])
             end
-            for (i_g, g) in enumerate(opfm.dc_branches)
-                P[idx[g.arc.from.number]] += JuMP.value(x[3][i_g])
-                P[idx[g.arc.to.number]] -= JuMP.value(x[3][i_g])
+            for (i_g, g) in enumerate(opf.dc_branches)
+                P[idx[g.arc.from.number]] += JuMP.value(x.pfdccc[i_g])
+                P[idx[g.arc.to.number]] -= JuMP.value(x.pfdccc[i_g])
             end
-            for (i_g, g) in enumerate(opfm.renewables)
-                P[idx[g.bus.number]] -= JuMP.value(x[4][i_g])
+            for (i_g, g) in enumerate(opf.renewables)
+                P[idx[g.bus.number]] -= JuMP.value(x.prcc[i_g])
             end
-            for (i_g, g) in enumerate(opfm.demands)
-                P[idx[g.bus.number]] += JuMP.value(x[5][i_g])
+            for (i_g, g) in enumerate(opf.demands)
+                P[idx[g.bus.number]] += JuMP.value(x.lscc[i_g])
             end
             for (i, val) in enumerate(P)
                 if abs(val) > 0.00001

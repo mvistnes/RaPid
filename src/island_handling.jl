@@ -266,11 +266,11 @@ function get_all_islands(B::AbstractMatrix, bx::Vector{<:Tuple{Integer,Integer}}
     return res
 end
 
-function get_all_islands(opfm::OPFmodel, slack::Integer)
-    idx = get_nodes_idx(opfm.nodes)
-    bx = get_bus_idx.(opfm.branches, [idx])
-    cx = get_bus_idx.(opfm.contingencies, [idx])
-    A = calc_A(bx, length(opfm.nodes))
+function get_all_islands(opf::OPFsystem, slack::Integer)
+    idx = get_nodes_idx(opf.nodes)
+    bx = get_bus_idx.(opf.branches, [idx])
+    cx = get_bus_idx.(opf.contingencies, [idx])
+    A = calc_A(bx, length(opf.nodes))
     return get_all_islands(A' * A, cx, slack)
 end
 

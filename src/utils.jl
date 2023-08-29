@@ -135,10 +135,9 @@ function create_model(optimizer, time_limit_sec; debug=false)
     return mod
 end
 
-""" OPF model type """
-mutable struct OPFmodel
+""" OPF system type """
+mutable struct OPFsystem
     sys::PowerSystems.System
-    mod::JuMP.Model
 
     cost_ctrl_gen::Vector{<:Real}
     cost_renewables::Vector{<:Real}
@@ -154,10 +153,8 @@ mutable struct OPFmodel
     contingencies::Vector{<:Component}
 end
 
-""" Constructor for OPFmodel """
-function opfmodel(sys::System, optimizer, time_limit_sec, voll::Vector{<:Real},
-    contingencies::Vector{<:Branch}=Component[], prob::Vector{<:Real}=[]; debug=false)
-    mod = create_model(optimizer, time_limit_sec, debug=debug)
+""" Constructor for OPFsystem """
+function opfsystem(sys::System, voll::Vector{<:Real}, contingencies::Vector{<:Branch}=Component[], prob::Vector{<:Real}=[]; debug=false)
 
     ctrl_generation = collect(get_ctrl_generation(sys))
     branches = sort_components!(get_branches(sys))
@@ -189,15 +186,15 @@ function opfmodel(sys::System, optimizer, time_limit_sec, voll::Vector{<:Real},
         @info "The system is separated into islands" islands
     end
 
-    return OPFmodel(sys, mod, cost_ctrl_gen, cost_renewables, voll, prob,
+    return OPFsystem(sys, cost_ctrl_gen, cost_renewables, voll, prob,
         ctrl_generation, branches, dc_branches, nodes, demands, renewables, contingencies)
 end
 
-""" Automatic constructor for OPFmodel where voll, prob, and contingencies are automatically computed. """
-function opfmodel(sys::System, optimizer, time_limit_sec; debug=false)
+""" Automatic constructor for OPFsystem where voll, prob, and contingencies are automatically computed. """
+function opfsystem(sys::System; debug=false)
     voll, prob, contingencies = setup(sys, 1, 4)
     fix_generation_cost!(sys)
-    return opfmodel(sys, optimizer, time_limit_sec, voll, contingencies, prob)
+    return opfsystem(sys, voll, contingencies, prob; debug=debug)
 end
 
 function check_values(val::Real, var::Component, name::String; atol=1e-5)
@@ -256,22 +253,22 @@ struct CTypes{T<:Integer}
 end
 
 """ Make a list where all components distributed on their node """
-function make_list(opfm::OPFmodel, idx::Dict{<:Int,<:Int}, nodes::AbstractVector{Bus})
+function make_list(opf::OPFsystem, idx::Dict{<:Int,<:Int}, nodes::AbstractVector{Bus})
     list = [CTypes(n, [Int[] for _ in 1:5]...) for n in nodes]
-    for (i, r) in enumerate(opfm.ctrl_generation)
+    for (i, r) in enumerate(opf.ctrl_generation)
         push!(list[idx[r.bus.number]].ctrl_generation, i)
     end
-    for (i, r) in enumerate(opfm.renewables)
+    for (i, r) in enumerate(opf.renewables)
         push!(list[idx[r.bus.number]].renewables, i)
     end
-    for (i, d) in enumerate(opfm.demands)
+    for (i, d) in enumerate(opf.demands)
         push!(list[idx[d.bus.number]].demands, i)
     end
-    for (i, d) in enumerate(opfm.branches)
+    for (i, d) in enumerate(opf.branches)
         push!(list[idx[d.arc.from.number]].branches, i)
         push!(list[idx[d.arc.to.number]].branches, i)
     end
-    for (i, d) in enumerate(opfm.dc_branches)
+    for (i, d) in enumerate(opf.dc_branches)
         push!(list[idx[d.arc.from.number]].dc_branches, i)
         push!(list[idx[d.arc.to.number]].dc_branches, i)
     end
@@ -439,26 +436,37 @@ get_value(mod::Model, var::JuMP.VariableRef) =
 get_value(mod::Model, var::Vector{JuMP.VariableRef})::Vector{Float64} =
     MOI.get(JuMP.backend(mod), MOI.VariablePrimal(), JuMP.index.(var))
 
+function fix(var::AbstractVector{JuMP.VariableRef}, val::AbstractVector{<:Real}, vec::AbstractVector)
+    for x in vec
+        JuMP.fix(var[x], val[x]; force=true)
+    end
+end
+function fix(var::AbstractVector{JuMP.VariableRef}, vec::AbstractVector)
+    for x in vec
+        JuMP.fix(var[x], 0.0; force=true)
+    end
+end
+
 " Fix for name difference in StandardLoad "
 PowerSystems.get_active_power(value::StandardLoad) = value.current_active_power
 
 """ Return the net power injected at each node. """
-function get_net_Pᵢ(opfm::OPFmodel, idx::Dict{<:Int,<:Int}=get_nodes_idx(opfm.nodes))
-    P = zeros(length(opfm.nodes))
-    vals = get_value(opfm.mod, :pr0)
-    for (i, r) in enumerate(opfm.renewables)
+function get_net_Pᵢ(opf::OPFsystem, mod::Model, idx::Dict{<:Int,<:Int}=get_nodes_idx(opf.nodes))
+    P = zeros(length(opf.nodes))
+    vals = get_value(mod, :pr0)
+    for (i, r) in enumerate(opf.renewables)
         P[idx[r.bus.number]] += get_active_power(r) - vals[i]
     end
-    vals = get_value(opfm.mod, :ls0)
-    for (i, d) in enumerate(opfm.demands)
+    vals = get_value(mod, :ls0)
+    for (i, d) in enumerate(opf.demands)
         P[idx[d.bus.number]] -= get_active_power(d) + vals[i]
     end
-    vals = get_value(opfm.mod, :pg0)
-    for (i, r) in enumerate(opfm.ctrl_generation)
+    vals = get_value(mod, :pg0)
+    for (i, r) in enumerate(opf.ctrl_generation)
         P[idx[r.bus.number]] += vals[i]
     end
-    vals = get_value(opfm.mod, :pfdc0)
-    for (i, d) in enumerate(opfm.dc_branches)
+    vals = get_value(mod, :pfdc0)
+    for (i, d) in enumerate(opf.dc_branches)
         P[idx[d.arc.from.number]] += vals[i]
         P[idx[d.arc.to.number]] -= vals[i]
     end
@@ -466,69 +474,69 @@ function get_net_Pᵢ(opfm::OPFmodel, idx::Dict{<:Int,<:Int}=get_nodes_idx(opfm.
     return P
 end
 
-function get_Pd!(P::Vector{<:Real}, opfm::OPFmodel, idx::Dict{<:Int,<:Int})
-    for r in opfm.renewables
+function get_Pd!(P::Vector{<:Real}, opf::OPFsystem, idx::Dict{<:Int,<:Int})
+    for r in opf.renewables
         P[idx[r.bus.number]] += get_active_power(r)
     end
-    for d in opfm.demands
+    for d in opf.demands
         P[idx[d.bus.number]] -= get_active_power(d)
     end
 end
-function get_Pd(opfm::OPFmodel, idx::Dict{<:Int,<:Int}=get_nodes_idx(opfm.nodes))
-    P = zeros(length(opfm.nodes))
-    get_Pd!(P, opfm, idx)
+function get_Pd(opf::OPFsystem, idx::Dict{<:Int,<:Int}=get_nodes_idx(opf.nodes))
+    P = zeros(length(opf.nodes))
+    get_Pd!(P, opf, idx)
     return P
 end
 
 """ Return power shed at each node. """
-function get_Pshed!(P::Vector{<:Real}, opfm::OPFmodel, idx::Dict{<:Int,<:Int})
-    vals = get_value(opfm.mod, :pr0)
-    for (i, r) in enumerate(opfm.renewables)
+function get_Pshed!(P::Vector{<:Real}, opf::OPFsystem, mod::Model, idx::Dict{<:Int,<:Int})
+    vals = get_value(mod, :pr0)
+    for (i, r) in enumerate(opf.renewables)
         P[idx[r.bus.number]] -= vals[i]
     end
-    vals = get_value(opfm.mod, :ls0)
-    for (i, d) in enumerate(opfm.demands)
+    vals = get_value(mod, :ls0)
+    for (i, d) in enumerate(opf.demands)
         P[idx[d.bus.number]] += vals[i]
     end
 end
-function get_Pshed(opfm::OPFmodel, idx::Dict{<:Int,<:Int}=get_nodes_idx(opfm.nodes))
-    P = zeros(length(opfm.nodes))
-    get_Pshed!(P, opfm, idx)
+function get_Pshed(opf::OPFsystem, mod::Model, idx::Dict{<:Int,<:Int}=get_nodes_idx(opf.nodes))
+    P = zeros(length(opf.nodes))
+    get_Pshed!(P, opf, mod, idx)
     return P
 end
 
 """ Return the power injected by controlled generation at each node. """
-function get_Pgen!(P::Vector{<:Real}, opfm::OPFmodel, idx::Dict{<:Int,<:Int})
-    vals = get_value(opfm.mod, :pg0)
-    for (i, r) in enumerate(opfm.ctrl_generation)
+function get_Pgen!(P::Vector{<:Real}, opf::OPFsystem, mod::Model, idx::Dict{<:Int,<:Int})
+    vals = get_value(mod, :pg0)
+    for (i, r) in enumerate(opf.ctrl_generation)
         P[idx[r.bus.number]] += vals[i]
     end
-    vals = get_value(opfm.mod, :pfdc0)
-    for (i, d) in enumerate(opfm.dc_branches)
+    vals = get_value(mod, :pfdc0)
+    for (i, d) in enumerate(opf.dc_branches)
         P[idx[d.arc.from.number]] += vals[i]
         P[idx[d.arc.to.number]] -= vals[i]
     end
     return P
 end
-function get_Pgen(opfm::OPFmodel, idx::Dict{<:Int,<:Int}=get_nodes_idx(opfm.nodes))
-    P = zeros(length(opfm.nodes))
-    get_Pgen!(P, opfm, idx)
+function get_Pgen(opf::OPFsystem, mod::Model, idx::Dict{<:Int,<:Int}=get_nodes_idx(opf.nodes))
+    P = zeros(length(opf.nodes))
+    get_Pgen!(P, opf, mod, idx)
     return P
 end
 
-function get_controllable(opfm::OPFmodel, idx::Dict{<:Int,<:Int}=get_nodes_idx(opfm.nodes))
-    P = get_Pgen(opfm, idx)
-    get_Pshed!(P, opfm, idx)
+function get_controllable(opf::OPFsystem, mod::Model, idx::Dict{<:Int,<:Int}=get_nodes_idx(opf.nodes))
+    P = get_Pgen(opf, mod, idx)
+    get_Pshed!(P, opf, mod, idx)
     return P
 end
 
 " Calculate the severity index for the system based on line loading "
-function calc_severity(opfm::OPFmodel, lim::Real=0.9)
-    rate = make_named_array(get_rate, get_branches(opfm.sys))
+function calc_severity(opf::OPFsystem, mod::Model, lim::Real=0.9)
+    rate = make_named_array(get_rate, get_branches(opf.sys))
     sev = 0
-    for c in 1:length(opfm.contingencies)
-        for l in get_name.(get_branches(opfm.sys))
-            sev += calc_line_severity(value(opfm.mod[:pfc][l, c]), rate[l], lim)
+    for c in 1:length(opf.contingencies)
+        for l in get_name.(get_branches(opf.sys))
+            sev += calc_line_severity(value(mod[:pfc][l, c]), rate[l], lim)
         end
     end
     return sev
@@ -541,7 +549,7 @@ calc_severity(
     pfc,
     lim::Real=0.9
 ) =
-    sum(calc_line_severity(pfc[l, c], rate[l], lim) for c in 1:length(opfm.contingencies), l in branches)
+    sum(calc_line_severity(pfc[l, c], rate[l], lim) for c in 1:length(opf.contingencies), l in branches)
 
 calc_severity(values::AbstractVector{<:Real}, rate::AbstractVector{<:Real}, lim::Real=0.9) =
     sum(calc_line_severity.(values, rate, [lim]))

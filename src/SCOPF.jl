@@ -31,6 +31,8 @@ import Test
 ## SCOPF.tmr
 ## SCOPF.reset_timer!(SCOPF.tmr)
 
+@enum OPF SC = 0 PSC = 1 PCSC = 2 # SCOPF, P-SCOPF, PC-SCOPF
+
 #=
     Utilities for running and analyzing the SCOPFs.
 =#
@@ -46,11 +48,11 @@ export add_system_data_to_json, get_system, OPFmodel, opfmodel, beta, solve_mode
     making it a MILP.
     Variables can be set through the function call.
 =#
-include("N-1_SCOPF.jl")
-export scopf, p_scopf, pc_scopf
+# include("N-1_SCOPF.jl")
+# export scopf, p_scopf, pc_scopf
 
-include("AC_N-1_SCOPF.jl")
-export ac_scopf
+# include("AC_N-1_SCOPF.jl")
+# export ac_scopf
 
 include("OPF_PTDF.jl")
 export opf
