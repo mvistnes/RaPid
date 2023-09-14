@@ -212,6 +212,20 @@ function print_results(opf::OPFsystem, mod::Model)
     print_variabel(mod, opf.demands, :ls0)
 end
 
+function print_generation_results(opf::OPFsystem, mod::Model)
+    (pg_lim_min, pg_lim_max) = split_pair(get_active_power_limits.(opf.ctrl_generation))
+    Pg = get_value(mod, :pg0)
+    gen_bus = opf.ctrl_generation .|> get_bus .|> get_number
+    println(" Gen   Bus        Active Power Limits \n" *
+            "  #     #       Pmin       Pg       Pmax  \n" *
+            "----  -----   --------  --------  --------")
+    for (i, (n, min, pg, max)) in enumerate(zip(gen_bus, pg_lim_min, Pg, pg_lim_max))
+        @printf("%4d  %4d  %8.2f  %8.2f  %8.2f\n", i, n, min, pg, max)
+    end
+    
+    pr_lim = get_active_power.(opf.renewables)
+end
+
 function print_preventive_results(opf::OPFsystem, mod::Model)
     for (i_g, g) in enumerate(opf.ctrl_generation)
         @printf("%12s: %.3f\n", g.name, JuMP.value(mod[:pg0][i_g]))
@@ -422,7 +436,6 @@ function print_contingency_P(opf::OPFsystem, Pc, Pcc, Pccx=Dict())
             end
         end
     end
-
 
     println("Pcc")
     for (c, cont) in enumerate(opf.contingencies)

@@ -214,6 +214,23 @@ function island_detection_thread_safe(Y::SparseArrays.SparseMatrixCSC{Ty,<:Integ
     end
     return islands
 end
+function island_detection_thread_safe(Y::SparseArrays.SparseMatrixCSC{Ty,<:Integer}, cont::AbstractVector{<:Tuple{Integer,Integer}}; atol::Real=1e-5) where {Ty}
+    T = create_connectivity_matrix(Y)
+    for (i,j) in cont
+        val = Y[i, j]
+        SparseArrays.dropstored!(T, i, j)
+        SparseArrays.dropstored!(T, j, i)
+        isapprox(Y[i, i], val, atol=atol) && SparseArrays.dropstored!(T, i, i)
+        isapprox(Y[j, j], val, atol=atol) && SparseArrays.dropstored!(T, j, j)
+    end
+    # Values need to be exactly zero (or dropped) to be eliminated from the SparseMatrix in the algorithm
+    islands = island_detection(T)
+    if sum(length(i) for i in islands) != size(T, 1)
+        @warn "Counted nodes $(sum(length(i) for i in islands)) != total nodes $(size(T, 1)) in contingency of line $i-$j !"
+    end
+    return islands
+end
+
 
 function island_detection(nodes::AbstractVector{<:Bus}, branches::AbstractVector{<:Branch})
     idx = get_nodes_idx(nodes)

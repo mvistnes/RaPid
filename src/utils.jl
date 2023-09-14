@@ -77,6 +77,7 @@ end
 get_generator_cost(gen) = get_operation_cost(gen) |> get_variable |> get_cost |> _get_g_value
 _get_g_value(x::AbstractVector{<:Tuple{Real,Real}}) = x[1]
 _get_g_value(x::Tuple{<:Real,<:Real}) = x
+_get_g_value(x::T) where {T<:Real} = (zero(T), x)
 
 get_y(value::Branch) = 1 / (get_r(value) + get_x(value) * im)
 
@@ -94,7 +95,7 @@ function get_specs(branch::TapTransformer)
     B = (from=PowerSystems.get_primary_shunt(branch), to=0.0)
     tap = get_tap(branch)
     tr = tap
-    return real(y), imag(y), B, tap, tap, 0.0
+    return real(y), imag(y), B, tap, tr, 0.0
 end
 function get_specs(branch::PhaseShiftingTransformer)
     y = get_y(branch)
@@ -139,7 +140,7 @@ end
 mutable struct OPFsystem
     sys::PowerSystems.System
 
-    cost_ctrl_gen::Vector{<:Real}
+    cost_ctrl_gen::Vector{<:Tuple{Real, Real}}
     cost_renewables::Vector{<:Real}
     voll::Vector{<:Real}
     prob::Vector{<:Real}
@@ -156,17 +157,18 @@ end
 """ Constructor for OPFsystem """
 function opfsystem(sys::System, voll::Vector{<:Real}, contingencies::Vector{<:Branch}=Component[], prob::Vector{<:Real}=[]; debug=false)
 
-    ctrl_generation = collect(get_ctrl_generation(sys))
+    ctrl_generation = sort_components!(get_ctrl_generation(sys))
     branches = sort_components!(get_branches(sys))
     dc_branches = sort_components!(get_dc_branches(sys))
     nodes = sort_components!(get_nodes(sys))
-    demands = collect(get_demands(sys))
-    renewables = collect(get_renewables(sys))
+    demands = sort_components!(get_demands(sys))
+    renewables = sort_components!(get_renewables(sys))
 
-    cost_ctrl_gen = Vector{Float64}([get_generator_cost(g)[2] for g in ctrl_generation])
+    cost_ctrl_gen = Vector{Tuple{Float64, Float64}}([get_generator_cost(g) for g in ctrl_generation])
     cost_renewables = Vector{Float64}() # Vector{Float64}([get_generator_cost(g)[2] for g in renewables])
 
-    check_values(cost_ctrl_gen, ctrl_generation, "cost")
+    check_values(getindex.(cost_ctrl_gen, 1), ctrl_generation, "cost")
+    check_values(getindex.(cost_ctrl_gen, 2), ctrl_generation, "cost")
     check_values(voll, demands, "voll")
     check_values(getindex.(get_active_power_limits.(ctrl_generation), :max), ctrl_generation, "max_active_power")
     check_values(get_active_power.(demands), demands, "max_active_power")
@@ -202,7 +204,7 @@ function check_values(val::Real, var::Component, name::String; atol=1e-5)
         @info "$(get_name(var)) has $val value in $name."
     end
 end
-check_values(val, var, name; atol=1e-5) = check_values.(val, var, [name], atol=atol)
+check_values(val::AbstractVector, var::AbstractVector{<:Component}, name::String; atol=1e-5) = check_values.(val, var, [name], atol=atol)
 
 """Find value of β, β = 1 if from-bus is the bus, β = -1 if to-bus is the bus, 0 else"""
 beta(bus::Bus, branch::Branch) = bus == branch.arc.from ? 1 : bus == branch.arc.to ? -1 : 0
@@ -215,15 +217,15 @@ end
 a(line::String, contingency::String) = ifelse(line != contingency, 1, 0)
 
 """ An iterator to a type of power system component """
-get_gens_t(sys::System) = get_components(ThermalGen, sys)
-get_gens_h(sys::System) = get_components(HydroGen, sys)
-get_branches(sys::System) = get_components(ACBranch, sys) # Includes both Line, Transformer, and Phase Shifting Transformer
-get_dc_branches(sys::System) = get_components(DCBranch, sys)
-get_nodes(sys::System) = get_components(Bus, sys)
-get_demands(sys::System) = get_components(StaticLoad, sys)
-get_renewables(sys::System) = get_components(RenewableGen, sys) # Renewable modelled as negative demand
-get_ctrl_generation(sys::System) = Iterators.flatten((get_gens_t(sys), get_gens_h(sys))) # An iterator of all controllable generators
-get_generation(sys::System) = Iterators.flatten((get_ctrl_generation(sys), get_renewables(sys))) # An iterator of all generation
+get_gens_t(sys::System) = get_components(ThermalGen, sys) |> collect
+get_gens_h(sys::System) = get_components(HydroGen, sys) |> collect
+get_branches(sys::System) = get_components(ACBranch, sys) |> collect # Includes both Line, Transformer, and Phase Shifting Transformer
+get_dc_branches(sys::System) = get_components(DCBranch, sys) |> collect
+get_nodes(sys::System) = get_components(Bus, sys) |> collect
+get_demands(sys::System) = get_components(StaticLoad, sys) |> collect
+get_renewables(sys::System) = get_components(RenewableGen, sys) |> collect # Renewable modelled as negative demand
+get_ctrl_generation(sys::System) = vcat(get_gens_t(sys), get_gens_h(sys)) # An iterator of all controllable generators
+get_generation(sys::System) = vcat(get_ctrl_generation(sys), get_renewables(sys)) # An iterator of all generation
 
 """ A sorted vector to a type of power system component """
 sort_components!(list::PowerSystems.FlattenIteratorWrapper{T}) where {T} = sort_components!(collect(T, list))
@@ -529,6 +531,9 @@ function get_controllable(opf::OPFsystem, mod::Model, idx::Dict{<:Int,<:Int}=get
     get_Pshed!(P, opf, mod, idx)
     return P
 end
+
+fix_values(mod::Model, symb::Symbol) = JuMP.fix.(mod[symb], get_value(mod, symb), force=true)
+fix_values(mod::Model, var::Vector{JuMP.VariableRef}) = JuMP.fix.(var, get_value(mod, var), force=true)
 
 " Calculate the severity index for the system based on line loading "
 function calc_severity(opf::OPFsystem, mod::Model, lim::Real=0.9)

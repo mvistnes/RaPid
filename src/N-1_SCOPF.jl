@@ -1,6 +1,5 @@
 # CC BY 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2022
 
-@enum OPF SC = 0 PSC = 1 PCSC = 2 # SCOPF, P-SCOPF, PC-SCOPF
 
 """ Run a SCOPF of a power system """
 function scopf(type::OPF, system::System, optimizer;

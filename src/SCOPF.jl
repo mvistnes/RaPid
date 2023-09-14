@@ -10,7 +10,9 @@ using Printf
 # using PowerSystemCaseBuilder
 using Test
 using Statistics
+using DelimitedFiles
 
+import Logging
 import SparseArrays
 # import StaticArrays
 # import Octavian
@@ -31,7 +33,7 @@ import Test
 ## SCOPF.tmr
 ## SCOPF.reset_timer!(SCOPF.tmr)
 
-@enum OPF SC = 0 PSC = 1 PCSC = 2 # SCOPF, P-SCOPF, PC-SCOPF
+@enum OPF SC = 0 PSC = 1 PCSC = 2 PCFSC = 3 # SCOPF, P-SCOPF, PC-SCOPF
 
 #=
     Utilities for running and analyzing the SCOPFs.
@@ -40,6 +42,27 @@ include("utils.jl")
 export add_system_data_to_json, get_system, OPFmodel, opfmodel, beta, solve_model!, set_warm_start!,
     calc_severity, calc_line_severity, get_branches, get_nodes, sort_components!,
     get_nodes_idx, get_bus_idx, find_slack, get_net_Pᵢ, get_Pᵢ
+
+#=
+    DC power flow functions.
+=#
+include("dc_power_flow.jl")
+export DCPowerFlow, calc_Pᵢ, build_adjacency, connectivitymatrix, calc_A, calc_X, calc_isf,
+    calc_B, calc_D, get_isf, get_ptdf, find_overload, filter_overload, calculate_line_flows,
+    calculate_line_flows!, calc_Pline, run_pf
+
+#=
+    Functions using the Inverse Matrix Modification Lemma.
+=#
+include("imml.jl")
+export IMML, get_changed_angles, calc_Pline, get_changed_X, get_isf, calculate_line_flows,
+    calculate_line_flows!, get_overload, get_lodf
+
+#=
+    Functions for handling islands in the system.
+=#
+include("island_handling.jl")
+export handle_islands, island_detection_thread_safe, get_all_islands
 
 #=  
     Basic structure of the SCOPF problems
@@ -65,20 +88,6 @@ export opf
 # export sl_scopf, c_scopf
 
 #=
-    DC power flow functions.
-=#
-include("dc_power_flow.jl")
-export DCPowerFlow, calc_Pᵢ, build_adjacency, connectivitymatrix, calc_A, calc_X, calc_isf,
-    calc_B, calc_D, get_isf, get_ptdf, find_overload, filter_overload, calculate_line_flows,
-    calculate_line_flows!, calc_Pline, run_pf
-
-#=
-    Functions for handling islands in the system.
-=#
-include("island_handling.jl")
-export handle_islands, island_detection_thread_safe, get_all_islands
-
-#=
     A formulation of a PC_SCOPF using Benders' decomposition.
 =#
 include("benders.jl")
@@ -88,11 +97,10 @@ include("contingency_select.jl")
 export run_contingency_select
 
 #=
-    Functions using the Inverse Matrix Modification Lemma.
+    Functions for running reliability calculations.
 =#
-include("imml.jl")
-export IMML, get_changed_angles, calc_Pline, get_changed_X, get_isf, calculate_line_flows,
-    calculate_line_flows!, get_overload, get_lodf
+include("reliability.jl")
+export run_reliability_calculation
 
 #=
     Functions for printing and plotting SCOPF results.

@@ -35,11 +35,11 @@ import Gurobi
     #     end
     # end
     # SCOPF.set_ramp_limits!(system, 0.01)
-    SCOPF.set_rate!.(SCOPF.get_branches(system), SCOPF.get_rate.(SCOPF.get_branches(system)) * 0.8);
+    # SCOPF.set_rate!.(SCOPF.get_branches(system), SCOPF.get_rate.(SCOPF.get_branches(system)) * 0.8);
     SCOPF.set_operation_cost!.(SCOPF.get_gens_h(system), [15.0, 16.0, 17.0, 18.0, 19.0, 20.0])
 
     # voll, prob, contingencies = SCOPF.setup(system, 10, 40);
-    voll = [4304, 5098, 5245, 5419, 4834, 5585, 5785, 5192, 4575, 5244, 4478, 5698, 4465, 4859, 5032, 5256, 4598]
+    voll = [4304., 5098., 5245., 5419., 4834., 5585., 5785., 5192., 4575., 5244., 4478., 5698., 4465., 4859., 5032., 5256., 4598.]
     branches = SCOPF.sort_components!(SCOPF.get_branches(system));
     # c = [7,12,13,21,22,23,27]
     contingencies = branches

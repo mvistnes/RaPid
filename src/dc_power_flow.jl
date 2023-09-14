@@ -144,6 +144,7 @@ calc_B(A::AbstractMatrix{<:Real}, DA::AbstractMatrix{<:Real}) = A' * DA
 function calc_B(branches::AbstractVector{<:Tuple{Integer,Integer}}, x::AbstractVector{<:Real})
     A = calc_A(branches)
     D = calc_D(x)
+        # TODO: add support for TapTransformer and PhaseShiftingTransformer
     return A' * (D * A)
 end
 calc_B(branches::AbstractVector{<:Branch}, idx::Dict{<:Int,<:Integer}) =
@@ -170,7 +171,7 @@ function _calc_X!(X::Matrix{T}, slack::Integer) where {T<:Real}
     X[slack, slack] = one(T)
     LinearAlgebra.inv!(LinearAlgebra.lu!(X))
     # LinearAlgebra.inv!(LinearAlgebra.cholesky!(X))
-    # X should always be positive definite and thus Cholesky can be used
+    # X should always be positive definite and thus Cholesky can be used (OR IS THIS TRUE??)
     X[slack, slack] = zero(T)
     return X
 end
@@ -228,7 +229,7 @@ function get_isf!(B::SparseArrays.SparseMatrixCSC{T,<:Integer}, DA::AbstractMatr
     B[:, slack] .= zero(T)
     B[slack, :] .= zero(T)
     B[slack, slack] = one(T)
-    K = KLU.klu(B)
+    K = KLU.klu(B) # TODO: Option to use old KLU containers or symbolics
     ϕ = Matrix(DA')
     KLU.solve!(K, ϕ)
     ϕ[slack, :] .= zero(T)
@@ -247,7 +248,7 @@ function _calc_θ!(θ::AbstractVector{T}, B::SparseArrays.SparseMatrixCSC{T,<:In
     B[:, slack] .= zero(T)
     B[slack, :] .= zero(T)
     B[slack, slack] = one(T)
-    K = KLU.klu(B)
+    K = KLU.klu(B) # TODO: Option to use old KLU containers or symbolics
     copyto!(θ, P)
     KLU.solve!(K, θ)
     θ[slack] = zero(T)

@@ -11,7 +11,6 @@ using BenchmarkTools
 function test_ieee_rts()
     system = SCOPF.System("data\\matpower\\IEEE_RTS.m")
     SCOPF.set_rate!.(SCOPF.get_branches(system), SCOPF.get_rate.(SCOPF.get_branches(system)) * 0.8);
-    benchmark_sys(system, 2, 11)
 
     SCOPF.set_operation_cost!.(SCOPF.get_gens_h(system), [15.0, 16.0, 17.0, 18.0, 19.0, 20.0])
     voll = [4304, 5098, 5245, 5419, 4834, 5585, 5785, 5192, 4575, 5244, 4478, 5698, 4465, 4859, 5032, 5256, 4598]
@@ -63,7 +62,6 @@ function test_big_sys()
     ramp_mult = 10
     for (sysname, c1, c2) in zip(["data\\matpower\\ACTIVSg500.m", "data\\matpower\\ACTIVSg2000.m"], [2, 2], [1, 9])
         system = SCOPF.System(sysname)
-        benchmark_sys(system, c1, c2)
 
         voll, prob, contingencies = SCOPF.setup(system, 100, 400);
         SCOPF.fix_generation_cost!(system);
@@ -95,23 +93,8 @@ function test_big_sys()
     end
 end
 
-function benchmark_sys(system::System, c1::Int, c2::Int)
-    pf = SCOPF.DCPowerFlow(system)
-    nodes = SCOPF.sort_components!(SCOPF.get_nodes(system))
-    branches = SCOPF.sort_components!(SCOPF.get_branches(system))
-    bx = SCOPF.get_bus_idx.(branches, [SCOPF.get_nodes_idx(nodes)])
-    islands = SCOPF.island_detection(pf.B, bx[c2][1], bx[c2][2])
-    island = SCOPF.find_ref_island(islands, pf.slack)
-    island_b = SCOPF.find_island_branches(islands[island], pf.DA, c2)
-    ptdf = similar(pf.ϕ)
-    X = similar(pf.X)
-    F = similar(pf.F)
-    
-    @time SCOPF.get_isf(pf.DA, pf.B, bx[c2], c2, pf.slack, islands[island], island_b)
-    @time SCOPF.get_isf!(ptdf, X, pf.X, pf.B, pf.DA, bx[c1], c1)
-    @time SCOPF.calculate_line_flows!(F, pf, bx[c1], c1)
-end
-
 
 test_ieee_rts()
+test_ieee_rts()
+test_big_sys()
 test_big_sys()
