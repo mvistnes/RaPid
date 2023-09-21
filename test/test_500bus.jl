@@ -7,7 +7,8 @@ function test_g500()
     # system = System("data\\matpower\\ACTIVSg2000.m")
     # system = System("data\\matpower\\case_ACTIVSg10k.m")
     voll, prob, contingencies = SCOPF.setup(system, 100., 400.);
-    SCOPF.fix_generation_cost!(system);
+    # SCOPF.fix_generation_cost!(system);
+
     # nodes = SCOPF.sort_components!(SCOPF.get_nodes(system))
     # active_capacities = zeros(length(nodes))
     # reactive_capacities = zeros(length(nodes))

@@ -69,9 +69,14 @@ PowerSystems.set_active_power!(dem::StandardLoad, val::Real) =
     PowerSystems.set_current_active_power!(dem, val)
 
 function set_ramp_limits!(system::System, ramp_mult::Real=0.01)
-    gens = get_ctrl_generation(system)
-    ramp_lim = [(up=(x.max * ramp_mult), down=(x.max * ramp_mult)) for x in get_active_power_limits.(gens)]
-    PowerSystems.set_ramp_limits!.(gens, ramp_lim)
+    set_ramp_limit!.(get_ctrl_generation(system), ramp_mult)
+end
+function set_ramp_limit!(gen::Generator, ramp_mult::Real=0.01, min_ramp=1e-6)
+    ramp_lim = PowerSystems.get_ramp_limits(gen)
+    if ramp_lim < (up=min_ramp, down=min_ramp)
+        p_lim = get_active_power_limits(gen)
+        PowerSystems.set_ramp_limits!(gen, (up=(p_lim.max * ramp_mult), down=(p_lim.max * ramp_mult)))
+    end
 end
 
 get_generator_cost(gen) = get_operation_cost(gen) |> get_variable |> get_cost |> _get_g_value
@@ -117,7 +122,7 @@ make_prob(contingencies::AbstractVector, prob_min=0.1, prob_max=0.4) =
 
 get_system(fname::String) = System(joinpath("data", fname))
 
-function create_model(optimizer, time_limit_sec; debug=false)
+function create_model(optimizer, time_limit_sec; silent=true, debug=false)
     # mod = Model(optimizer)
     if Gurobi.Optimizer == optimizer
         mod = Model(optimizer_with_attributes(optimizer, "Threads" => Threads.nthreads()); add_bridges=false)
@@ -125,6 +130,7 @@ function create_model(optimizer, time_limit_sec; debug=false)
         mod = Model(optimizer; add_bridges=false)
     end
     set_string_names_on_creation(mod, debug)
+    MOI.set(mod, MOI.Silent(), silent) # supress output from the solver
     # @debug begin
     #     set_string_names_on_creation(mod, true)
     #     "Variable names is on."
@@ -138,8 +144,6 @@ end
 
 """ OPF system type """
 mutable struct OPFsystem
-    sys::PowerSystems.System
-
     cost_ctrl_gen::Vector{<:Tuple{Real, Real}}
     cost_renewables::Vector{<:Real}
     voll::Vector{<:Real}
@@ -188,7 +192,7 @@ function opfsystem(sys::System, voll::Vector{<:Real}, contingencies::Vector{<:Br
         @info "The system is separated into islands" islands
     end
 
-    return OPFsystem(sys, cost_ctrl_gen, cost_renewables, voll, prob,
+    return OPFsystem(cost_ctrl_gen, cost_renewables, voll, prob,
         ctrl_generation, branches, dc_branches, nodes, demands, renewables, contingencies)
 end
 
@@ -196,7 +200,7 @@ end
 function opfsystem(sys::System; debug=false)
     voll, prob, contingencies = setup(sys, 1, 4)
     fix_generation_cost!(sys)
-    return opfsystem(sys, voll, contingencies, prob; debug=debug)
+    return opfsystem(voll, contingencies, prob; debug=debug)
 end
 
 function check_values(val::Real, var::Component, name::String; atol=1e-5)
@@ -438,17 +442,6 @@ get_value(mod::Model, var::JuMP.VariableRef) =
 get_value(mod::Model, var::Vector{JuMP.VariableRef})::Vector{Float64} =
     MOI.get(JuMP.backend(mod), MOI.VariablePrimal(), JuMP.index.(var))
 
-function fix(var::AbstractVector{JuMP.VariableRef}, val::AbstractVector{<:Real}, vec::AbstractVector)
-    for x in vec
-        JuMP.fix(var[x], val[x]; force=true)
-    end
-end
-function fix(var::AbstractVector{JuMP.VariableRef}, vec::AbstractVector)
-    for x in vec
-        JuMP.fix(var[x], 0.0; force=true)
-    end
-end
-
 " Fix for name difference in StandardLoad "
 PowerSystems.get_active_power(value::StandardLoad) = value.current_active_power
 
@@ -531,9 +524,6 @@ function get_controllable(opf::OPFsystem, mod::Model, idx::Dict{<:Int,<:Int}=get
     get_Pshed!(P, opf, mod, idx)
     return P
 end
-
-fix_values(mod::Model, symb::Symbol) = JuMP.fix.(mod[symb], get_value(mod, symb), force=true)
-fix_values(mod::Model, var::Vector{JuMP.VariableRef}) = JuMP.fix.(var, get_value(mod, var), force=true)
 
 " Calculate the severity index for the system based on line loading "
 function calc_severity(opf::OPFsystem, mod::Model, lim::Real=0.9)

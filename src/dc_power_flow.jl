@@ -261,17 +261,23 @@ calc_θ!(B::AbstractMatrix{T}, P::AbstractVector{T}, slack::Integer) where {T<:R
     Make the isf-matrix after a line outage using base case D*A and B. 
     cont[1] (from_bus), cont[2] (to_bus), and cont_branch are index numbers 
 """
-function get_isf!(ϕ::AbstractMatrix{<:Real}, DA::AbstractMatrix{<:Real}, B::AbstractMatrix{<:Real}, cont::Tuple{Integer,Integer},
+function get_isf!(ϕ::AbstractMatrix{<:Real}, DA::AbstractMatrix{<:Real}, B0::AbstractMatrix{<:Real}, cont::Tuple{Integer,Integer},
     cont_branch::Integer, slack::Integer
 )
-    X = calc_X(DA, B, cont, cont_branch, slack)
-    calc_isf!(ϕ, DA, X)
-    ϕ[cont_branch, :] .= 0
+    B = get_cont_B(DA, B0, cont, cont_branch)
+    copy!(ϕ, get_isf!(B, DA, slack))
+    ϕ[cont_branch, :] .= 0.0
     return ϕ
 end
 get_isf(DA::AbstractMatrix{T}, B::AbstractMatrix{<:Real}, cont::Tuple{Integer,Integer},
     cont_branch::Integer, slack::Integer) where {T<:Real} =
     get_isf!(Matrix{T}(undef, size(DA)), DA, B, cont, cont_branch, slack)
+
+function get_cont_B(DA::AbstractMatrix{<:Real}, B0::AbstractMatrix{<:Real}, cont::Tuple{Integer,Integer}, cont_branch::Integer)
+    B = copy(B0)
+    neutralize_line!(B, cont[1], cont[2], DA[cont_branch, cont[1]])
+    return B
+end
 
 """ 
     Find voltage angles after a line outage using base case D*A and B. 

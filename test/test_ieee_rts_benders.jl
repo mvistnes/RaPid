@@ -10,7 +10,7 @@ import Gurobi
 # function test_ieee_rts()
     system = SCOPF.System("data\\matpower\\IEEE_RTS.m")
     # SCOPF.fix_generation_cost!(system);
-    nodes = SCOPF.sort_components!(SCOPF.get_nodes(system))
+    # nodes = SCOPF.sort_components!(SCOPF.get_nodes(system))
     # idx = SCOPF.get_nodes_idx(nodes)
     # active_capacities = zeros(length(nodes))
     # reactive_capacities = zeros(length(nodes))
@@ -35,7 +35,7 @@ import Gurobi
     #     end
     # end
     # SCOPF.set_ramp_limits!(system, 0.01)
-    # SCOPF.set_rate!.(SCOPF.get_branches(system), SCOPF.get_rate.(SCOPF.get_branches(system)) * 0.8);
+    SCOPF.set_rate!.(SCOPF.get_branches(system), SCOPF.get_rate.(SCOPF.get_branches(system)) * 0.8);
     SCOPF.set_operation_cost!.(SCOPF.get_gens_h(system), [15.0, 16.0, 17.0, 18.0, 19.0, 20.0])
 
     # voll, prob, contingencies = SCOPF.setup(system, 10, 40);
@@ -51,8 +51,8 @@ import Gurobi
             0.02, 0.02, 0.02, 0.02, 0.40, 0.39, 0.40, 0.52, 0.49, 0.38, 0.33, 0.41, 0.41,
             0.41, 0.35, 0.34, 0.32, 0.54, 0.35, 0.35, 0.38, 0.38, 0.34, 0.34, 0.45 # branches
         ]
-    # prob /= 8760
-    prob /= 100
+    prob /= 8760
+    # prob /= 100
     # prob = prob[c]
     short = 1.2
     long = 1.0

@@ -3,16 +3,52 @@
 """ 
 Solve the optimization model using contingency selection.
 """
-function run_contingency_select(type::OPF, system::System, optimizer, voll=nothing, prob=nothing, contingencies=nothing;
-    time_limit_sec::Int64=600, ramp_minutes=10, ramp_mult=10, max_shed=1.0, max_curtail=1.0, lim=1e-6,
-    short_term_multi::Real=1.5, long_term_multi::Real=1.2, max_itr=length(contingencies),
-    p_failure=0.0, branch_c=nothing, rate_c=0.0, debug=false
+function run_contingency_select(
+    type::OPF, 
+    system::System, 
+    optimizer, 
+    voll=nothing, 
+    prob=nothing, 
+    contingencies=nothing;
+    time_limit_sec::Int64=600, 
+    ramp_minutes=10, 
+    ramp_mult=10, 
+    max_shed=1.0, 
+    max_curtail=1.0, 
+    lim=1e-6,
+    short_term_multi::Real=1.5, 
+    long_term_multi::Real=1.2, 
+    max_itr=length(contingencies),
+    p_failure=0.0, 
+    branch_c=nothing, 
+    rate_c=0.0, 
+    silent=true,
+    debug=false
 )
-    @assert short_term_multi >= long_term_multi
-    total_time = time()
     mod, opf, pf, oplim, Pc, Pcc, Pccx = SCOPF.opf(SC, system, optimizer, voll=voll, contingencies=contingencies, prob=prob,
         time_limit_sec=time_limit_sec, ramp_minutes=ramp_minutes, ramp_mult=ramp_mult, max_shed=max_shed, max_curtail=max_curtail,
-        short_term_multi=short_term_multi, long_term_multi=long_term_multi, p_failure=p_failure, debug=debug)
+        short_term_multi=short_term_multi, long_term_multi=long_term_multi, p_failure=p_failure, silent=silent, debug=debug)
+    return run_contingency_select(SC, type, mod, opf, pf, oplim, Pc, Pcc, Pccx, lim, max_itr, branch_c, rate_c, debug)
+end
+        
+function run_contingency_select(
+    basetype::OPF, 
+    type::OPF, 
+    mod::Model, 
+    opf::OPFsystem, 
+    pf::DCPowerFlow, 
+    oplim::Oplimits, 
+    Pc::Dict{<:Integer, Main.SCOPF.ExprC}, 
+    Pcc::Dict{<:Integer, Main.SCOPF.ExprCC}, 
+    Pccx::Dict{<:Integer, Main.SCOPF.ExprCCX},
+    lim=1e-6,
+    max_itr=length(opf.contingencies),
+    branch_c=nothing, 
+    rate_c=0.0, 
+    debug=false
+)
+    @assert isempty(Pc) || basetype == PSC::OPF
+    @assert isempty(Pcc) && isempty(Pccx)
     MOI.set(mod, MOI.Silent(), true) # supress output from the solver
     solve_model!(mod)
     termination_status(mod) != MOI.OPTIMAL && return mod, opf, pf, oplim, Pc, Pcc, Pccx
@@ -43,8 +79,9 @@ function run_contingency_select(type::OPF, system::System, optimizer, voll=nothi
         else
             islands, island, island_b = handle_islands(pf.B, pf.DA, cont, c, pf.slack)
             get_isf!(ptdf, pf.DA, pf.B, cont, c, pf.slack, islands[island], island_b)
-            add_contingencies!(Pc, opf, oplim, mod, bd.obj, islands, island, ptdf, bd.list, c)
+            basetype == SC::OPF && add_contingencies!(Pc, opf, oplim, mod, bd.obj, islands, island, ptdf, bd.list, c)
             type == PCSC::OPF && add_contingencies!(Pcc, opf, oplim, mod, bd.obj, islands, island, ptdf, bd.list, c)
+            type == PCFSC::OPF && add_contingencies!(Pccx, opf, oplim, mod, bd.obj, islands, island, ptdf, bd.list, c)
             pre += 1
             corr += 1
             @debug "Island: Contingency line $(cont[1])-$(cont[2])-i_$(c)"
@@ -91,7 +128,9 @@ function run_contingency_select(type::OPF, system::System, optimizer, voll=nothi
             empty!(island_b)
         end
         
-        olc, olcc, olccx = calculate_contingency_line_flows!(ΔPc, ΔPcc, ΔPccx, flow, θ, B, Val(type), Pc, Pcc, Pccx, opf, oplim, mod, pf, bd, cont, c, islands, island, island_b)
+        olc = basetype == SC::OPF ? calculate_contingency_overload!(ΔPc, flow, (oplim.branch_rating * oplim.short_term_multi), θ, B, Pc, opf, mod, pf, bd, cont, c, islands, island, island_b) : Tuple{Int64,Float64}[]
+        olcc = type >= PCSC::OPF ? calculate_contingency_overload!(ΔPcc, flow, (oplim.branch_rating * oplim.long_term_multi), θ, B, Pccx, opf, mod, pf, bd, cont, c, islands, island, island_b) : Tuple{Int64,Float64}[]
+        olccx = type >= PCFSC::OPF ? calculate_contingency_overload!(ΔPccx, flow, (oplim.branch_rating * oplim.long_term_multi), θ, B, Pccx, opf, mod, pf, bd, cont, c, islands, island, island_b) : Tuple{Int64,Float64}[]
         if !isempty(olc) || !isempty(olcc) || !isempty(olccx)
             # Calculate the power flow with the new outage and find if there are any overloads
             if !is_islanded(pf, cont, c)
@@ -109,7 +148,7 @@ function run_contingency_select(type::OPF, system::System, optimizer, voll=nothi
             @info @sprintf "Pre %d: Contingency line %d-%d-i_%d" pre cont[1] cont[2] c 
             cut_added = 2
         end
-        if type == PCSC::OPF && !isempty(olcc)
+        if !isempty(olcc)
             add_contingencies!(Pcc, opf, oplim, mod, bd.obj, islands, island, ptdf, bd.list, c)
             corr += 1
             @info @sprintf "Corr %d: Contingency line %d-%d-i_%d" corr cont[1] cont[2] c
@@ -127,7 +166,7 @@ function run_contingency_select(type::OPF, system::System, optimizer, voll=nothi
         if i > length(contids)
             iterations > max_itr && break
             if cut_added == 0 # loops until no new cuts are added for the contingencies
-                @printf "END: Total solve time %.4f. Total time %.4f.\n" total_solve_time (time() - total_time)
+                @printf "END: Total solve time %.4f.\n" total_solve_time
                 return mod, opf, pf, oplim, Pc, Pcc, Pccx
             else
                 cut_added = 0
