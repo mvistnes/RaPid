@@ -25,8 +25,8 @@ function scatter_all(model, system; sys_name="")
         (:ls0, StaticLoad), (:lsc, StaticLoad), (:lscc, StaticLoad),
         (:qg0, Generator), (:qgu, Generator), (:qgd, Generator),
         (:qf0, Branch), (:qfc, Branch), (:qfcc, Branch),
-        (:va0, Bus), (:vac, Bus), (:vacc, Bus),
-        (:cbc, Bus), (:cbcc, Bus)
+        (:va0, ACBus), (:vac, ACBus), (:vacc, ACBus),
+        (:cbc, ACBus), (:cbcc, ACBus)
     ]
     for name in names
         try

@@ -32,7 +32,7 @@ Input:
     from_bus::Integer,
     to_bus::Integer,
     branch::Integer;
-    atol::Real=1e-5
+    atol::Real=1e-8
 ) where {T<:Real}
     change = DA[branch, to_bus] / B[from_bus, to_bus]
     # x = change * (X[:, from_bus] - X[:, to_bus])
@@ -91,7 +91,7 @@ Input:
     from_bus::Integer,
     to_bus::Integer,
     branch::Integer;
-    atol::Real=1e-5
+    atol::Real=1e-8
 ) where {T<:Real}
 
     # X_new = X - (X*A[from_bus,:]*DA[from_bus,to_bus]*x)/(1+DA[from_bus,to_bus]*x*A[from_bus,:])
@@ -163,7 +163,7 @@ Input:
     from_bus::Integer,
     to_bus::Integer,
     branch::Integer;
-    atol::Real=1e-5
+    atol::Real=1e-8
 ) where {T<:Real}
     change = DA[branch, to_bus] / B[from_bus, to_bus]
     # x = change * (X[:,from_bus] - X[:,to_bus])

@@ -23,7 +23,7 @@ function benders(opf::OPFsystem, mod::Model)
     Pᵢ = get_value(mod, :p0)
     Pg = get_controllable(opf, mod, idx)
     Pd = get_Pd(opf, idx) # Fixed injection
-    @assert isapprox(Pg, (Pᵢ - Pd); atol=1e-5) string(Pg - (Pᵢ - Pd))
+    @assert isapprox(Pg, (Pᵢ - Pd); atol=1e-8) string(Pg - (Pᵢ - Pd))
     return Benders(idx, list, obj, Pᵢ, Pg, Pd)
 end
 
@@ -89,8 +89,8 @@ function run_benders!(
     #     JuMP.@constraint(mod, mod[:pf0][findfirst(x -> x == branch_c, opf.branches)] == rate_c)
     # end
     solve_model!(mod)
-    termination_status(mod) != MOI.OPTIMAL && return mod, opf, pf, oplim, Pc, Pcc, Pccx
     total_solve_time = solve_time(mod)
+    termination_status(mod) != MOI.OPTIMAL && return mod, opf, pf, oplim, Pc, Pcc, Pccx, total_solve_time
     @debug "lower_bound = $(objective_value(mod))"
 
     # Set variables
@@ -140,7 +140,7 @@ function run_benders!(
     end
 
     total_solve_time = update_model!(mod, pf, bd, total_solve_time)
-    termination_status(mod) != MOI.OPTIMAL && return mod, opf, pf, oplim, Pc, Pcc, Pccx
+    termination_status(mod) != MOI.OPTIMAL && return mod, opf, pf, oplim, Pc, Pcc, Pccx, total_solve_time
     GC.safepoint()
     # end
     # LinearAlgebra.BLAS.set_num_threads(Threads.nthreads())
@@ -167,8 +167,8 @@ function run_benders!(
     cut_added = 1
     for iterations in 1:max_itr
         if cut_added == 0 # loops until no new cuts are added for the contingencies
-            @printf "\nEND: Total solve time %.4f.\n" total_solve_time
-            return mod, opf, pf, oplim, Pc, Pcc, Pccx
+            # @printf "\nEND: Total solve time %.4f.\n" total_solve_time
+            return mod, opf, pf, oplim, Pc, Pcc, Pccx, total_solve_time
         end
         cut_added = 0
         @info "Iteration $iterations"
@@ -241,12 +241,12 @@ function run_benders!(
                 total_solve_time = update_model!(mod, pf, bd, total_solve_time)
                 cut_added = 1
             end
-            termination_status(mod) != MOI.OPTIMAL && return mod, opf, pf, oplim, Pc, Pcc, Pccx
+            termination_status(mod) != MOI.OPTIMAL && return mod, opf, pf, oplim, Pc, Pcc, Pccx, total_solve_time
         end
 
     end
     @warn "Reached $(length(opf.contingencies)) iterations without a stable solution."
-    return mod, opf, pf, oplim, Pc, Pcc, Pccx
+    return mod, opf, pf, oplim, Pc, Pcc, Pccx, total_solve_time
 end
 
 """ Solve model and update the power flow object """
@@ -382,6 +382,32 @@ function get_P(P::Dict, opf::OPFsystem, oplim::Oplimits, mod::Model, obj::JuMP.A
     return get(P, c, 0)
 end
 
+function add_cut(opf::OPFsystem, mod::Model, bd::Benders, ptdf::AbstractMatrix{<:Real}, overloads::Vector{<:Tuple{Integer,Real}},
+    cont::Tuple{Integer,Integer}, c::Integer, cut_added::Integer, lim::Real, id::Integer
+)
+    for (i, ol) in overloads
+        expr = JuMP.@expression(mod, sum((ptdf[i, inode] * (
+                bd.Pg[inode] -
+                sum((mod[:pg0][ctrl] for ctrl in sublist.ctrl_generation), init=0.0) -
+                sum((beta(sublist.node, opf.dc_branches[d]) * mod[:pfdc0][d] for d in sublist.dc_branches), init=0.0) +
+                sum((mod[:pr0][r] for r in sublist.renewables), init=0.0) -
+                sum((mod[:ls0][d] for d in sublist.demands), init=0.0)
+            ) for (inode, sublist) in enumerate(bd.list)), init=0.0
+        ))
+
+        id += 1
+        @info @sprintf "Pre %d: Contingency line %d-%d-i_%d; overload on %s of %.4f" id cont[1] cont[2] c opf.branches[i].name ol
+        @debug "Cut added: $(sprint_expr(expr,lim))\n"
+        if ol < 0
+            pre_cut = JuMP.@constraint(mod, expr <= ol)
+        else
+            pre_cut = JuMP.@constraint(mod, expr >= ol)
+        end
+        cut_added = 2
+    end
+    return cut_added, id
+end
+
 function add_cut(Pc::Dict{<:Integer, Main.SCOPF.ExprC}, opf::OPFsystem, oplim::Oplimits, mod::Model, bd::Benders, ΔPc::Vector{<:Real},
     ptdf::AbstractMatrix{<:Real}, overloads::Vector{<:Tuple{Integer,Real}}, islands::Vector, island::Integer,
     cont::Tuple{Integer,Integer}, c::Integer, cut_added::Integer, lim::Real, id::Integer
@@ -508,4 +534,94 @@ function print_benders_results(opf::OPFsystem, mod::Model, Pc::Dict=Dict(), Pcc:
         print_c(Pcc, "lscc", i_g, lim)
         print_c(Pccx, "lsccx", i_g, lim)
     end
+end
+
+function run_benders!(
+    ::Val{SC::OPF}, 
+    mod::Model, 
+    opf::OPFsystem, 
+    pf::DCPowerFlow, 
+    oplim::Oplimits, 
+    lim=1e-6,
+    max_itr=length(opf.contingencies),
+    branch_c=nothing, 
+    rate_c=0.0, 
+    debug=false
+)
+    solve_model!(mod)
+    total_solve_time = solve_time(mod)
+    termination_status(mod) != MOI.OPTIMAL && return mod, opf, pf, oplim, total_solve_time
+    @debug "lower_bound = $(objective_value(mod))"
+
+    # Set variables
+    bd = benders(opf, mod)
+    calc_θ!(pf, bd.Pᵢ)
+    calc_Pline!(pf)
+    overloads = zeros(length(opf.contingencies))
+
+    contids = get_branch_bus_idx(opf.branches, opf.contingencies, bd.idx)
+    flow = similar(pf.F)
+    for contid in contids
+        (c, cont) = contid
+        if !is_islanded(pf, cont, c)
+            calculate_line_flows!(flow, pf, cont, c)
+        else
+            islands, island, island_b = handle_islands(pf.B, pf.DA, cont, c, pf.slack)
+            for in_vec in islands[1:end.!=island]
+                for n in in_vec
+                    add_to_expression!(bd.obj, opf.prob[c], sum((opf.voll[d] * get_active_power(opf.demands[d]) for d in bd.list[n].demands), init=0.0))
+                end
+            end
+            continue
+        end
+
+        # Calculate the power flow with the new outage and find if there are any overloads
+        overload = filter_overload(flow, oplim.branch_rating * oplim.short_term_multi)
+
+        if !isempty(overload)
+            overloads[c] = maximum(x -> abs(x[2]), overload)
+        end
+    end
+
+    pre = 0
+    ptdf = copy(pf.ϕ)
+    X = copy(pf.X)
+    olc = Vector{Tuple{Int,Float64}}[]
+
+    permutation = sortperm(overloads, rev=true)
+    cut_added = 1
+    for iterations in 1:max_itr
+        if cut_added == 0 # loops until no new cuts are added for the contingencies
+            # @printf "\nEND: Total solve time %.4f.\n" total_solve_time
+            return mod, opf, pf, oplim, total_solve_time
+        end
+        cut_added = 0
+        @info "Iteration $iterations"
+
+        for contid in contids[permutation]
+            (c, cont) = contid
+            empty!(olc)
+            if is_islanded(pf, cont, c)
+                continue
+            end
+            calculate_line_flows!(flow, pf, cont, c)
+            olc = filter_overload(flow, (oplim.branch_rating * oplim.short_term_multi))
+            if !isempty(olc) # ptdf calculation is more computational expensive than line flow
+                get_isf!(ptdf, X, pf.X, pf.B, pf.DA, cont, c)
+            end
+
+            # Cannot change the model before all data is exctracted!
+            if !isempty(olc)
+                cut_added, pre = add_cut(opf, mod, bd, ptdf, olc, cont, c, cut_added, lim, pre)
+            end
+            if cut_added > 1
+                total_solve_time = update_model!(mod, pf, bd, total_solve_time)
+                cut_added = 1
+            end
+            termination_status(mod) != MOI.OPTIMAL && return mod, opf, pf, oplim, total_solve_time
+        end
+
+    end
+    @warn "Reached $(length(opf.contingencies)) iterations without a stable solution."
+    return mod, opf, pf, oplim, total_solve_time
 end

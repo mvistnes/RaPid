@@ -1,7 +1,7 @@
 # CC BY 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2022
 
 """ Operational limits type """
-mutable struct Oplimits{TR<:Real}
+struct Oplimits{TR<:Real}
     max_shed::TR
     max_curtail::TR
     ramp_mult::TR
@@ -111,7 +111,8 @@ function opf(type::OPF, system::System, optimizer;
         # renewable curtailment variables
     end)
 
-    @objective(mod, Min, sum(c[1] * g^2 + c[2] * g for (c, g) in zip(opf.cost_ctrl_gen, pg0)) + opf.voll' * ls0 + sum(pr0 * 100))
+    @objective(mod, Min, sum(c[2] * g for (c, g) in zip(opf.cost_ctrl_gen, pg0)) + sum(opf.voll' * ls0) + sum(pr0 * 1))
+    # @objective(mod, Min, sum(c[1] * g^2 + c[2] * g for (c, g) in zip(opf.cost_ctrl_gen, pg0)) + sum(opf.voll' * ls0) + sum(pr0 * 1))
 
     JuMP.fix.(pd, get_active_power.(opf.demands))
     JuMP.fix.(pr, get_active_power.(opf.renewables))
@@ -158,7 +159,8 @@ function add_all_contingencies!(basetype::OPF, type::OPF, opf::OPFsystem, oplim:
             islands, island, island_b = handle_islands(pf.B, pf.DA, cont, c, pf.slack)
             get_isf!(ptdf, pf.DA, pf.B, cont, c, pf.slack, islands[island], island_b)
         end
-        basetype < PSC::OPF && add_contingencies!(Pc, opf, oplim, mod, obj, islands, island, ptdf, list, c)
+        basetype < PSC::OPF && type == SC::OPF && add_contingencies!(opf, oplim, mod, ptdf, list, c)
+        basetype < PSC::OPF && type >= PSC::OPF && add_contingencies!(Pc, opf, oplim, mod, obj, islands, island, ptdf, list, c)
         basetype < PCSC::OPF && type >= PCSC::OPF && add_contingencies!(Pcc, opf, oplim, mod, obj, islands, island, ptdf, list, c)
         type >= PCFSC::OPF && add_contingencies!(Pccx, opf, oplim, mod, obj, islands, island, ptdf, list, c)
 
@@ -166,6 +168,24 @@ function add_all_contingencies!(basetype::OPF, type::OPF, opf::OPFsystem, oplim:
     end
     set_objective_function(mod, obj)
     return mod, opf, pf, oplim, Pc, Pcc, Pccx
+end
+
+function add_contingencies!(opf::OPFsystem, oplim::Oplimits, mod::Model, ptdf::AbstractMatrix{<:Real}, list::Vector{<:CTypes{Int}}, c::Integer)
+    p = JuMP.@variable(mod, [n in 1:length(opf.nodes)], base_name = @sprintf("p%s", c))
+
+    inj_p = @expression(mod, -p)
+    for n = 1:length(opf.nodes)
+        add_to_expression!.(inj_p[n], sum((mod[:pg0][g] for g in list[n].ctrl_generation), init=0.0))
+        add_to_expression!.(inj_p[n], sum((beta(opf.nodes[n], opf.dc_branches[l]) * mod[:pfdc0][l] for l in list[n].dc_branches), init=0.0))
+        add_to_expression!.(inj_p[n], sum((mod[:pr][d] for d in list[n].renewables), init=0.0))
+        add_to_expression!.(inj_p[n], -1, sum((mod[:pd][d] for d in list[n].demands), init=0.0))
+        add_to_expression!.(inj_p[n], -1, sum((mod[:pr0][d] for d in list[n].renewables), init=0.0))
+        add_to_expression!.(inj_p[n], sum((mod[:ls0][d] for d in list[n].demands), init=0.0))
+    end
+    @constraint(mod, inj_p .== 0.0)
+    ptdf_p = @expression(mod, ptdf * p)
+    @constraint(mod, ptdf_p .>= -oplim.branch_rating * oplim.short_term_multi)
+    @constraint(mod, ptdf_p .<= oplim.branch_rating * oplim.short_term_multi)
 end
 
 function add_contingencies!(Pc::Dict{<:Integer,Main.SCOPF.ExprC}, opf::OPFsystem, oplim::Oplimits, mod::Model, obj::AbstractJuMPScalar, islands::Vector,
@@ -249,9 +269,10 @@ function init_P!(Pc::Dict{<:Integer,Main.SCOPF.ExprC}, opf::OPFsystem, oplim::Op
 
     p_survive = 1.0 - oplim.p_failure
     add_to_expression!.(obj, opf.prob[c], sum(opf.voll' * lsc))
-    add_to_expression!.(obj, opf.prob[c], sum(oplim.ramp_mult * 100 * prc))
+    add_to_expression!.(obj, opf.prob[c], sum(oplim.ramp_mult * 1 * prc))
     for (cost, g) in zip(opf.cost_ctrl_gen, pgc)
-        add_to_expression!.(obj, opf.prob[c], p_survive * oplim.ramp_mult * (cost[1] * g^2 + cost[2] * g))
+        add_to_expression!.(obj, opf.prob[c], p_survive * oplim.ramp_mult * (cost[2] * g))
+        # add_to_expression!.(obj, opf.prob[c], p_survive * oplim.ramp_mult * (cost[1] * g^2 + cost[2] * g))
     end
 
     # Add new constraints that limit the corrective variables within operating limits
@@ -304,10 +325,12 @@ function init_P!(Pcc::Dict{<:Integer,Main.SCOPF.ExprCC}, opf::OPFsystem, oplim::
         # sum(opf.cost_ctrl_gen' * ramp_mult * pgu) # +
         # sum(opf.cost_ctrl_gen' * pgd)
         ))
-    add_to_expression!.(obj, opf.prob[c], sum(p_survive * oplim.ramp_mult * 100 * prcc))
+    add_to_expression!.(obj, opf.prob[c], sum(p_survive * oplim.ramp_mult * 1 * prcc))
     for (cost, gu, gd) in zip(opf.cost_ctrl_gen, pgu, pgd)
-        add_to_expression!.(obj, opf.prob[c], p_survive * oplim.ramp_mult * (cost[1] * gu^2 + cost[2] * gu))
-        add_to_expression!.(obj, opf.prob[c], p_survive * oplim.ramp_mult * (cost[1] * gd^2 + cost[2] * gd))
+        add_to_expression!.(obj, opf.prob[c], p_survive * oplim.ramp_mult * (cost[2] * gu))
+        add_to_expression!.(obj, opf.prob[c], p_survive * oplim.ramp_mult * (cost[2] * gd))
+        # add_to_expression!.(obj, opf.prob[c], p_survive * oplim.ramp_mult * (cost[1] * gu^2 + cost[2] * gu))
+        # add_to_expression!.(obj, opf.prob[c], p_survive * oplim.ramp_mult * (cost[1] * gd^2 + cost[2] * gd))
     end
 
     # Add new constraints that limit the corrective variables within operating limits
@@ -355,7 +378,7 @@ function init_P!(Pccx::Dict{<:Integer,Main.SCOPF.ExprCCX}, opf::OPFsystem, oplim
 
     # Extend the objective with the corrective variables
     add_to_expression!.(obj, opf.prob[c] * oplim.p_failure, sum(opf.voll' * lscc))
-    add_to_expression!.(obj, opf.prob[c], sum(oplim.p_failure .* 100 .* prccx))
+    add_to_expression!.(obj, opf.prob[c], sum(oplim.p_failure .* 1 .* prccx))
     add_to_expression!.(obj, opf.prob[c] * oplim.p_failure, sum(60 * pgd))
 
     # Add new constraints that limit the corrective variables within operating limits
@@ -414,7 +437,8 @@ fix_values(mod::Model, var::AbstractVector{JuMP.VariableRef}) = JuMP.fix.(var, g
 
 calc_cens(mod::Model, opf::OPFsystem, var::AbstractVector{JuMP.VariableRef}) = sum(opf.voll .* get_value(mod, var))
 calc_ctrl_cost(mod::Model, opf::OPFsystem, var::AbstractVector{JuMP.VariableRef}) =
-    sum(c[1] * g^2 + c[2] * g for (c, g) in zip(opf.cost_ctrl_gen, get_value(mod, var)))
+    sum(c[2] * g for (c, g) in zip(opf.cost_ctrl_gen, get_value(mod, var)))
+    # sum(c[1] * g^2 + c[2] * g for (c, g) in zip(opf.cost_ctrl_gen, get_value(mod, var)))
 
 calc_objective(mod::Model, opf::OPFsystem) =
     calc_ctrl_cost(mod, opf, mod[:pg0]) + calc_cens(mod, opf, mod[:ls0])

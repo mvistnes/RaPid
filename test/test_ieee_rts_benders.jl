@@ -51,8 +51,8 @@ import Gurobi
             0.02, 0.02, 0.02, 0.02, 0.40, 0.39, 0.40, 0.52, 0.49, 0.38, 0.33, 0.41, 0.41,
             0.41, 0.35, 0.34, 0.32, 0.54, 0.35, 0.35, 0.38, 0.38, 0.34, 0.34, 0.45 # branches
         ]
-    prob /= 8760
-    # prob /= 100
+    # prob /= 8760
+    prob /= 100
     # prob = prob[c]
     short = 1.2
     long = 1.0
@@ -71,16 +71,25 @@ import Gurobi
     # @time SCOPF.solve_model!(opfm_norm.mod);
 
     println("Start Contingency select")
-    @time mod_cont, opf_cont, pf_cont, oplim_cont, Pc_cont, Pcc_cont, Pccx_cont = SCOPF.run_contingency_select(SCOPF.PCSC, system, SCOPF.Gurobi.Optimizer, voll, prob, contingencies, 
+    @time mod_cont, opf_cont, pf_cont, oplim_cont, Pc_cont, Pcc_cont, Pccx_cont, tot_t = SCOPF.run_contingency_select(SCOPF.PCSC, system, SCOPF.Gurobi.Optimizer, voll, prob, contingencies, 
         max_shed=max_shed, ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=0.00);
-    println("Objective value Contingency select: ", JuMP.objective_value(mod_cont))
+    println("Solver time: ", tot_t, " Objective value Contingency select: ", JuMP.objective_value(mod_cont))
     SCOPF.print_contingency_P(opf_cont, Pc_cont, Pcc_cont, Pccx_cont)
 
     println("Start Benders")
-    @time model, opf, pf, oplim, Pc, Pcc, Pccx = SCOPF.run_benders(SCOPF.PCSC, system, Gurobi.Optimizer, voll, prob, contingencies, max_shed=max_shed,
+    @time model, opf, pf, oplim, Pc, Pcc, Pccx, tot_t = SCOPF.run_benders(SCOPF.PCSC, system, Gurobi.Optimizer, voll, prob, contingencies, max_shed=max_shed,
         ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=0.00);
-    println("Objective value Benders: ", JuMP.objective_value(model))
+    println("Solver time: ", tot_t, " Objective value Benders: ", JuMP.objective_value(model))
     SCOPF.print_contingency_P(opf, Pc, Pcc, Pccx)
+
+    model, opf, pf, oplim, Pc, Pcc, Pccx = SCOPF.opf(SCOPF.SC, system, Gurobi.Optimizer, voll=voll, contingencies=contingencies, prob=prob, max_shed=max_shed,
+        ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long);
+    idx = SCOPF.get_nodes_idx(opf.nodes);
+    list = SCOPF.make_list(opf, idx, opf.nodes);
+    model, opf, pf, oplim, Pc, Pcc, Pccx = SCOPF.add_all_contingencies!(SCOPF.SC, SCOPF.SC, opf, oplim, model, list, pf, idx, Pc, Pcc, Pccx);
+    SCOPF.solve_model!(model);
+    model, opf, pf, oplim, tot_t = SCOPF.run_benders!(Val(SCOPF.SC), model, opf, pf, oplim);
+
 
     # SCOPF.print_corrective_results(opfm_norm)
     # SCOPF.print_benders_results(opfm_ptdf, Pc_ptdf, Pcc_ptdf)
@@ -89,15 +98,15 @@ import Gurobi
 
 function change_slack(system, nodes, voll, prob, contingencies, max_shed, ramp_mult, ramp_minutes, short, long)
     slack = SCOPF.find_slack(nodes)[1]
-    slacktype = BusTypes.PV
+    slacktype = ACBusTypes.PV
     res = []
     for n in eachindex(nodes)
         nodes[slack].bustype = slacktype
         slacktype = nodes[n].bustype
-        nodes[n].bustype = BusTypes.REF
+        nodes[n].bustype = ACBusTypes.REF
         slack = n
         println(SCOPF.find_slack(nodes)[1])
-        model, opf, pf, oplim, Pc, Pcc, Pccx = SCOPF.run_benders(SCOPF.PCSC, system, Gurobi.Optimizer, voll, prob, contingencies, max_shed=max_shed,
+        model, opf, pf, oplim, Pc, Pcc, Pccx, tot_t = SCOPF.run_benders(SCOPF.PCSC, system, Gurobi.Optimizer, voll, prob, contingencies, max_shed=max_shed,
             ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=0.00)
         push!(res, JuMP.objective_value(model))
     end

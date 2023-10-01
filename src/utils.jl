@@ -151,8 +151,8 @@ mutable struct OPFsystem
 
     ctrl_generation::Vector{Generator}
     branches::Vector{<:ACBranch}
-    dc_branches::Vector{<:DCBranch}
-    nodes::Vector{Bus}
+    dc_branches::Vector{TwoTerminalHVDCLine}
+    nodes::Vector{ACBus}
     demands::Vector{StaticLoad}
     renewables::Vector{RenewableGen}
     contingencies::Vector{<:Component}
@@ -211,7 +211,7 @@ end
 check_values(val::AbstractVector, var::AbstractVector{<:Component}, name::String; atol=1e-5) = check_values.(val, var, [name], atol=atol)
 
 """Find value of β, β = 1 if from-bus is the bus, β = -1 if to-bus is the bus, 0 else"""
-beta(bus::Bus, branch::Branch) = bus == branch.arc.from ? 1 : bus == branch.arc.to ? -1 : 0
+beta(bus::ACBus, branch::Branch) = bus == branch.arc.from ? 1 : bus == branch.arc.to ? -1 : 0
 beta(bus::String, branch::Branch) = bus == branch.arc.from.name ? 1 : bus == branch.arc.to.name ? -1 : 0
 function beta(sys::System, branch::String)
     l = get_component(ACBranch, sys, branch)
@@ -223,9 +223,13 @@ a(line::String, contingency::String) = ifelse(line != contingency, 1, 0)
 """ An iterator to a type of power system component """
 get_gens_t(sys::System) = get_components(ThermalGen, sys) |> collect
 get_gens_h(sys::System) = get_components(HydroGen, sys) |> collect
-get_branches(sys::System) = get_components(ACBranch, sys) |> collect # Includes both Line, Transformer, and Phase Shifting Transformer
-get_dc_branches(sys::System) = get_components(DCBranch, sys) |> collect
-get_nodes(sys::System) = get_components(Bus, sys) |> collect
+get_lines(sys::System) = get_components(Line, sys) |> collect 
+get_transformers2w(sys::System) = get_components(Transformer2W, sys) |> collect
+get_taptransformers(sys::System) = get_components(TapTransformer, sys) |> collect
+get_phaseshiftingtransformers(sys::System) = get_components(PhaseShiftingTransformer, sys) |> collect
+get_branches(sys::System) = vcat(get_lines(sys), get_transformers2w(sys), get_taptransformers(sys), get_phaseshiftingtransformers(sys))
+get_dc_branches(sys::System) = get_components(TwoTerminalHVDCLine, sys) |> collect
+get_nodes(sys::System) = get_components(ACBus, sys) |> collect
 get_demands(sys::System) = get_components(StaticLoad, sys) |> collect
 get_renewables(sys::System) = get_components(RenewableGen, sys) |> collect # Renewable modelled as negative demand
 get_ctrl_generation(sys::System) = vcat(get_gens_t(sys), get_gens_h(sys)) # An iterator of all controllable generators
@@ -233,7 +237,7 @@ get_generation(sys::System) = vcat(get_ctrl_generation(sys), get_renewables(sys)
 
 """ A sorted vector to a type of power system component """
 sort_components!(list::PowerSystems.FlattenIteratorWrapper{T}) where {T} = sort_components!(collect(T, list))
-sort_components!(nodes::Vector{Bus}) = sort!(nodes, by=x -> x.number)
+sort_components!(nodes::Vector{ACBus}) = sort!(nodes, by=x -> x.number)
 sort_components!(components::Vector{<:Component}) = sort!(components, by=x -> x.bus.number)
 sort_components!(branches::Vector{<:Branch}) = sort!(branches,
     by=x -> (get_number(get_arc(x).from), get_number(get_arc(x).to))
@@ -250,7 +254,7 @@ make_named_array(value_func, list) = JuMP.Containers.DenseAxisArray(
 )
 
 struct CTypes{T<:Integer}
-    node::Bus
+    node::ACBus
     ctrl_generation::Vector{T}
     renewables::Vector{T}
     demands::Vector{T}
@@ -259,7 +263,7 @@ struct CTypes{T<:Integer}
 end
 
 """ Make a list where all components distributed on their node """
-function make_list(opf::OPFsystem, idx::Dict{<:Int,<:Int}, nodes::AbstractVector{Bus})
+function make_list(opf::OPFsystem, idx::Dict{<:Int,<:Int}, nodes::AbstractVector{ACBus})
     list = [CTypes(n, [Int[] for _ in 1:5]...) for n in nodes]
     for (i, r) in enumerate(opf.ctrl_generation)
         push!(list[idx[r.bus.number]].ctrl_generation, i)
@@ -309,12 +313,12 @@ find_in_model(mod::Model, dc::DCBranch, name::String) = mod[:pfdc0][name]
 """ Return the (first) slack bus in the system. 
 Return: slack bus number in nodes. The slack bus.
 """
-function find_slack(nodes::AbstractVector{Bus})
+function find_slack(nodes::AbstractVector{ACBus})
     for (i, x) in enumerate(nodes)
-        x.bustype == BusTypes.REF && return i, x
+        x.bustype == ACBusTypes.REF && return i, x
     end
     @error "No slack bus found!"
-    return 0, Bus()
+    return 0, ACBus()
 end
 find_slack(sys::System) = find_slack(sort_components!(get_nodes(sys)))
 
@@ -341,7 +345,7 @@ function set_warm_start!(model::JuMP.Model, symbs::AbstractVector{Symbol})
 end
 
 " Get a dict of bus-number-keys and vector-position-values "
-get_nodes_idx(nodes::AbstractVector{Bus}) = _make_ax_ref(get_number.(nodes))
+get_nodes_idx(nodes::AbstractVector{ACBus}) = _make_ax_ref(get_number.(nodes))
 
 """ Return a Dict of bus name number to index. Deprecated in PowerSystems """
 function _make_ax_ref(ax::AbstractVector{T}) where {T}
