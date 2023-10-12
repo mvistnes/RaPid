@@ -7,7 +7,7 @@ get_power_flow_change(F::AbstractVector{<:Real}, ϕ::AbstractMatrix{<:Real}, A::
 function get_change(ϕ::AbstractMatrix{<:Real}, A::AbstractMatrix{<:Integer}, branch; atol::Real=1e-5)
     x = LinearAlgebra.I - ϕ[branch, :]' * A[branch, :]
     if isapprox(x, zero(typeof(x)); atol=atol)
-        return zero(typeof(x))
+        return zeros(typeof(x), size(x))
     end
     return ϕ * A[branch, :] * inv(x)
 end
@@ -38,10 +38,22 @@ Input:
     # x = change * (X[:, from_bus] - X[:, to_bus])
     c⁻¹ = inv(B[from_bus, to_bus]) + change * (X[from_bus, from_bus] - X[from_bus, to_bus] - X[to_bus, from_bus] + X[to_bus, to_bus])
     if isapprox(c⁻¹, zero(T); atol=atol)
-        return throw(DivideError())
+        if size(SparseArrays.getindex(B,from_bus,:).nzind, 1) <= 2 # Assummes only one islanded bus
+            c⁻¹ = inv(B[from_bus, to_bus]) + change * (- X[from_bus, to_bus] + X[to_bus, to_bus])
+            delta = inv(c⁻¹) * (θ₀[from_bus] - θ₀[to_bus])
+            @. θ = θ₀ - (- X[:, to_bus]) * delta * change
+        elseif size(SparseArrays.getindex(B,to_bus,:).nzind, 1) <= 2
+            c⁻¹ = inv(B[from_bus, to_bus]) + change * (X[from_bus, from_bus] - X[to_bus, from_bus])
+            delta = inv(c⁻¹) * (θ₀[from_bus] - θ₀[to_bus])
+            @. θ = θ₀ - (X[:, from_bus]) * delta * change
+        else
+            return throw(DivideError())
+        end
+    else
+        delta = inv(c⁻¹) * (θ₀[from_bus] - θ₀[to_bus])
+        @. θ = θ₀ - (X[:, from_bus] - X[:, to_bus]) * delta * change
     end
-    delta = inv(c⁻¹) * (θ₀[from_bus] - θ₀[to_bus])
-    @. θ = θ₀ - (X[:, from_bus] - X[:, to_bus]) * delta * change
+    return θ
 end
 
 """ 
@@ -69,6 +81,21 @@ function calc_Pline(pf::DCPowerFlow, cont::Tuple{Integer,Integer}, branch::Integ
     F = similar(pf.F)
     calc_Pline!(F, θ, pf.X, pf.B, pf.DA, pf.θ, cont, branch)
     return F
+end
+
+function calc_Pline!(
+    F::AbstractVector{<:Real},
+    θ::AbstractVector{<:Real},
+    X::AbstractMatrix{<:Real},
+    B::AbstractMatrix{<:Real},
+    DA::AbstractMatrix{<:Real},
+    θ₀::AbstractVector{<:Real},
+    Pᵢ::AbstractVector{<:Real},
+    cont::Tuple{Integer,Integer},
+    branch::Integer
+)
+    θ₂ = calc_θ(X, Pᵢ)
+    return calc_Pline!(F, θ, X, B, DA, θ₂, cont, branch)
 end
 
 """
@@ -99,10 +126,25 @@ Input:
     x = X₀[:, from_bus] - X₀[:, to_bus]
     c⁻¹ = inv(B[to_bus, from_bus]) + change * (x[from_bus] - x[to_bus])
     if isapprox(c⁻¹, zero(T); atol=atol)
-        throw(DivideError())
+        if size(SparseArrays.getindex(B,from_bus,:).nzind, 1) <= 2 # Assummes only one islanded bus
+            c⁻¹ = inv(B[to_bus, from_bus]) + change * (- x[to_bus])
+            copy!(X, X₀)
+            X[:,from_bus] .= 0.0
+            X[from_bus,:] .= 0.0
+            X[from_bus,from_bus] = 1.0
+        elseif size(SparseArrays.getindex(B,to_bus,:).nzind, 1) <= 2
+            c⁻¹ = inv(B[to_bus, from_bus]) + change * (x[from_bus])
+            copy!(X, X₀)
+            X[:,to_bus] .= 0.0
+            X[to_bus,:] .= 0.0
+            X[to_bus,to_bus] = 1.0
+        else
+            throw(DivideError())
+        end
+    else
+        # delta = 1/c⁻¹ * x
+        copy!(X, X₀)
     end
-    # delta = 1/c⁻¹ * x
-    copy!(X, X₀)
     LinearAlgebra.mul!(X, x, x', -change * inv(c⁻¹), true) # mul!(C, A, B, α, β) -> C == $A B α + C β$
 end
 
@@ -119,7 +161,7 @@ function get_isf!(
 )
     get_changed_X!(X, X₀, B, DA, cont[1], cont[2], branch)
     calc_isf!(isf, DA, X)
-    isf[branch, :] .= 0
+    isf[branch, :] .= 0.0
     nothing
 end
 
@@ -176,14 +218,78 @@ Input:
     Pl[branch] = 0.0
     return nothing
 end
+@views function calculate_line_flows!(
+    Pl::AbstractVector{T},
+    Pl0::AbstractVector{T},
+    ptdf::AbstractMatrix{T},
+    B::AbstractMatrix{T},
+    DA::AbstractMatrix{T},
+    X::AbstractMatrix{T},
+    θ::AbstractVector{T},
+    from_bus::Integer,
+    to_bus::Integer,
+    branch::Integer,
+    ::Val{1}; # from_bus is not connected to the system
+    atol::Real=1e-8
+) where {T<:Real}
+    change = DA[branch, to_bus] / B[from_bus, to_bus]
+    c⁻¹ = inv(B[from_bus, to_bus]) + change * (- X[from_bus, to_bus] + X[to_bus, to_bus])
+    if isapprox(c⁻¹, zero(T); atol=atol)
+        return throw(DivideError())
+    end
+    delta = inv(c⁻¹) * (θ[from_bus] - θ[to_bus])
+    @. Pl = Pl0 - (- ptdf[:, to_bus]) * change * delta
+    Pl[branch] = 0.0
+    return nothing
+end
+@views function calculate_line_flows!(
+    Pl::AbstractVector{T},
+    Pl0::AbstractVector{T},
+    ptdf::AbstractMatrix{T},
+    B::AbstractMatrix{T},
+    DA::AbstractMatrix{T},
+    X::AbstractMatrix{T},
+    θ::AbstractVector{T},
+    from_bus::Integer,
+    to_bus::Integer,
+    branch::Integer,
+    ::Val{2}; # to_bus is not connected to the system
+    atol::Real=1e-8
+) where {T<:Real}
+    change = DA[branch, to_bus] / B[from_bus, to_bus]
+    c⁻¹ = inv(B[from_bus, to_bus]) + change * (X[from_bus, from_bus] - X[to_bus, from_bus])
+    if isapprox(c⁻¹, zero(T); atol=atol)
+        return throw(DivideError())
+    end
+    delta = inv(c⁻¹) * (θ[from_bus] - θ[to_bus])
+    @. Pl = Pl0 - (ptdf[:, from_bus]) * change * delta
+    Pl[branch] = 0.0
+    return nothing
+end
 
 function calculate_line_flows!(
     Pl::AbstractVector{<:Real},
     pf::DCPowerFlow,
     cont::Tuple{Integer,Integer},
-    branch::Integer
+    branch::Integer;
+    Pᵢ::AbstractVector{<:Real} = Float64[],
+    nodes::AbstractVector{<:Integer} = Int[],
+    branches::AbstractVector{<:Integer} = Int[]
 )
-    return calculate_line_flows!(Pl, pf.F, pf.ϕ, pf.B, pf.DA, pf.X, pf.θ, cont[1], cont[2], branch)
+    if !isempty(Pᵢ)
+        θ = run_pf(pf.K, Pᵢ, pf.slack)
+        F = calc_Pline(pf.DA, θ)
+    else
+        θ = pf.θ
+        F = pf.F
+    end
+    if !isempty(nodes)
+        island = not_insorted_nodes(cont[1], cont[2], nodes)
+        calculate_line_flows!(Pl, F, pf.ϕ, pf.B, pf.DA, pf.X, θ, cont[1], cont[2], branch, Val(island))
+        zero_not_in_array!(Pl, branches)
+    else
+        return calculate_line_flows!(Pl, F, pf.ϕ, pf.B, pf.DA, pf.X, θ, cont[1], cont[2], branch)
+    end
 end
 function calculate_line_flows(
     pf::DCPowerFlow,

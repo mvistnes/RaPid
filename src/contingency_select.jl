@@ -78,7 +78,7 @@ function run_contingency_select!(
             end
         else
             islands, island, island_b = handle_islands(pf.B, pf.DA, cont, c, pf.slack)
-            get_isf!(ptdf, pf.DA, pf.B, cont, c, pf.slack, islands[island], island_b)
+            get_isf!(ptdf, pf.ϕ, islands[island], island_b)
             basetype == SC::OPF && add_contingencies!(Pc, opf, oplim, mod, bd.obj, islands, island, ptdf, bd.list, c)
             type == PCSC::OPF && add_contingencies!(Pcc, opf, oplim, mod, bd.obj, islands, island, ptdf, bd.list, c)
             type == PCFSC::OPF && add_contingencies!(Pccx, opf, oplim, mod, bd.obj, islands, island, ptdf, bd.list, c)
@@ -136,7 +136,7 @@ function run_contingency_select!(
             if !is_islanded(pf, cont, c)
                 get_isf!(ptdf, X, pf.X, pf.B, pf.DA, cont, c) # ptdf calculation is more computational expensive than line flow
             else
-                get_isf!(ptdf, pf.DA, pf.B, cont, c, pf.slack, islands[island], island_b)
+                get_isf!(ptdf, pf.ϕ, islands[island], island_b)
             end
         end
         # (overload || !isempty(olc) || !isempty(olcc)) && println(c, " ", Int(overload), Int(!isempty(olc)), Int(!isempty(olcc)))

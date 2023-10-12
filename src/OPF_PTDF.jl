@@ -157,7 +157,7 @@ function add_all_contingencies!(basetype::OPF, type::OPF, opf::OPFsystem, oplim:
             island = 0
         else
             islands, island, island_b = handle_islands(pf.B, pf.DA, cont, c, pf.slack)
-            get_isf!(ptdf, pf.DA, pf.B, cont, c, pf.slack, islands[island], island_b)
+            get_isf!(ptdf,  pf.ϕ, islands[island], island_b)
         end
         basetype < PSC::OPF && type == SC::OPF && add_contingencies!(opf, oplim, mod, ptdf, list, c)
         basetype < PSC::OPF && type >= PSC::OPF && add_contingencies!(Pc, opf, oplim, mod, obj, islands, island, ptdf, list, c)

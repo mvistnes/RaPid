@@ -5,7 +5,7 @@ abstract type PowerFlow end
 mutable struct DCPowerFlow{T1<:Real,T2<:Integer} <: PowerFlow
     DA::SparseArrays.SparseMatrixCSC{T1,T2} # Diagonal admittance matrix times the connectivity matrix
     B::SparseArrays.SparseMatrixCSC{T1,T2} # The admittance matrix
-    fact_B::LinearAlgebra.Factorization{T1} # A factorization of the admittance matrix
+    K::KLU.KLUFactorization{T1, T2} # A factorization of the admittance matrix
     X::Matrix{T1} # Inverse of the admittance matrix
     ϕ::Matrix{T1} # PTDF matrix
     θ::Vector{T1} # Bus voltage angles
@@ -20,8 +20,12 @@ function DCPowerFlow(branches::AbstractVector{<:Tuple{T2,T2}}, x::AbstractVector
     X = calc_X(B, slack)
     ϕ = Matrix{T1}(undef, size(A))
     calc_isf!(ϕ, DA, X)
-    fact_B = LinearAlgebra.factorize(Matrix(B))
-    return DCPowerFlow{T1,T2}(DA, B, fact_B, X, ϕ, zeros(T1, numnodes), zeros(T1, length(branches)), slack)
+    tmp = copy(B)
+    tmp[:, slack] .= zero(T1)
+    tmp[slack, :] .= zero(T1)
+    tmp[slack, slack] = one(T1)
+    K = KLU.klu(tmp)
+    return DCPowerFlow{T1,T2}(DA, B, K, X, ϕ, zeros(T1, numnodes), zeros(T1, length(branches)), slack)
 end
 DCPowerFlow(nodes::AbstractVector{<:Bus}, branches::AbstractVector{<:Branch}, idx::Dict{<:Int,<:Int}) =
     DCPowerFlow(get_bus_idx.(branches, [idx]), get_x.(branches), length(nodes), find_slack(nodes)[1])
@@ -49,7 +53,7 @@ end
 get_slack(pf::DCPowerFlow) = pf.slack
 get_DA(pf::DCPowerFlow) = pf.DA
 get_B(pf::DCPowerFlow) = pf.B
-get_fact_B(pf::DCPowerFlow) = pf.fact_B
+get_K(pf::DCPowerFlow) = pf.K
 get_X(pf::DCPowerFlow) = pf.X
 get_ϕ(pf::DCPowerFlow) = pf.ϕ
 get_θ(pf::DCPowerFlow) = pf.θ
@@ -202,7 +206,8 @@ calc_X(DA::AbstractMatrix{<:Real}, B::AbstractMatrix{T}, cont::Tuple{Integer,Int
     cont[1] (from_bus), cont[2] (to_bus), cont_branch branch number, and island is sorted index numbers 
 """
 function calc_X(DA::AbstractMatrix{<:Real}, B::AbstractMatrix{<:Real}, cont::Tuple{Integer,Integer},
-    cont_branch::Integer, slack::Integer, island::AbstractVector{<:Integer})
+    cont_branch::Integer, slack::Integer, island::AbstractVector{<:Integer}
+)
     (fbus, tbus) = cont
     X = Matrix(B[island, island])
     c = ifelse(insorted(fbus, island), fbus, tbus)
@@ -211,6 +216,18 @@ function calc_X(DA::AbstractMatrix{<:Real}, B::AbstractMatrix{<:Real}, cont::Tup
     _calc_X!(X, searchsortedfirst(island, slack))
     return X
 end
+function calc_X!(X::AbstractMatrix{<:Real}, X₀::AbstractMatrix{<:Real}, cont::Tuple{Integer,Integer},
+    island::AbstractVector{<:Integer}
+)
+    copy!(X, X₀)
+    (fbus, tbus) = cont
+    c = ifelse(!insorted(fbus, island), fbus, tbus)
+    bus = searchsortedfirst(island, c)
+    X[bus, :] .= 0.
+    X[:, bus] .= 0.
+    return X
+end
+
 
 function neutralize_line!(B::AbstractMatrix, i::Integer, j::Integer, val::Real)
     B[i, j] += val
@@ -323,6 +340,15 @@ get_isf(DA::AbstractMatrix{T}, B0::AbstractMatrix{<:Real}, cont::Tuple{Integer,I
     cont_branch::Integer, slack::Integer, nodes::AbstractVector{<:Integer}, branches::AbstractVector{<:Integer}
 ) where {T<:Real} = get_isf!(Matrix{T}(undef, size(DA)), DA, B0, cont, cont_branch, slack, nodes, branches)
 
+function get_isf!(ϕ::AbstractMatrix{<:Real}, ϕ₀::AbstractMatrix{<:Real},
+    nodes::AbstractVector{<:Integer}, branches::AbstractVector{<:Integer}
+)
+    copy!(ϕ, ϕ₀)
+    zero_not_in_array!(ϕ, nodes)
+    zero_not_in_array!(ϕ, branches, 1)
+    return ϕ
+end
+
 """ 
     Make the B-matrix after a line outage, which splits the system, using base case D*A and B. 
     cont[1] (from_bus), cont[2] (to_bus), and cont_branch are index numbers 
@@ -356,7 +382,17 @@ function calculate_line_flows!(F::AbstractVector{T}, θ::AbstractVector{<:Real},
 ) where {T<:Real}
     θ[nodes] = get_θ(DA, B, P, cont, cont_branch, slack, nodes)
     LinearAlgebra.mul!(F, DA, θ)
-    F[setdiff(1:size(DA,1), branches)] .= zero(T)
+    zero_not_in_array!(F, branches)
+    return F
+end
+function calculate_line_flows!(F::AbstractVector{T}, ϕ::AbstractMatrix{<:Real}, ϕ₀::AbstractMatrix{<:Real}, Pᵢ::AbstractVector{<:Real}, 
+    nodes::AbstractVector{<:Integer}, branches::AbstractVector{<:Integer}
+) where {T<:Real}
+    ix = ones(size(ϕ,2))
+    zero_not_in_array!(ix, nodes)
+    ϕ = ϕ₀ * LinearAlgebra.Diagonal(ix)
+    LinearAlgebra.mul!(F, ϕ, Pᵢ)
+    zero_not_in_array!(F, branches)
     return F
 end
 
@@ -383,8 +419,17 @@ calculate_line_flows(isf::AbstractMatrix{<:Real}, Pᵢ::AbstractVector{<:Real}) 
 calculate_line_flows!(pf::DCPowerFlow, Pᵢ::AbstractVector{<:Real}) = LinearAlgebra.mul!(pf.F, pf.ϕ, Pᵢ)
 
 """ DC power flow calculation using the Admittance matrix and Power Injection vector returning the bus angles """
-run_pf(B::AbstractMatrix{<:Real}, P::AbstractVector{<:Real}) = B \ P
-run_pf!(pf::DCPowerFlow, Pᵢ::AbstractVector{<:Real}) = LinearAlgebra.ldiv!(pf.θ, pf.fact_B, Pᵢ)
+function run_pf(K::KLU.KLUFactorization, P::AbstractVector{<:Real}, slack::Integer)
+    θ = copy(P)
+    KLU.solve!(K, θ)
+    θ[slack] = 0.0
+    return θ
+end
+function run_pf!(pf::DCPowerFlow, Pᵢ::AbstractVector{<:Real})
+    copy!(pf.θ, Pᵢ)
+    KLU.solve!(pf.K, pf.θ)
+    pf.θ[slack] = 0.0
+end
 
 """ DC power flow calculation using the inverse Admittance matrix and Power Injection vector returning the bus angles """
 calc_θ(X::AbstractMatrix{<:Real}, P::AbstractVector{<:Real}) = X * P

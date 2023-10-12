@@ -136,14 +136,14 @@ function run_benders_cases!(result, i, sys, voll, prob, cont, max_shed, ramp_mul
         ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long);
     model, opf, pf, oplim, Pc, Pcc, Pccx, tot_t = run_benders!(SCOPF.PSC, SCOPF.PCSC, model, opf, pf, oplim, Pc, Pcc, Pccx)
     SCOPF.fix_base_case(model)
-    SCOPF.fix_long_term(model, Pcc)
+    # SCOPF.fix_long_term(model, Pcc)
     model, opf, pf, oplim, Pc, Pcc, Pccx, tot_t = run_benders!(SCOPF.SC, SCOPF.PSC, model, opf, pf, oplim, Pc, Pcc, Pccx)
     gather_run_data!(result, 2, i, model, opf, Pc, Pcc, ramp_mult)
 
     model, opf, pf, oplim, Pc, Pcc, Pccx, tot_t = SCOPF.run_benders(SCOPF.PSC, sys, Gurobi.Optimizer, voll, prob, cont, max_shed=max_shed,
         ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=p_failure);
     SCOPF.fix_base_case(model)
-    SCOPF.fix_short_term(model, Pc)
+    # SCOPF.fix_short_term(model, Pc)
     model, opf, pf, oplim, Pc, Pcc, Pccx, tot_t = run_benders!(SCOPF.PSC, SCOPF.PCSC, model, opf, pf, oplim, Pc, Pcc, Pccx)
     gather_run_data!(result, 3, i, model, opf, Pc, Pcc, ramp_mult)
 
@@ -157,7 +157,8 @@ function run_reliability_calculation_benders(system, voll, prob, contingencies, 
     # demands = sort_components!(get_demands(system))
     # pd = demands .|> get_active_power
     hours = read_x_data("data\\ieee_std_load_profile.txt")
-    hours = 0.5:0.1:1.3
+    # hours = 0.5:0.1:1.3
+    hours = 0.8:0.1:1.1
 
     result = SystemRunData(4, length(hours))
     Logging.disable_logging(Logging.Info)

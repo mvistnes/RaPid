@@ -127,7 +127,7 @@ function run_benders!(
             if isempty(islands)
                 fill!(flow, 0.0)
             else
-                calculate_line_flows!(flow, θ, pf.DA, pf.B, bd.Pᵢ, cont, c, pf.slack, islands[island], island_b)
+                calculate_line_flows!(flow, pf, cont, c, nodes=islands[island], branches=island_b)
             end
         end
 
@@ -193,12 +193,12 @@ function run_benders!(
                 if !is_islanded(pf, cont, c)
                     get_isf!(ptdf, X, pf.X, pf.B, pf.DA, cont, c)
                 else
-                    get_isf!(ptdf, pf.DA, pf.B, cont, c, pf.slack, islands[island], island_b)
+                    get_isf!(ptdf, pf.ϕ, islands[island], island_b)
                 end
 
 
                 if get(Pc, c, 0) == 0 || get(Pcc, c, 0) == 0 || get(Pccx, c, 0) == 0
-                    basetype == SC::OPF && get_ΔP!(ΔPc, mod, opf, bd.list, Pc, c)
+                    # basetype == SC::OPF && get_ΔP!(ΔPc, mod, opf, bd.list, Pc, c)
                     type >= PCSC::OPF && get_ΔP!(ΔPcc, mod, opf, bd.list, Pcc, c)
                     type >= PCFSC::OPF && get_ΔP!(ΔPccx, mod, opf, bd.list, Pccx, c)
                 end
@@ -229,7 +229,8 @@ function run_benders!(
 
             # Cannot change the model before all data is exctracted!
             if !isempty(olc)
-                cut_added, pre = add_cut(Pc, opf, oplim, mod, bd, ΔPc, ptdf, olc, islands, island, cont, c, cut_added, lim, pre)
+                cut_added, pre = add_cut(opf, mod, bd, ptdf, olc, cont, c, cut_added, lim, pre)
+                # cut_added, pre = add_cut(Pc, opf, oplim, mod, bd, ΔPc, ptdf, olc, islands, island, cont, c, cut_added, lim, pre)
             end
             if !isempty(olcc)
                 cut_added, corr = add_cut(Pcc, opf, oplim, mod, bd, ΔPcc, ptdf, olcc, islands, island, cont, c, cut_added, lim, corr)
@@ -279,12 +280,16 @@ function calculate_contingency_line_flows!(ΔP::Vector{<:Real}, flow::Vector{<:R
     else
         ΔP = get_ΔP!(ΔP, mod, opf, bd.list, P, c)
         if is_islanded(pf, cont, c)
-            calculate_line_flows!(flow, θ, pf.DA, pf.B, (bd.Pᵢ .+ ΔP), cont, c, pf.slack, islands[island], island_b)
+            if iszero(ΔP)
+                calculate_line_flows!(flow, pf, cont, c, nodes=islands[island], branches=island_b)
+            else
+                calculate_line_flows!(flow, pf, cont, c, Pᵢ=(bd.Pᵢ .+ ΔP), nodes=islands[island], branches=island_b)
+            end
         else
             if iszero(ΔP)
                 calculate_line_flows!(flow, pf, cont, c)
             else
-                calculate_line_flows!(flow, θ, B, pf.DA, pf.B, (bd.Pᵢ .+ ΔP), cont, c, pf.slack)
+                calculate_line_flows!(flow, pf, cont, c, Pᵢ=(bd.Pᵢ .+ ΔP))
             end
         end
     end
@@ -382,6 +387,14 @@ function get_P(P::Dict, opf::OPFsystem, oplim::Oplimits, mod::Model, obj::JuMP.A
     return get(P, c, 0)
 end
 
+function add_overload_expr(expr::JuMP.AbstractJuMPScalar, mod::Model, ol::Real)
+    if ol < 0
+        JuMP.@constraint(mod, expr <= ol)
+    else
+        JuMP.@constraint(mod, expr >= ol)
+    end
+end
+
 function add_cut(opf::OPFsystem, mod::Model, bd::Benders, ptdf::AbstractMatrix{<:Real}, overloads::Vector{<:Tuple{Integer,Real}},
     cont::Tuple{Integer,Integer}, c::Integer, cut_added::Integer, lim::Real, id::Integer
 )
@@ -398,11 +411,7 @@ function add_cut(opf::OPFsystem, mod::Model, bd::Benders, ptdf::AbstractMatrix{<
         id += 1
         @info @sprintf "Pre %d: Contingency line %d-%d-i_%d; overload on %s of %.4f" id cont[1] cont[2] c opf.branches[i].name ol
         @debug "Cut added: $(sprint_expr(expr,lim))\n"
-        if ol < 0
-            pre_cut = JuMP.@constraint(mod, expr <= ol)
-        else
-            pre_cut = JuMP.@constraint(mod, expr >= ol)
-        end
+        add_overload_expr(expr, mod, ol)
         cut_added = 2
     end
     return cut_added, id
@@ -426,11 +435,7 @@ function add_cut(Pc::Dict{<:Integer, Main.SCOPF.ExprC}, opf::OPFsystem, oplim::O
         id += 1
         @info @sprintf "Pre %d: Contingency line %d-%d-i_%d; overload on %s of %.4f" id cont[1] cont[2] c opf.branches[i].name ol
         @debug "Cut added: $(sprint_expr(expr,lim))\n"
-        if ol < 0
-            pre_cut = JuMP.@constraint(mod, expr <= ol)
-        else
-            pre_cut = JuMP.@constraint(mod, expr >= ol)
-        end
+        add_overload_expr(expr, mod, ol)
         cut_added = 2
     end
     return cut_added, id
@@ -455,11 +460,7 @@ function add_cut(Pcc::Dict{<:Integer, Main.SCOPF.ExprCC}, opf::OPFsystem, oplim:
         id += 1
         @info @sprintf "Corr %d: Contingency line %d-%d-i_%d; overload on %s of %.4f" id cont[1] cont[2] c opf.branches[i].name ol
         @debug "Cut added: $(sprint_expr(expr,lim))\n"
-        if ol < 0
-            JuMP.@constraint(mod, expr <= ol)
-        else
-            JuMP.@constraint(mod, expr >= ol)
-        end
+        add_overload_expr(expr, mod, ol)
         cut_added = 3
     end
     return cut_added, id
@@ -484,11 +485,7 @@ function add_cut(Pccx::Dict{<:Integer, Main.SCOPF.ExprCCX}, opf::OPFsystem, opli
 
             @info @sprintf "Corr.x %d: Contingency line %d-%d-i_%d; overload on %s of %.4f" id cont[1] cont[2] c opf.branches[i].name ol
             @debug "Cut added: $(sprint_expr(expr,lim))\n"
-            if ol < 0
-                JuMP.@constraint(mod, expr <= ol)
-            else
-                JuMP.@constraint(mod, expr >= ol)
-            end
+            add_overload_expr(expr, mod, ol)
             cut_added = 3
         end
     end

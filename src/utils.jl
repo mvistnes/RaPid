@@ -417,6 +417,42 @@ function sorted_missing(vals::AbstractVector{T}, maxval::Int) where {T<:Int}
     return res
 end
 
+function not_insorted_nodes(from_bus::Integer, to_bus::Integer, nodes::AbstractVector{<:Integer})
+    if insorted(from_bus, nodes)
+        return 2
+    elseif insorted(to_bus, nodes)
+        return 1
+    end
+    throw(DivideError())
+end
+
+function zero_not_in_array!(array::AbstractArray{T}, subarray::AbstractVector{<:Integer}, n::Integer = ndims(array)
+) where {T<:Real}
+    i = firstindex(array, n)
+    x = iterate(subarray)
+    while lastindex(array, n) >= i
+        if x === nothing 
+            set_zero!.([array], i:lastindex(array, n), [Val(n)])
+            break
+        end
+        val, state = x
+        if i != val
+            set_zero!(array, i, Val(n))
+        elseif i == val
+            x = iterate(subarray, state)
+        else
+            array .= zero(T)
+            break
+        end
+        i += 1
+    end
+    return array
+end
+
+set_zero!(mx::AbstractMatrix{T}, i::Integer, ::Val{2}) where {T<:Real} = mx[:,i] .= zero(T)
+set_zero!(mx::AbstractMatrix{T}, i::Integer, ::Val{1}) where {T<:Real} = mx[i,:] .= zero(T)
+set_zero!(vx::AbstractVector{T}, i::Integer, ::Val{1}) where {T<:Real} = vx[i] = zero(T)
+
 " Split a Vector{Pair} into a Pair{Vector}"
 split_pair(val::AbstractVector) = map(first, val), map(last, val)
 
