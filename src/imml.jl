@@ -4,7 +4,7 @@
 get_power_flow_change(F::AbstractVector{<:Real}, ϕ::AbstractMatrix{<:Real}, A::AbstractMatrix{<:Integer}, branch) =
     F .+ get_change(ϕ, A, branch) * F[branch]
 
-function get_change(ϕ::AbstractMatrix{<:Real}, A::AbstractMatrix{<:Integer}, branch; atol::Real=1e-5)
+function get_change(ϕ::AbstractMatrix{<:Real}, A::AbstractMatrix{<:Integer}, branch; atol::Real=1e-10)
     x = LinearAlgebra.I - ϕ[branch, :]' * A[branch, :]
     if isapprox(x, zero(typeof(x)); atol=atol)
         return zeros(typeof(x), size(x))
@@ -32,7 +32,7 @@ Input:
     from_bus::Integer,
     to_bus::Integer,
     branch::Integer;
-    atol::Real=1e-8
+    atol::Real=1e-10
 ) where {T<:Real}
     change = DA[branch, to_bus] / B[from_bus, to_bus]
     # x = change * (X[:, from_bus] - X[:, to_bus])
@@ -118,7 +118,7 @@ Input:
     from_bus::Integer,
     to_bus::Integer,
     branch::Integer;
-    atol::Real=1e-8
+    atol::Real=1e-10
 ) where {T<:Real}
 
     # X_new = X - (X*A[from_bus,:]*DA[from_bus,to_bus]*x)/(1+DA[from_bus,to_bus]*x*A[from_bus,:])
@@ -129,15 +129,15 @@ Input:
         if size(SparseArrays.getindex(B,from_bus,:).nzind, 1) <= 2 # Assummes only one islanded bus
             c⁻¹ = inv(B[to_bus, from_bus]) + change * (- x[to_bus])
             copy!(X, X₀)
-            X[:,from_bus] .= 0.0
-            X[from_bus,:] .= 0.0
-            X[from_bus,from_bus] = 1.0
+            X[:,from_bus] .= zero(T)
+            X[from_bus,:] .= zero(T)
+            X[from_bus,from_bus] = one(T)
         elseif size(SparseArrays.getindex(B,to_bus,:).nzind, 1) <= 2
             c⁻¹ = inv(B[to_bus, from_bus]) + change * (x[from_bus])
             copy!(X, X₀)
-            X[:,to_bus] .= 0.0
-            X[to_bus,:] .= 0.0
-            X[to_bus,to_bus] = 1.0
+            X[:,to_bus] .= zero(T)
+            X[to_bus,:] .= zero(T)
+            X[to_bus,to_bus] = one(T)
         else
             throw(DivideError())
         end
@@ -205,7 +205,7 @@ Input:
     from_bus::Integer,
     to_bus::Integer,
     branch::Integer;
-    atol::Real=1e-8
+    atol::Real=1e-10
 ) where {T<:Real}
     change = DA[branch, to_bus] / B[from_bus, to_bus]
     # x = change * (X[:,from_bus] - X[:,to_bus])
@@ -230,7 +230,7 @@ end
     to_bus::Integer,
     branch::Integer,
     ::Val{1}; # from_bus is not connected to the system
-    atol::Real=1e-8
+    atol::Real=1e-10
 ) where {T<:Real}
     change = DA[branch, to_bus] / B[from_bus, to_bus]
     c⁻¹ = inv(B[from_bus, to_bus]) + change * (- X[from_bus, to_bus] + X[to_bus, to_bus])
@@ -254,7 +254,7 @@ end
     to_bus::Integer,
     branch::Integer,
     ::Val{2}; # to_bus is not connected to the system
-    atol::Real=1e-8
+    atol::Real=1e-10
 ) where {T<:Real}
     change = DA[branch, to_bus] / B[from_bus, to_bus]
     c⁻¹ = inv(B[from_bus, to_bus]) + change * (X[from_bus, from_bus] - X[to_bus, from_bus])

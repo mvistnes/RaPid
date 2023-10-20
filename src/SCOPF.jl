@@ -23,7 +23,7 @@ const MOI = MathOptInterface
 import LinearAlgebra
 import Ipopt # LP, SOCP, Nonconvex
 import Gurobi # LP, SOCP, Integer
-# import GLPK # LP, Integer
+import GLPK # LP, Integer
 # import Tulip
 import Test
 
@@ -51,6 +51,9 @@ export DCPowerFlow, calc_Pᵢ, build_adjacency, connectivitymatrix, calc_A, calc
     calc_B, calc_D, get_isf, get_ptdf, find_overload, filter_overload, calculate_line_flows,
     calculate_line_flows!, calc_Pline, run_pf
 
+include("cont_dc_power_flow.jl")
+export get_isf, get_ptdf, calculate_line_flows, calculate_line_flows!
+    
 #=
     Functions using the Inverse Matrix Modification Lemma.
 =#

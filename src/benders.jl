@@ -90,7 +90,7 @@ function run_benders!(
     # end
     solve_model!(mod)
     total_solve_time = solve_time(mod)
-    termination_status(mod) != MOI.OPTIMAL && return mod, opf, pf, oplim, Pc, Pcc, Pccx, total_solve_time
+    !has_values(mod) && return mod, opf, pf, oplim, Pc, Pcc, Pccx, total_solve_time
     @debug "lower_bound = $(objective_value(mod))"
 
     # Set variables
@@ -140,7 +140,7 @@ function run_benders!(
     end
 
     total_solve_time = update_model!(mod, pf, bd, total_solve_time)
-    termination_status(mod) != MOI.OPTIMAL && return mod, opf, pf, oplim, Pc, Pcc, Pccx, total_solve_time
+    !has_values(mod) && return mod, opf, pf, oplim, Pc, Pcc, Pccx, total_solve_time
     GC.safepoint()
     # end
     # LinearAlgebra.BLAS.set_num_threads(Threads.nthreads())
@@ -242,7 +242,7 @@ function run_benders!(
                 total_solve_time = update_model!(mod, pf, bd, total_solve_time)
                 cut_added = 1
             end
-            termination_status(mod) != MOI.OPTIMAL && return mod, opf, pf, oplim, Pc, Pcc, Pccx, total_solve_time
+            !has_values(mod) && return mod, opf, pf, oplim, Pc, Pcc, Pccx, total_solve_time
         end
 
     end
@@ -547,7 +547,7 @@ function run_benders!(
 )
     solve_model!(mod)
     total_solve_time = solve_time(mod)
-    termination_status(mod) != MOI.OPTIMAL && return mod, opf, pf, oplim, total_solve_time
+    !has_values(mod) && return mod, opf, pf, oplim, total_solve_time
     @debug "lower_bound = $(objective_value(mod))"
 
     # Set variables
@@ -615,7 +615,7 @@ function run_benders!(
                 total_solve_time = update_model!(mod, pf, bd, total_solve_time)
                 cut_added = 1
             end
-            termination_status(mod) != MOI.OPTIMAL && return mod, opf, pf, oplim, total_solve_time
+            !has_values(mod) && return mod, opf, pf, oplim, total_solve_time
         end
 
     end

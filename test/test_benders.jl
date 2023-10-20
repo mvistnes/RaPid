@@ -4,6 +4,8 @@ using PowerSystems
 import JuMP
 import Gurobi
 import Logging
+import Random
+Random.seed!(42)
 Logging.disable_logging(Logging.Info)
 
 function comparison(fname::String)

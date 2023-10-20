@@ -127,6 +127,7 @@ function create_model(optimizer, time_limit_sec; silent=true, debug=false)
     if Gurobi.Optimizer == optimizer
         mod = Model(optimizer_with_attributes(optimizer, "Threads" => Threads.nthreads()); add_bridges=false)
     else
+        # mod = Model(optimizer_with_attributes(optimizer, "presolve" => GLPK.GLP_ON), add_bridges=false)
         mod = Model(optimizer; add_bridges=false)
     end
     set_string_names_on_creation(mod, debug)
@@ -325,7 +326,7 @@ find_slack(sys::System) = find_slack(sort_components!(get_nodes(sys)))
 """ Run optimizer to solve the model and check for optimality """
 function solve_model!(model::Model)
     optimize!(model)
-    if termination_status(model) != MOI.OPTIMAL
+    if !has_values(model)
         @warn "Model not optimally solved with status $(termination_status(model))!"
     else
         @info @sprintf "Model solved in %.6fs with objective value %.4f" MOI.get(model, MOI.SolveTimeSec()) objective_value(model)

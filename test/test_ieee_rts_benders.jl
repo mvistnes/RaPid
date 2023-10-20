@@ -3,6 +3,8 @@ include("C:\\Users\\matiaskv\\OneDrive - NTNU\\Documents\\PhD\\SCOPF\\src\\SCOPF
 using PowerSystems
 import JuMP
 import Gurobi
+import Random
+Random.seed!(42)
 
 # open("output.txt", "w") do out
 #     redirect_stdout(out) do
@@ -71,7 +73,7 @@ import Gurobi
     # @time SCOPF.solve_model!(opfm_norm.mod);
 
     println("Start Contingency select")
-    @time mod_cont, opf_cont, pf_cont, oplim_cont, Pc_cont, Pcc_cont, Pccx_cont, tot_t = SCOPF.run_contingency_select(SCOPF.PCSC, system, SCOPF.Gurobi.Optimizer, voll, prob, contingencies, 
+    @time mod_cont, opf_cont, pf_cont, oplim_cont, Pc_cont, Pcc_cont, Pccx_cont, tot_t = SCOPF.run_contingency_select(SCOPF.PCSC, system, Gurobi.Optimizer, voll, prob, contingencies, 
         max_shed=max_shed, ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=0.00);
     println("Solver time: ", tot_t, " Objective value Contingency select: ", JuMP.objective_value(mod_cont))
     SCOPF.print_contingency_P(opf_cont, Pc_cont, Pcc_cont, Pccx_cont)
