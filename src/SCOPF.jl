@@ -4,28 +4,23 @@ module SCOPF
 
 using PowerSystems
 using JuMP
-using Plots
-using StatsPlots
+# using Plots
+# using StatsPlots
 using Printf
 # using PowerSystemCaseBuilder
-using Test
-using Statistics
-using DelimitedFiles
+# using Test
+# using DelimitedFiles
 
+import Statistics: mean
 import Logging
 import SparseArrays
 # import StaticArrays
 # import Octavian
 # import SuiteSparseGraphBLAS
 import MathOptInterface
-import KLU
 const MOI = MathOptInterface
+import KLU
 import LinearAlgebra
-import Ipopt # LP, SOCP, Nonconvex
-import Gurobi # LP, SOCP, Integer
-import GLPK # LP, Integer
-# import Tulip
-import Test
 
 ## For timing functions (with allocations)
 # using TimerOutputs
@@ -109,7 +104,7 @@ export run_reliability_calculation
     Functions for printing and plotting SCOPF results.
 =#
 include("post_process_opf.jl")
-export scatterplot, make_save_plot, scatter_all, print_variabel, print_results, print_active_power,
+export scatter_all, print_variabel, print_results, print_active_power,
     print_power_flow, print_contingency_power_flow, print_contingency_overflow
 
 end

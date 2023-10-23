@@ -42,7 +42,7 @@ end
 function fix_generation_cost!(sys::System)
     # set_operation_cost!.(get_renewables(sys), make_cost_renewables(sys))
     cost = [get_generator_cost(g)[2] for g in get_gens_t(sys)]
-    c_mean = Statistics.mean(cost)
+    c_mean = mean(cost)
     set_operation_cost!.(get_ctrl_generation(sys),
         [[iszero(c) ? c_mean * (rand() + 0.5) : c for c in cost]
             [c_mean * (rand() + 0.1) for _ in get_gens_h(sys)]])
@@ -122,24 +122,11 @@ make_prob(contingencies::AbstractVector, prob_min=0.1, prob_max=0.4) =
 
 get_system(fname::String) = System(joinpath("data", fname))
 
-function create_model(optimizer, time_limit_sec; silent=true, debug=false)
-    # mod = Model(optimizer)
-    if Gurobi.Optimizer == optimizer
-        mod = Model(optimizer_with_attributes(optimizer, "Threads" => Threads.nthreads()); add_bridges=false)
-    else
-        # mod = Model(optimizer_with_attributes(optimizer, "presolve" => GLPK.GLP_ON), add_bridges=false)
-        mod = Model(optimizer; add_bridges=false)
-    end
+function create_model(optimizer; time_limit_sec::Integer=10000, silent::Bool=true, debug::Bool=false)
+    mod = Model(optimizer; add_bridges=false)
     set_string_names_on_creation(mod, debug)
     MOI.set(mod, MOI.Silent(), silent) # supress output from the solver
-    # @debug begin
-    #     set_string_names_on_creation(mod, true)
-    #     "Variable names is on."
-    # end
-
-    # if GLPK.Optimizer == optimizer 
-    #     set_optimizer_attribute(mod, "msg_lev", GLPK.GLP_MSG_ON)
-    # end
+    set_time_limit_sec(mod, time_limit_sec)
     return mod
 end
 
@@ -188,7 +175,7 @@ function opfsystem(sys::System, voll::Vector{<:Real}, contingencies::Vector{<:Br
     check_values(limits[1], dc_branches, "rate_dc_branches_min")
     check_values(limits[2], dc_branches, "rate_dc_branches_max")
 
-    islands = island_detection(nodes, branches)
+    islands = island_detection(calc_B(branches, nodes))
     if length(islands) > 1
         @info "The system is separated into islands" islands
     end
