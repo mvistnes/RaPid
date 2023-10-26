@@ -231,12 +231,6 @@ function island_detection_thread_safe(Y::SparseArrays.SparseMatrixCSC{Ty,<:Integ
     return islands
 end
 
-
-function island_detection(nodes::AbstractVector{<:Bus}, branches::AbstractVector{<:Branch})
-    idx = get_nodes_idx(nodes)
-    return island_detection(calc_B(branches, idx))
-end
-
 function find_ref_island(islands::Vector, slack::Integer)
     for (i, island) in enumerate(islands)
         if slack ∈ island

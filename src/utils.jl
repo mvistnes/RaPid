@@ -42,7 +42,7 @@ end
 function fix_generation_cost!(sys::System)
     # set_operation_cost!.(get_renewables(sys), make_cost_renewables(sys))
     cost = [get_generator_cost(g)[2] for g in get_gens_t(sys)]
-    c_mean = Statistics.mean(cost)
+    c_mean = mean(cost)
     set_operation_cost!.(get_ctrl_generation(sys),
         [[iszero(c) ? c_mean * (rand() + 0.5) : c for c in cost]
             [c_mean * (rand() + 0.1) for _ in get_gens_h(sys)]])
@@ -122,24 +122,11 @@ make_prob(contingencies::AbstractVector, prob_min=0.1, prob_max=0.4) =
 
 get_system(fname::String) = System(joinpath("data", fname))
 
-function create_model(optimizer, time_limit_sec; silent=true, debug=false)
-    # mod = Model(optimizer)
-    if Gurobi.Optimizer == optimizer
-        mod = Model(optimizer_with_attributes(optimizer, "Threads" => Threads.nthreads()); add_bridges=false)
-    else
-        # mod = Model(optimizer_with_attributes(optimizer, "presolve" => GLPK.GLP_ON), add_bridges=false)
-        mod = Model(optimizer; add_bridges=false)
-    end
+function create_model(optimizer; time_limit_sec::Integer=10000, silent::Bool=true, debug::Bool=false)
+    mod = Model(optimizer; add_bridges=false)
     set_string_names_on_creation(mod, debug)
     MOI.set(mod, MOI.Silent(), silent) # supress output from the solver
-    # @debug begin
-    #     set_string_names_on_creation(mod, true)
-    #     "Variable names is on."
-    # end
-
-    # if GLPK.Optimizer == optimizer 
-    #     set_optimizer_attribute(mod, "msg_lev", GLPK.GLP_MSG_ON)
-    # end
+    set_time_limit_sec(mod, time_limit_sec)
     return mod
 end
 
@@ -188,7 +175,7 @@ function opfsystem(sys::System, voll::Vector{<:Real}, contingencies::Vector{<:Br
     check_values(limits[1], dc_branches, "rate_dc_branches_min")
     check_values(limits[2], dc_branches, "rate_dc_branches_max")
 
-    islands = island_detection(nodes, branches)
+    islands = island_detection(calc_B(branches, nodes))
     if length(islands) > 1
         @info "The system is separated into islands" islands
     end
@@ -509,6 +496,28 @@ function get_net_Pᵢ(opf::OPFsystem, mod::Model, idx::Dict{<:Int,<:Int}=get_nod
     # @assert abs(sum(Pᵢ)) < 0.001
     return P
 end
+function get_net(power_func::Function, opf::OPFsystem, idx::Dict{<:Int,<:Int})
+    vals = zeros(length(opf.nodes))
+    for r in opf.renewables
+        vals[idx[r.bus.number]] += power_func(r)
+    end
+    for d in opf.demands
+        vals[idx[d.bus.number]] -= power_func(d)
+    end
+    for r in opf.ctrl_generation
+        vals[idx[r.bus.number]] += power_func(r)
+    end
+    for d in opf.dc_branches
+        vals[idx[d.arc.from.number]] += power_func(d)
+        vals[idx[d.arc.to.number]] -= power_func(d)
+    end
+    return vals
+end
+get_net_P(opf::OPFsystem, idx::Dict{<:Int,<:Int}=get_nodes_idx(opf.nodes)) = 
+    get_net(get_active_power, opf, idx)
+get_net_Q(opf::OPFsystem, idx::Dict{<:Int,<:Int}=get_nodes_idx(opf.nodes)) = 
+    get_net(get_reactive_power, opf, idx)
+
 
 function get_Pd!(P::Vector{<:Real}, opf::OPFsystem, idx::Dict{<:Int,<:Int})
     for r in opf.renewables
@@ -517,11 +526,10 @@ function get_Pd!(P::Vector{<:Real}, opf::OPFsystem, idx::Dict{<:Int,<:Int})
     for d in opf.demands
         P[idx[d.bus.number]] -= get_active_power(d)
     end
+    return P
 end
 function get_Pd(opf::OPFsystem, idx::Dict{<:Int,<:Int}=get_nodes_idx(opf.nodes))
-    P = zeros(length(opf.nodes))
-    get_Pd!(P, opf, idx)
-    return P
+    get_Pd!(zeros(length(opf.nodes)), opf, idx)
 end
 
 """ Return power shed at each node. """
@@ -534,11 +542,10 @@ function get_Pshed!(P::Vector{<:Real}, opf::OPFsystem, mod::Model, idx::Dict{<:I
     for (i, d) in enumerate(opf.demands)
         P[idx[d.bus.number]] += vals[i]
     end
+    return P
 end
 function get_Pshed(opf::OPFsystem, mod::Model, idx::Dict{<:Int,<:Int}=get_nodes_idx(opf.nodes))
-    P = zeros(length(opf.nodes))
-    get_Pshed!(P, opf, mod, idx)
-    return P
+    get_Pshed!(zeros(length(opf.nodes)), opf, mod, idx)
 end
 
 """ Return the power injected by controlled generation at each node. """
@@ -555,9 +562,7 @@ function get_Pgen!(P::Vector{<:Real}, opf::OPFsystem, mod::Model, idx::Dict{<:In
     return P
 end
 function get_Pgen(opf::OPFsystem, mod::Model, idx::Dict{<:Int,<:Int}=get_nodes_idx(opf.nodes))
-    P = zeros(length(opf.nodes))
-    get_Pgen!(P, opf, mod, idx)
-    return P
+    get_Pgen!(zeros(length(opf.nodes)), opf, mod, idx)
 end
 
 function get_controllable(opf::OPFsystem, mod::Model, idx::Dict{<:Int,<:Int}=get_nodes_idx(opf.nodes))

@@ -264,6 +264,9 @@ function update_model!(mod::Model, pf::DCPowerFlow, bd::Benders, total_solve_tim
     return total_solve_time
 end
 
+"""
+    Calculate the contingency overflow using PTDF.
+"""
 function find_overloads(flow::Vector{<:Real}, ptdf::AbstractMatrix{<:Real}, Pᵢ::Vector{<:Real},
     ΔP::Vector{<:Real}, branch_rating::Vector{<:Real}
 )
@@ -271,6 +274,10 @@ function find_overloads(flow::Vector{<:Real}, ptdf::AbstractMatrix{<:Real}, Pᵢ
     return filter_overload(flow, branch_rating)
 end
 
+"""
+    Calculate the contingency power flow using IMML.
+    Assummes that island-contingencies have active variables from the pre-procedure.
+"""
 function calculate_contingency_line_flows!(ΔP::Vector{<:Real}, flow::Vector{<:Real}, θ::Vector{<:Real}, B::AbstractMatrix{<:Real}, 
     P::Dict{<:Integer, T}, opf::OPFsystem, mod::Model, pf::DCPowerFlow, bd::Benders, cont::Tuple{Real,Real}, c::Integer, islands::Vector, 
     island::Integer, island_b::Vector{<:Integer}
@@ -294,6 +301,10 @@ function calculate_contingency_line_flows!(ΔP::Vector{<:Real}, flow::Vector{<:R
         end
     end
 end
+
+"""
+    Calculate the contingency overflow using IMML.
+"""
 function calculate_contingency_overload!(ΔP::Vector{<:Real}, flow::Vector{<:Real}, branch_rating::Vector{<:Real},
     θ::Vector{<:Real}, B::AbstractMatrix{<:Real}, Pc::Dict, opf::OPFsystem, mod::Model, pf::DCPowerFlow, bd::Benders, 
     cont::Tuple{Real,Real}, c::Integer, islands::Vector, island::Integer, island_b::Vector{<:Integer}

@@ -2,9 +2,15 @@
 include("C:\\Users\\matiaskv\\OneDrive - NTNU\\Documents\\PhD\\SCOPF\\src\\SCOPF.jl")
 using PowerSystems
 import JuMP
-import Gurobi
+import Ipopt # LP, SOCP, Nonconvex
+import Gurobi # LP, SOCP, Integer
+import GLPK # LP, Integer
+# import Tulip
 import Random
+
 Random.seed!(42)
+optimizer = JuMP.optimizer_with_attributes(Gurobi.Optimizer, "Threads" => Threads.nthreads())
+# optimizer = JuMP.optimizer_with_attributes(GLPK.Optimizer, "msg_lev" => GLPK.GLP_MSG_ON)
 
 # open("output.txt", "w") do out
 #     redirect_stdout(out) do
@@ -63,28 +69,28 @@ Random.seed!(42)
     ramp_mult = 10.
 
     println("Start PTDF")
-    @time mod_ptdf, opf_ptdf, pf_ptdf, oplim_ptdf, Pc_ptdf, Pcc_ptdf, Pccx_ptdf = SCOPF.opf(SCOPF.PCSC, system, Gurobi.Optimizer, voll=voll, contingencies=contingencies, prob=prob, max_shed=max_shed,
+    @time mod_ptdf, opf_ptdf, pf_ptdf, oplim_ptdf, Pc_ptdf, Pcc_ptdf, Pccx_ptdf = SCOPF.opf(SCOPF.PCSC, system, optimizer, voll=voll, contingencies=contingencies, prob=prob, max_shed=max_shed,
         ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long);
     @time SCOPF.solve_model!(mod_ptdf);
     println("Objective value PTDF: ", JuMP.objective_value(mod_ptdf))
     SCOPF.print_contingency_P(opf_ptdf, Pc_ptdf, Pcc_ptdf)
-    # @time opfm_norm = SCOPF.scopf(SCOPF.PCSC, system, Gurobi.Optimizer, voll=voll, contingencies=contingencies, prob=prob, max_shed=max_shed, 
+    # @time opfm_norm = SCOPF.scopf(SCOPF.PCSC, system, optimizer, voll=voll, contingencies=contingencies, prob=prob, max_shed=max_shed, 
     #     ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short);
     # @time SCOPF.solve_model!(opfm_norm.mod);
 
     println("Start Contingency select")
-    @time mod_cont, opf_cont, pf_cont, oplim_cont, Pc_cont, Pcc_cont, Pccx_cont, tot_t = SCOPF.run_contingency_select(SCOPF.PCSC, system, Gurobi.Optimizer, voll, prob, contingencies, 
+    @time mod_cont, opf_cont, pf_cont, oplim_cont, Pc_cont, Pcc_cont, Pccx_cont, tot_t = SCOPF.run_contingency_select(SCOPF.PCSC, system, optimizer, voll, prob, contingencies, 
         max_shed=max_shed, ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=0.00);
     println("Solver time: ", tot_t, " Objective value Contingency select: ", JuMP.objective_value(mod_cont))
     SCOPF.print_contingency_P(opf_cont, Pc_cont, Pcc_cont, Pccx_cont)
 
     println("Start Benders")
-    @time model, opf, pf, oplim, Pc, Pcc, Pccx, tot_t = SCOPF.run_benders(SCOPF.PCSC, system, Gurobi.Optimizer, voll, prob, contingencies, max_shed=max_shed,
+    @time model, opf, pf, oplim, Pc, Pcc, Pccx, tot_t = SCOPF.run_benders(SCOPF.PCSC, system, optimizer, voll, prob, contingencies, max_shed=max_shed,
         ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=0.00);
     println("Solver time: ", tot_t, " Objective value Benders: ", JuMP.objective_value(model))
     SCOPF.print_contingency_P(opf, Pc, Pcc, Pccx)
 
-    model, opf, pf, oplim, Pc, Pcc, Pccx = SCOPF.opf(SCOPF.SC, system, Gurobi.Optimizer, voll=voll, contingencies=contingencies, prob=prob, max_shed=max_shed,
+    model, opf, pf, oplim, Pc, Pcc, Pccx = SCOPF.opf(SCOPF.SC, system, optimizer, voll=voll, contingencies=contingencies, prob=prob, max_shed=max_shed,
         ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long);
     idx = SCOPF.get_nodes_idx(opf.nodes);
     list = SCOPF.make_list(opf, idx, opf.nodes);
@@ -108,7 +114,7 @@ function change_slack(system, nodes, voll, prob, contingencies, max_shed, ramp_m
         nodes[n].bustype = ACBusTypes.REF
         slack = n
         println(SCOPF.find_slack(nodes)[1])
-        model, opf, pf, oplim, Pc, Pcc, Pccx, tot_t = SCOPF.run_benders(SCOPF.PCSC, system, Gurobi.Optimizer, voll, prob, contingencies, max_shed=max_shed,
+        model, opf, pf, oplim, Pc, Pcc, Pccx, tot_t = SCOPF.run_benders(SCOPF.PCSC, system, optimizer, voll, prob, contingencies, max_shed=max_shed,
             ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=0.00)
         push!(res, JuMP.objective_value(model))
     end

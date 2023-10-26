@@ -19,9 +19,9 @@ mutable struct DCPowerFlow{T1<:Real,T2<:Integer} <: PowerFlow
     vb_tmp::Vector{T1} # branch vector
 end
 
-function DCPowerFlow(branches::AbstractVector{<:Tuple{T2,T2}}, x::AbstractVector{T1}, numnodes::Integer, slack::Integer) where {T1<:Real,T2<:Integer}
+function DCPowerFlow(branches::AbstractVector{<:Tuple{T2,T2}}, susceptance::AbstractVector{T1}, numnodes::Integer, slack::Integer) where {T1<:Real,T2<:Integer}
     A = calc_A(branches)
-    DA = calc_DA(A, x)
+    DA = calc_DA(A, susceptance)
     B = calc_B(A, DA)
     K = get_klu(B, slack)
     ϕ = get_isf(K, DA, slack)
@@ -30,7 +30,7 @@ function DCPowerFlow(branches::AbstractVector{<:Tuple{T2,T2}}, x::AbstractVector
         zeros(T1, size(DA)), get_klu(B, slack), zeros(T1, size(X)), zeros(T1, numnodes), zeros(T1, length(branches)))
 end
 DCPowerFlow(nodes::AbstractVector{<:Bus}, branches::AbstractVector{<:Branch}, idx::Dict{<:Int,<:Int}) =
-    DCPowerFlow(get_bus_idx.(branches, [idx]), get_x.(branches), length(nodes), find_slack(nodes)[1])
+    DCPowerFlow(get_bus_idx.(branches, [idx]), PowerSystems.get_series_susceptance.(branches), length(nodes), find_slack(nodes)[1])
 
 function DCPowerFlow(sys::System)
     nodes = sort_components!(get_nodes(sys))
@@ -83,50 +83,21 @@ function calc_Pᵢ_from_flow(branches::AbstractVector{<:Branch}, F::AbstractVect
     return P
 end
 
-""" Make the generator connectivity matrix """ # TODO: Fix
-function connectivitymatrix(gens, numnodes::Integer, idx::Dict{<:Int,<:Integer})
-    bus = getindex.([idx], get_number.(get_bus.(gens)))
-    mx = SparseArrays.spzeros(String, length(gens), numnodes)
-    for (i, (g, b)) in enumerate(zip(gens, bus))
-        mx[i, b] = g.name
-    end
-    return mx
-end
-
-connectivitymatrix(system::System, numnodes::Integer, idx::Dict{<:Int,<:Integer}) =
-    connectivitymatrix(get_components(Generator, system), numnodes, idx)
-
 """ Make the branch connectivity matrix """
-# function calc_A(branches::AbstractVector{<:Tuple{Integer, Integer}}, numnodes::Integer)
-#     A = SparseArrays.spzeros(Int8, length(branches), numnodes)
-#     for (i, (f, t)) in enumerate(branches)
-#         A[i,f] = one(Int8)
-#         A[i,t] = -one(Int8)
-#     end
-#     return A
-# end
-# calc_A(branches::AbstractVector{<:Branch}, numnodes::Integer, idx::Dict{<:Int, <:Integer}) =
-#     calc_A(get_bus_idx.(branches, [idx]), numnodes)
-
 function calc_A(branches::AbstractVector{<:Tuple{Integer,Integer}})
     num_b = length(branches)
 
     A_I = Vector{Int}(undef, 2 * num_b)
+    @. A_I[1:num_b] = 1:num_b
+    @. A_I[(num_b+1):end] = 1:num_b
+
     A_J = Vector{Int}(undef, 2 * num_b)
+    @. A_J[1:num_b] = first(branches)
+    @. A_J[(num_b+1):end] = last(branches)
+    
     A_V = Vector{Int8}(undef, 2 * num_b)
-
-    # build incidence matrix A (lines x buses)
-    for (ix, b) in pairs(branches)
-        (fbus, tbus) = b
-
-        A_I[ix] = ix
-        A_J[ix] = fbus
-        A_V[ix] = one(Int8)
-
-        A_I[num_b + ix] = ix
-        A_J[num_b + ix] = tbus
-        A_V[num_b + ix] = -one(Int8)
-    end
+    @. A_V[1:num_b] = one(Int8)
+    @. A_V[(num_b+1):end] = -one(Int8)
 
     return SparseArrays.sparse(A_I, A_J, A_V)
 end
@@ -134,34 +105,90 @@ calc_A(branches::AbstractVector{<:Branch}, idx::Dict{<:Int,<:Integer}) =
     calc_A(get_bus_idx.(branches, [idx]))
 
 """ Make the diagonal suseptance matrix """
-calc_D(x::AbstractVector{<:Real}) = LinearAlgebra.Diagonal(1.0 ./ x)
-calc_D(branches::AbstractVector{<:Branch}) = calc_D(get_x.(branches))
+calc_D(susceptance::AbstractVector{<:Real}) = LinearAlgebra.Diagonal(susceptance)
+calc_D(branches::AbstractVector{<:Branch}) = calc_D(PowerSystems.get_series_susceptance.(branches))
 
-calc_DA(A::AbstractMatrix{<:Real}, x::AbstractVector{<:Real}) = calc_D(x) * A
-calc_DA(branches::AbstractVector{<:Branch}, idx::Dict{<:Int,<:Integer}) = calc_DA(calc_A(branches, idx), get_x.(branches))
+calc_DA(A::AbstractMatrix{<:Real}, susceptance::AbstractVector{<:Real}) = calc_D(susceptance) * A
+calc_DA(branches::AbstractVector{<:Branch}, idx::Dict{<:Int,<:Integer}) = 
+    calc_DA(calc_A(branches, idx), PowerSystems.get_series_susceptance.(branches))
 
 calc_B(A::AbstractMatrix{<:Real}, DA::AbstractMatrix{<:Real}) = A' * DA
-function calc_B(branches::AbstractVector{<:Tuple{Integer,Integer}}, x::AbstractVector{<:Real})
+function calc_B(branches::AbstractVector{<:Tuple{Integer,Integer}}, susceptance::AbstractVector{<:Real})
     A = calc_A(branches)
-    D = calc_D(x)
-        # TODO: add support for TapTransformer and PhaseShiftingTransformer
+    D = calc_D(susceptance)
     return A' * (D * A)
 end
 calc_B(branches::AbstractVector{<:Branch}, idx::Dict{<:Int,<:Integer}) =
-    calc_B(get_bus_idx.(branches, [idx]), get_x.(branches))
+    calc_B(get_bus_idx.(branches, [idx]), PowerSystems.get_series_susceptance.(branches))
+calc_B(branches::AbstractVector{<:Branch}, nodes::AbstractVector{<:Bus}) =
+    calc_B(get_bus_idx.(branches, [get_nodes_idx(nodes)]), PowerSystems.get_series_susceptance.(branches))
+
+function _add_B!(B::SparseArrays.SparseMatrixCSC, br::ACBranch, idx::Dict{<:Int,<:Integer})
+    (fbus, tbus) = get_bus_idx(br, idx)
+    y = 1 / get_x(br)
+    b = get_b(br)
+    B[fbus,fbus] += (y - b.from)
+    B[tbus,tbus] += (y - b.to)
+    B[fbus,tbus] -= y
+    B[tbus,fbus] -= y
+    return
+end
+
+function _add_B!(B::SparseArrays.SparseMatrixCSC, br::Transformer2W, idx::Dict{<:Int,<:Integer})
+    (fbus, tbus) = get_bus_idx(br, idx)
+    y = 1 / get_x(br)
+    b = get_primary_shunt(br)
+    B[fbus,fbus] += (y + b)
+    B[tbus,tbus] += y
+    B[fbus,tbus] -= y
+    B[tbus,fbus] -= y
+    return
+end
+
+function _add_B!(B::SparseArrays.SparseMatrixCSC, br::TapTransformer, idx::Dict{<:Int,<:Integer})
+    (fbus, tbus) = get_bus_idx(br, idx)
+    y = 1 / get_x(br)
+    tap = 1 / get_tap(br)
+    b = get_primary_shunt(br)
+    B[fbus,fbus] += ((y * tap^2) + b)
+    B[tbus,tbus] += y
+    B[fbus,tbus] -= (y * tap)
+    B[tbus,fbus] -= (y * tap)
+    return
+end
+
+function _add_B!(B::SparseArrays.SparseMatrixCSC, br::PhaseShiftingTransformer, idx::Dict{<:Int,<:Integer})
+    (fbus, tbus) = get_bus_idx(br, idx)
+    y = 1 / get_x(br)
+    tap = get_tap(br) * exp(get_α(br))
+    c_tap = get_tap(br) * exp(-1 * get_α(br))
+    b = get_primary_shunt(br)
+    B[fbus,fbus] += ((y * tap^2) + b)
+    B[tbus,tbus] += y
+    B[fbus,tbus] -= (y / c_tap)
+    B[tbus,fbus] -= (y / tap)
+    return
+end
+
+function _add_B!(B::SparseArrays.SparseMatrixCSC, br::FixedAdmittance, idx::Dict{<:Int,<:Integer})
+    bus = idx[br.bus.number]
+    B[bus,bus] -= imag(get_Y(br))
+    return
+end
 
 # Slower than previous function
 # """ Builds an admittance matrix with the line series reactance of the lines. """
-# function calc_B(branches::AbstractVector{<:Tuple{Integer, Integer}}, x::AbstractVector{<:Real}, numnodes::Integer)
-#     B = SparseArrays.spzeros(numnodes, numnodes)
-#     for ((f, t), x) in zip(branches, x)
-#         B[f,f] += 1 / x
-#         B[t,t] += 1 / x
-#         B[f,t] -= 1 / x
-#         B[t,f] -= 1 / x
-#     end
-#     return B
-# end
+function calc_B(branches::AbstractVector{<:Branch}, idx::Dict{<:Int,<:Integer}, fixed::AbstractVector{FixedAdmittance})
+    numnodes = length(idx)
+    B = SparseArrays.spzeros(numnodes, numnodes)
+    for branch in branches
+        _add_B!(B, branch, idx)
+    end
+    for fx in fixed
+        _add_B!(B, fx, idx)
+    end
+    return B
+end
 
 function get_klu!(A::SparseArrays.SparseMatrixCSC{T1, T2}, slack::Integer) where {T1<:Real,T2<:Integer}
     A[:, slack] .= zero(T1)
@@ -194,7 +221,6 @@ end
 calc_X(B::AbstractMatrix{<:Real}, slack::Integer) = calc_X!(Matrix(B), B, slack)
 calc_X(K::KLU.KLUFactorization{T,<:Integer}, slack::Integer) where {T<:Real} = calc_X!(Matrix{T}(undef, size(K)), K, slack)
 
-calc_isf(D::AbstractMatrix{<:Real}, A::AbstractMatrix{<:Real}, X::AbstractMatrix{<:Real}) = D * A * X
 calc_isf(DA::AbstractMatrix{<:Real}, X::AbstractMatrix{<:Real}) = DA * X
 calc_isf!(ϕ::AbstractMatrix{<:Real}, DA::AbstractMatrix{<:Real}, X::AbstractMatrix{<:Real}) =
     LinearAlgebra.mul!(ϕ, DA, X)
@@ -214,7 +240,7 @@ end
 function get_isf(branches::AbstractVector{<:Branch}, nodes::AbstractVector{<:Bus},
     idx::Dict{<:Int,<:Integer}=get_nodes_idx(nodes), slack::Integer=find_slack(nodes)[1])
     A = calc_A(branches, idx)
-    DA = calc_DA(A, get_x.(branches))
+    DA = calc_DA(A, PowerSystems.get_series_susceptance.(branches))
     B = calc_B(A, DA)
     return get_isf!(B, DA, slack)
 end
@@ -248,7 +274,6 @@ end
 Calculate the power flow on the lines from the connectivity 
 and the diagonal admittance matrices and the voltage angles 
 """
-calc_Pline(A::AbstractMatrix{<:Real}, D::AbstractMatrix{<:Real}, θ::AbstractVector{<:Real}) = D * A * θ
 calc_Pline(DA::AbstractMatrix{<:Real}, θ::AbstractVector{<:Real}) = DA * θ
 calc_Pline!(pf::DCPowerFlow) = LinearAlgebra.mul!(pf.F, pf.DA, pf.θ)
 
@@ -257,16 +282,18 @@ calculate_line_flows(isf::AbstractMatrix{<:Real}, Pᵢ::AbstractVector{<:Real}) 
 calculate_line_flows!(pf::DCPowerFlow, Pᵢ::AbstractVector{<:Real}) = LinearAlgebra.mul!(pf.F, pf.ϕ, Pᵢ)
 
 """ DC power flow calculation using the Admittance matrix and Power Injection vector returning the bus angles """
-function run_pf(K::KLU.KLUFactorization, P::AbstractVector{<:Real}, slack::Integer)
-    θ = copy(P)
+function run_pf!(θ::AbstractVector{<:Real}, K::KLU.KLUFactorization, P::AbstractVector{<:Real}, slack::Integer)
+    copy!(θ, P)
     KLU.solve!(K, θ)
     θ[slack] = 0.0
     return θ
 end
+run_pf(K::KLU.KLUFactorization, P::AbstractVector{<:Real}, slack::Integer) = run_pf!(similar(P), K, P, slack)
 function run_pf!(pf::DCPowerFlow, Pᵢ::AbstractVector{<:Real})
     copy!(pf.θ, Pᵢ)
     KLU.solve!(pf.K, pf.θ)
     pf.θ[slack] = 0.0
+    return pf.θ
 end
 
 """ DC power flow calculation using the inverse Admittance matrix and Power Injection vector returning the bus angles """

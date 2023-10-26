@@ -1,44 +1,44 @@
 # CC BY 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2022
 
-scatterplot(model, system, name, type) =
-    scatter(
-        [get_name.(get_components(type, system))],
-        [value.(model[name]).data],
-        dpi=100,
-        size=(600, 600),
-        label=false,
-        rotation=90,
-        title=name
-    )
+# scatterplot(model, system, name, type) =
+#     scatter(
+#         [get_name.(get_components(type, system))],
+#         [value.(model[name]).data],
+#         dpi=100,
+#         size=(600, 600),
+#         label=false,
+#         rotation=90,
+#         title=name
+#     )
 
-function make_save_plot(model, system, sys_name, name)
-    plt = scatterplot(model, system, name[1], name[2])
-    display(plt)
-    path = mkpath(joinpath("results", sys_name))
-    savefig(plt, joinpath(path, "$(name[1]).pdf"))
-end
+# function make_save_plot(model, system, sys_name, name)
+#     plt = scatterplot(model, system, name[1], name[2])
+#     display(plt)
+#     path = mkpath(joinpath("results", sys_name))
+#     savefig(plt, joinpath(path, "$(name[1]).pdf"))
+# end
 
-function scatter_all(model, system; sys_name="")
-    names = [
-        (:pg0, Generator), (:pgu, Generator), (:pgd, Generator), (:u, ThermalGen),
-        (:pf0, Branch), (:pfc, Branch), (:pfcc, Branch),
-        (:ls0, StaticLoad), (:lsc, StaticLoad), (:lscc, StaticLoad),
-        (:qg0, Generator), (:qgu, Generator), (:qgd, Generator),
-        (:qf0, Branch), (:qfc, Branch), (:qfcc, Branch),
-        (:va0, ACBus), (:vac, ACBus), (:vacc, ACBus),
-        (:cbc, ACBus), (:cbcc, ACBus)
-    ]
-    for name in names
-        try
-            plt = scatterplot(model, system, name[1], name[2])
-            display(plt)
-            path = mkpath(joinpath("results", sys_name))
-            savefig(plt, joinpath(path, "$(name[1]).pdf"))
-        catch e
-            print("No $(name[1]). ")
-        end
-    end
-end
+# function scatter_all(model, system; sys_name="")
+#     names = [
+#         (:pg0, Generator), (:pgu, Generator), (:pgd, Generator), (:u, ThermalGen),
+#         (:pf0, Branch), (:pfc, Branch), (:pfcc, Branch),
+#         (:ls0, StaticLoad), (:lsc, StaticLoad), (:lscc, StaticLoad),
+#         (:qg0, Generator), (:qgu, Generator), (:qgd, Generator),
+#         (:qf0, Branch), (:qfc, Branch), (:qfcc, Branch),
+#         (:va0, ACBus), (:vac, ACBus), (:vacc, ACBus),
+#         (:cbc, ACBus), (:cbcc, ACBus)
+#     ]
+#     for name in names
+#         try
+#             plt = scatterplot(model, system, name[1], name[2])
+#             display(plt)
+#             path = mkpath(joinpath("results", sys_name))
+#             savefig(plt, joinpath(path, "$(name[1]).pdf"))
+#         catch e
+#             print("No $(name[1]). ")
+#         end
+#     end
+# end
 
 function print_variabel(model::Model, list::AbstractVector, name::Symbol)
     for (i, g) in enumerate(list)

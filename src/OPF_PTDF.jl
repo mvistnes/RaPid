@@ -83,7 +83,7 @@ function opf(type::OPF, system::System, optimizer;
 )
     @assert short_term_multi >= long_term_multi
     @assert type < PCFSC::OPF || p_failure > 0.0
-    mod = create_model(optimizer, time_limit_sec, silent=silent, debug=debug)
+    mod = create_model(optimizer, time_limit_sec=time_limit_sec, silent=silent, debug=debug)
     opf = isempty(voll) ? opfsystem(system, debug=debug) : opfsystem(system, voll, contingencies, prob, debug=debug)
     idx = get_nodes_idx(opf.nodes)
     pf = DCPowerFlow(opf.nodes, opf.branches, idx)

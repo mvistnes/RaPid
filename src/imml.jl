@@ -277,8 +277,8 @@ function calculate_line_flows!(
     branches::AbstractVector{<:Integer} = Int[]
 )
     if !isempty(Pᵢ)
-        θ = run_pf(pf.K, Pᵢ, pf.slack)
-        F = calc_Pline(pf.DA, θ)
+        θ = run_pf!(pf.vn_tmp, pf.K, Pᵢ, pf.slack)
+        F = LinearAlgebra.mul!(pf.vb_tmp, pf.DA, pf.vn_tmp)
     else
         θ = pf.θ
         F = pf.F
@@ -288,8 +288,9 @@ function calculate_line_flows!(
         calculate_line_flows!(Pl, F, pf.ϕ, pf.B, pf.DA, pf.X, θ, cont[1], cont[2], branch, Val(island))
         zero_not_in_array!(Pl, branches)
     else
-        return calculate_line_flows!(Pl, F, pf.ϕ, pf.B, pf.DA, pf.X, θ, cont[1], cont[2], branch)
+        calculate_line_flows!(Pl, F, pf.ϕ, pf.B, pf.DA, pf.X, θ, cont[1], cont[2], branch)
     end
+    return nothing
 end
 function calculate_line_flows(
     pf::DCPowerFlow,
