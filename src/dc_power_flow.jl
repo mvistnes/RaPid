@@ -83,19 +83,6 @@ function calc_Pᵢ_from_flow(branches::AbstractVector{<:Branch}, F::AbstractVect
     return P
 end
 
-""" Make the generator connectivity matrix """ # TODO: Fix
-function connectivitymatrix(gens, numnodes::Integer, idx::Dict{<:Int,<:Integer})
-    bus = getindex.([idx], get_number.(get_bus.(gens)))
-    mx = SparseArrays.spzeros(String, length(gens), numnodes)
-    for (i, (g, b)) in enumerate(zip(gens, bus))
-        mx[i, b] = g.name
-    end
-    return mx
-end
-
-connectivitymatrix(system::System, numnodes::Integer, idx::Dict{<:Int,<:Integer}) =
-    connectivitymatrix(get_components(Generator, system), numnodes, idx)
-
 """ Make the branch connectivity matrix """
 function calc_A(branches::AbstractVector{<:Tuple{Integer,Integer}})
     num_b = length(branches)
@@ -234,7 +221,6 @@ end
 calc_X(B::AbstractMatrix{<:Real}, slack::Integer) = calc_X!(Matrix(B), B, slack)
 calc_X(K::KLU.KLUFactorization{T,<:Integer}, slack::Integer) where {T<:Real} = calc_X!(Matrix{T}(undef, size(K)), K, slack)
 
-calc_isf(D::AbstractMatrix{<:Real}, A::AbstractMatrix{<:Real}, X::AbstractMatrix{<:Real}) = D * A * X
 calc_isf(DA::AbstractMatrix{<:Real}, X::AbstractMatrix{<:Real}) = DA * X
 calc_isf!(ϕ::AbstractMatrix{<:Real}, DA::AbstractMatrix{<:Real}, X::AbstractMatrix{<:Real}) =
     LinearAlgebra.mul!(ϕ, DA, X)
@@ -288,7 +274,6 @@ end
 Calculate the power flow on the lines from the connectivity 
 and the diagonal admittance matrices and the voltage angles 
 """
-calc_Pline(A::AbstractMatrix{<:Real}, D::AbstractMatrix{<:Real}, θ::AbstractVector{<:Real}) = D * A * θ
 calc_Pline(DA::AbstractMatrix{<:Real}, θ::AbstractVector{<:Real}) = DA * θ
 calc_Pline!(pf::DCPowerFlow) = LinearAlgebra.mul!(pf.F, pf.DA, pf.θ)
 
@@ -308,6 +293,7 @@ function run_pf!(pf::DCPowerFlow, Pᵢ::AbstractVector{<:Real})
     copy!(pf.θ, Pᵢ)
     KLU.solve!(pf.K, pf.θ)
     pf.θ[slack] = 0.0
+    return pf.θ
 end
 
 """ DC power flow calculation using the inverse Admittance matrix and Power Injection vector returning the bus angles """

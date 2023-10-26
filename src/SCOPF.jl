@@ -50,11 +50,19 @@ include("cont_dc_power_flow.jl")
 export get_isf, get_ptdf, calculate_line_flows, calculate_line_flows!
     
 #=
+    AC power flow functions.
+=#
+include("ac_power_flow.jl")
+export calc_Ybus, calc_B_mark, calc_B_doublemark
+
+#=
     Functions using the Inverse Matrix Modification Lemma.
 =#
 include("imml.jl")
 export IMML, get_changed_angles, calc_Pline, get_changed_X, get_isf, calculate_line_flows,
     calculate_line_flows!, get_overload, get_lodf
+
+include("FDLF.jl")
 
 #=
     Functions for handling islands in the system.

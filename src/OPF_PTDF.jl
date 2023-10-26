@@ -145,7 +145,7 @@ end
 
 function add_all_contingencies!(basetype::OPF, type::OPF, opf::OPFsystem, oplim::Oplimits, mod::Model, list::Vector{<:CTypes{Int}},
     pf::DCPowerFlow, idx::Dict{<:Int,<:Int},
-    Pc::Dict{<:Integer,Main.SCOPF.ExprC}, Pcc::Dict{<:Integer,Main.SCOPF.ExprCC}, Pccx::Dict{<:Integer,Main.SCOPF.ExprCCX}
+    Pc::Dict{<:Integer,ExprC}, Pcc::Dict{<:Integer,ExprCC}, Pccx::Dict{<:Integer,ExprCCX}
 )
     obj = objective_function(mod)
     ptdf = similar(pf.ϕ)
@@ -188,7 +188,7 @@ function add_contingencies!(opf::OPFsystem, oplim::Oplimits, mod::Model, ptdf::A
     @constraint(mod, ptdf_p .<= oplim.branch_rating * oplim.short_term_multi)
 end
 
-function add_contingencies!(Pc::Dict{<:Integer,Main.SCOPF.ExprC}, opf::OPFsystem, oplim::Oplimits, mod::Model, obj::AbstractJuMPScalar, islands::Vector,
+function add_contingencies!(Pc::Dict{<:Integer,ExprC}, opf::OPFsystem, oplim::Oplimits, mod::Model, obj::AbstractJuMPScalar, islands::Vector,
     island::Integer, ptdf::AbstractMatrix{<:Real}, list::Vector{<:CTypes{Int}}, c::Integer
 )
     pc = JuMP.@variable(mod, [n in 1:length(opf.nodes)], base_name = @sprintf("pc%s", c))
@@ -211,7 +211,7 @@ function add_contingencies!(Pc::Dict{<:Integer,Main.SCOPF.ExprC}, opf::OPFsystem
     @constraint(mod, ptdf_pc .<= oplim.branch_rating * oplim.short_term_multi)
 end
 
-function add_contingencies!(Pcc::Dict{<:Integer,Main.SCOPF.ExprCC}, opf::OPFsystem, oplim::Oplimits, mod::Model, obj::AbstractJuMPScalar, islands::Vector,
+function add_contingencies!(Pcc::Dict{<:Integer,ExprCC}, opf::OPFsystem, oplim::Oplimits, mod::Model, obj::AbstractJuMPScalar, islands::Vector,
     island::Integer, ptdf::AbstractMatrix{<:Real}, list::Vector{<:CTypes{Int}}, c::Integer
 )
     pcc = JuMP.@variable(mod, [n in 1:length(opf.nodes)], base_name = @sprintf("pcc%s", c))
@@ -234,7 +234,7 @@ function add_contingencies!(Pcc::Dict{<:Integer,Main.SCOPF.ExprCC}, opf::OPFsyst
     @constraint(mod, ptdf_pcc .<= oplim.branch_rating * oplim.long_term_multi)
 end
 
-function add_contingencies!(Pccx::Dict{<:Integer,Main.SCOPF.ExprCCX}, opf::OPFsystem, oplim::Oplimits, mod::Model, obj::AbstractJuMPScalar, islands::Vector,
+function add_contingencies!(Pccx::Dict{<:Integer,ExprCCX}, opf::OPFsystem, oplim::Oplimits, mod::Model, obj::AbstractJuMPScalar, islands::Vector,
     island::Integer, ptdf::AbstractMatrix{<:Real}, list::Vector{<:CTypes{Int}}, c::Integer
 )
     pccx = JuMP.@variable(mod, [n in 1:length(opf.nodes)], base_name = @sprintf("pccx%s", c))
@@ -256,7 +256,7 @@ function add_contingencies!(Pccx::Dict{<:Integer,Main.SCOPF.ExprCCX}, opf::OPFsy
 end
 
 
-function init_P!(Pc::Dict{<:Integer,Main.SCOPF.ExprC}, opf::OPFsystem, oplim::Oplimits, mod::Model, obj::JuMP.AbstractJuMPScalar, list::Vector{<:CTypes{Int}},
+function init_P!(Pc::Dict{<:Integer,ExprC}, opf::OPFsystem, oplim::Oplimits, mod::Model, obj::JuMP.AbstractJuMPScalar, list::Vector{<:CTypes{Int}},
     islands::Vector, island::Integer, c::Integer
 )
     pgc = JuMP.@variable(mod, [g in 1:length(opf.ctrl_generation)], base_name = @sprintf("pgc%s", c),
@@ -296,7 +296,7 @@ function init_P!(Pc::Dict{<:Integer,Main.SCOPF.ExprC}, opf::OPFsystem, oplim::Op
     return pgc, prc, lsc
 end
 
-function init_P!(Pcc::Dict{<:Integer,Main.SCOPF.ExprCC}, opf::OPFsystem, oplim::Oplimits, mod::Model, obj::JuMP.AbstractJuMPScalar, list::Vector{<:CTypes{Int}},
+function init_P!(Pcc::Dict{<:Integer,ExprCC}, opf::OPFsystem, oplim::Oplimits, mod::Model, obj::JuMP.AbstractJuMPScalar, list::Vector{<:CTypes{Int}},
     islands::Vector, island::Integer, c::Integer
 )
     # Add corrective variables
@@ -362,7 +362,7 @@ function init_P!(Pcc::Dict{<:Integer,Main.SCOPF.ExprCC}, opf::OPFsystem, oplim::
     return pgu, pgd, pfdccc, prcc, lscc
 end
 
-function init_P!(Pccx::Dict{<:Integer,Main.SCOPF.ExprCCX}, opf::OPFsystem, oplim::Oplimits, mod::Model, obj::JuMP.AbstractJuMPScalar, list::Vector{<:CTypes{Int}},
+function init_P!(Pccx::Dict{<:Integer,ExprCCX}, opf::OPFsystem, oplim::Oplimits, mod::Model, obj::JuMP.AbstractJuMPScalar, list::Vector{<:CTypes{Int}},
     islands::Vector, island::Integer, c::Integer
 )
     # Add corrective variables
@@ -414,7 +414,7 @@ function fix_base_case(mod::Model)
     fix_values(mod, :pr0)
 end
 
-function fix_short_term(mod::Model, Pc::Dict{<:Integer,Main.SCOPF.ExprC})
+function fix_short_term(mod::Model, Pc::Dict{<:Integer,ExprC})
     for (_, c) in Pc
         fix_values(mod, c.pgc)
         fix_values(mod, c.prc)
@@ -422,7 +422,7 @@ function fix_short_term(mod::Model, Pc::Dict{<:Integer,Main.SCOPF.ExprC})
     end
 end
 
-function fix_long_term(mod::Model, Pcc::Dict{<:Integer,Main.SCOPF.ExprCC})
+function fix_long_term(mod::Model, Pcc::Dict{<:Integer,ExprCC})
     for (_, c) in Pcc
         fix_values(mod, c.pgu)
         fix_values(mod, c.pgd)
@@ -442,15 +442,15 @@ calc_ctrl_cost(mod::Model, opf::OPFsystem, var::AbstractVector{JuMP.VariableRef}
 
 calc_objective(mod::Model, opf::OPFsystem) =
     calc_ctrl_cost(mod, opf, mod[:pg0]) + calc_cens(mod, opf, mod[:ls0])
-calc_objective(mod::Model, opf::OPFsystem, expr::Main.SCOPF.ExprC, ramp_mult=1.0) =
+calc_objective(mod::Model, opf::OPFsystem, expr::ExprC, ramp_mult=1.0) =
     ramp_mult * calc_ctrl_cost(mod, opf, expr.pgc) + calc_cens(mod, opf, expr.lsc)
-calc_objective(mod::Model, opf::OPFsystem, expr::Main.SCOPF.ExprCC, ramp_mult=1.0) =
+calc_objective(mod::Model, opf::OPFsystem, expr::ExprCC, ramp_mult=1.0) =
     ramp_mult * (calc_ctrl_cost(mod, opf, expr.pgu) + calc_ctrl_cost(mod, opf, expr.pgd)) + calc_cens(mod, opf, expr.lscc)
-calc_objective(mod::Model, opf::OPFsystem, expr::Main.SCOPF.ExprCCX, ramp_mult=1.0) =
+calc_objective(mod::Model, opf::OPFsystem, expr::ExprCCX, ramp_mult=1.0) =
     ramp_mult * 60 * calc_ctrl_cost(mod, opf, expr.pgdx) + calc_cens(mod, opf, expr.lsccx)
 calc_objective(mod::Model, opf::OPFsystem, P::Dict, ramp_mult=1.0) =
     sum((opf.prob[i] * calc_objective(mod, opf, c, ramp_mult) for (i, c) in P), init=0.0)
-calc_objective(mod::Model, opf::OPFsystem, Pc::Dict{<:Integer,Main.SCOPF.ExprC},
-    Pcc::Dict{<:Integer,Main.SCOPF.ExprCC}, Pccx::Dict{<:Integer,Main.SCOPF.ExprCCX}, ramp_mult=1.0
+calc_objective(mod::Model, opf::OPFsystem, Pc::Dict{<:Integer,ExprC},
+    Pcc::Dict{<:Integer,ExprCC}, Pccx::Dict{<:Integer,ExprCCX}, ramp_mult=1.0
 ) = calc_objective(mod, opf) + calc_objective(mod, opf, Pc, ramp_mult) +
     calc_objective(mod, opf, Pcc, ramp_mult) + calc_objective(mod, opf, Pccx, ramp_mult)
