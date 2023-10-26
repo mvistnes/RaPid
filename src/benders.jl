@@ -72,9 +72,9 @@ function run_benders!(
     opf::OPFsystem, 
     pf::DCPowerFlow, 
     oplim::Oplimits, 
-    Pc::Dict{<:Integer, Main.SCOPF.ExprC}, 
-    Pcc::Dict{<:Integer, Main.SCOPF.ExprCC}, 
-    Pccx::Dict{<:Integer, Main.SCOPF.ExprCCX},
+    Pc::Dict{<:Integer, ExprC}, 
+    Pcc::Dict{<:Integer, ExprCC}, 
+    Pccx::Dict{<:Integer, ExprCCX},
     lim=1e-6,
     max_itr=length(opf.contingencies),
     branch_c=nothing, 
@@ -304,7 +304,7 @@ end
 
 """ Return the short term power injection change at each node. """
 function get_ΔP!(ΔP::Vector{T}, mod::Model, opf::OPFsystem, list::Vector{<:CTypes{Int}}, 
-    Pc::Dict{<:Integer, Main.SCOPF.ExprC}, c::Integer
+    Pc::Dict{<:Integer, ExprC}, c::Integer
 ) where {T<:Real}
     fill!(ΔP, zero(T))
     x = get(Pc, c, 0)
@@ -329,7 +329,7 @@ end
 
 """ Return the long term power injection change at each node. """
 function get_ΔP!(ΔP::Vector{T}, mod::Model, opf::OPFsystem, list::Vector{<:CTypes{Int}}, 
-    Pcc::Dict{<:Integer, Main.SCOPF.ExprCC}, c::Integer
+    Pcc::Dict{<:Integer, ExprCC}, c::Integer
 ) where {T<:Real}
     fill!(ΔP, zero(eltype(ΔP)))
     x = get(Pcc, c, 0)
@@ -359,7 +359,7 @@ end
 
 """ Return the long term power injection change at each node. """
 function get_ΔP!(ΔP::Vector{T}, mod::Model, opf::OPFsystem, list::Vector{<:CTypes{Int}}, 
-    Pccx::Dict{<:Integer, Main.SCOPF.ExprCCX}, c::Integer
+    Pccx::Dict{<:Integer, ExprCCX}, c::Integer
 ) where {T<:Real}
     fill!(ΔP, zero(eltype(ΔP)))
     x = get(Pccx, c, 0)
@@ -417,7 +417,7 @@ function add_cut(opf::OPFsystem, mod::Model, bd::Benders, ptdf::AbstractMatrix{<
     return cut_added, id
 end
 
-function add_cut(Pc::Dict{<:Integer, Main.SCOPF.ExprC}, opf::OPFsystem, oplim::Oplimits, mod::Model, bd::Benders, ΔPc::Vector{<:Real},
+function add_cut(Pc::Dict{<:Integer, ExprC}, opf::OPFsystem, oplim::Oplimits, mod::Model, bd::Benders, ΔPc::Vector{<:Real},
     ptdf::AbstractMatrix{<:Real}, overloads::Vector{<:Tuple{Integer,Real}}, islands::Vector, island::Integer,
     cont::Tuple{Integer,Integer}, c::Integer, cut_added::Integer, lim::Real, id::Integer
 )
@@ -441,7 +441,7 @@ function add_cut(Pc::Dict{<:Integer, Main.SCOPF.ExprC}, opf::OPFsystem, oplim::O
     return cut_added, id
 end
 
-function add_cut(Pcc::Dict{<:Integer, Main.SCOPF.ExprCC}, opf::OPFsystem, oplim::Oplimits, mod::Model, bd::Benders, ΔPcc::Vector{<:Real},
+function add_cut(Pcc::Dict{<:Integer, ExprCC}, opf::OPFsystem, oplim::Oplimits, mod::Model, bd::Benders, ΔPcc::Vector{<:Real},
     ptdf::AbstractMatrix{<:Real}, overloads::Vector{<:Tuple{Integer,Real}}, islands::Vector, island::Integer,
     cont::Tuple{Integer,Integer}, c::Integer, cut_added::Integer, lim::Real, id::Integer
 )
@@ -466,7 +466,7 @@ function add_cut(Pcc::Dict{<:Integer, Main.SCOPF.ExprCC}, opf::OPFsystem, oplim:
     return cut_added, id
 end
 
-function add_cut(Pccx::Dict{<:Integer, Main.SCOPF.ExprCCX}, opf::OPFsystem, oplim::Oplimits, mod::Model, bd::Benders, ΔPccx::Vector{<:Real},
+function add_cut(Pccx::Dict{<:Integer, ExprCCX}, opf::OPFsystem, oplim::Oplimits, mod::Model, bd::Benders, ΔPccx::Vector{<:Real},
     ptdf::AbstractMatrix{<:Real}, overloads::Vector{<:Tuple{Integer,Real}}, islands::Vector, island::Integer,
     cont::Tuple{Integer,Integer}, c::Integer, cut_added::Integer, lim::Real, id::Integer
 )
