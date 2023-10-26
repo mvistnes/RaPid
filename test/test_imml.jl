@@ -1,9 +1,8 @@
-using .SCOPF
 using PowerSystems
 
 # system = get_system("ELK14.json")
 system = System("data\\ELK14\\A5.m")
-opfm = scopf(SCOPF.SC, system, Gurobi.Optimizer)
+opfm = scopf(SCOPF.SC, system, HiGHS.Optimizer)
 solve_model!(opfm.mod)
 nodes = get_sorted_nodes(opfm.sys)
 branches = get_sorted_branches(opfm.sys)

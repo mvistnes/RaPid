@@ -1,6 +1,6 @@
 # CC BY 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2022
 
-module SCOPF
+module RaPidSCOPF
 
 using PowerSystems
 using JuMP
