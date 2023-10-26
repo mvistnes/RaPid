@@ -1,0 +1,7 @@
+name = "RaPidSCOPF"
+uuid = "a50b01f2-f197-4c3d-81c0-ed05acc53f93"
+authors = ["Matias Vistnes <matias.vistnes@ntnu.no>"]
+version = "0.1.0"
+
+[deps]
+PowerSystems = "bcd98974-b02a-5e2f-9ee0-a103f5c450dd"
