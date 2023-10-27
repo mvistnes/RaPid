@@ -21,7 +21,7 @@ struct Oplimits{TR<:Real}
     rampdown::Vector{TR}
 end
 
-""" Constructor for OPFsystem """
+""" Constructor for Oplimits """
 function oplimits(
     opf::OPFsystem,
     max_shed::TR,
@@ -42,13 +42,15 @@ function oplimits(
         branch_rating, pg_lim_min, pg_lim_max, pr_lim, dc_lim_min, dc_lim_max, pd_lim, rampup, rampdown)
 end
 
-
+""" Holds the short term variables for contingencies """
 mutable struct ExprC{T<:Vector{JuMP.VariableRef}}
     pc::T
     pgc::T
     prc::T
     lsc::T
 end
+
+""" Holds the long term variables for contingencies """
 mutable struct ExprCC{T<:Vector{JuMP.VariableRef}}
     pcc::T
     pgu::T
@@ -57,6 +59,8 @@ mutable struct ExprCC{T<:Vector{JuMP.VariableRef}}
     prcc::T
     lscc::T
 end
+
+""" Holds the long term variables for contingencies, no ramp up allowed """
 mutable struct ExprCCX{T<:Vector{JuMP.VariableRef}}
     pccx::T
     pgdx::T
@@ -65,7 +69,7 @@ mutable struct ExprCCX{T<:Vector{JuMP.VariableRef}}
 end
 
 """ Run an OPF of a power system """
-function opf(type::OPF, system::System, optimizer;
+function opf_base(type::OPF, system::System, optimizer;
     voll=Vector{Float64}(),
     contingencies=Vector{ACBranch}(),
     prob=Vector{Float64}(),
@@ -90,9 +94,9 @@ function opf(type::OPF, system::System, optimizer;
     opf.dc_branches = DCBranch[]
 
     list = make_list(opf, idx, opf.nodes)
-    Pc = Dict{Int,ExprC}() # Holds the short term variables for contingencies
-    Pcc = Dict{Int,ExprCC}() # Holds the long term variables for contingencies
-    Pccx = Dict{Int,ExprCCX}() # Holds the long term variables for contingencies, no ramp up allowed
+    Pc = Dict{Int,ExprC}()
+    Pcc = Dict{Int,ExprCC}() 
+    Pccx = Dict{Int,ExprCCX}() 
 
     oplim = oplimits(opf, max_shed, max_curtail, ramp_mult, ramp_minutes, p_failure, short_term_multi, long_term_multi)
 
@@ -138,7 +142,7 @@ function opf(type::OPF, system::System, optimizer;
     end
 
     if type != SC::OPF
-        return add_all_contingencies!(SCOPF.SC, type, opf, oplim, mod, list, pf, idx, Pc, Pcc, Pccx)
+        return add_all_contingencies!(SC, type, opf, oplim, mod, list, pf, idx, Pc, Pcc, Pccx)
     end
     return mod, opf, pf, oplim, Pc, Pcc, Pccx
 end

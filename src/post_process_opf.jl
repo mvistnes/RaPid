@@ -102,7 +102,7 @@ end
 function get_contingency_power_flow(opf::OPFsystem, mod::Model)
     idx = get_nodes_idx(opf.nodes)
     slack = find_slack(opf.nodes)
-    θ = SCOPF.get_sorted_angles(mod)
+    θ = get_sorted_angles(mod)
     P = calc_Pᵢ(calc_B(opf.branches, idx), θ)
     flow = Vector{Vector{Float64}}(undef, length(opf.contingencies))
     for c in 1:length(opf.contingencies)
@@ -200,7 +200,7 @@ function print_contingency_overflow(opf::OPFsystem, mod::Model, rate_limit_multi
     slack = find_slack(opf.nodes)
     b_names = get_name.(opf.branches)
     linerates = get_rate.(opf.branches)
-    θ = SCOPF.get_sorted_angles(mod)
+    θ = get_sorted_angles(mod)
     P = calc_Pᵢ(calc_B(opf.branches, idx), θ)
     print_string_line(opf.branches[c].name, n, f, r)
 end
@@ -414,7 +414,7 @@ function print_contingency_P(opf::OPFsystem, mod::Model, idx)
 end
 
 function print_contingency_P(opf::OPFsystem, Pc, Pcc, Pccx=Dict())
-    idx = SCOPF.get_nodes_idx(opf.nodes)
+    idx = get_nodes_idx(opf.nodes)
     println("Pc")
     for (c, cont) in enumerate(opf.contingencies)
         P = zeros(length(opf.nodes))

@@ -10,5 +10,5 @@ end
 end
 
 @testset "Test Benders" begin
-    include("test_benders.jl")
+    include("test_ieee_rts_benders.jl")
 end

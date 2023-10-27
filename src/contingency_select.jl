@@ -25,7 +25,7 @@ function run_contingency_select(
     silent=true,
     debug=false
 )
-    mod, opf, pf, oplim, Pc, Pcc, Pccx = SCOPF.opf(SC, system, optimizer, voll=voll, contingencies=contingencies, prob=prob,
+    mod, opf, pf, oplim, Pc, Pcc, Pccx = opf_base(SC, system, optimizer, voll=voll, contingencies=contingencies, prob=prob,
         time_limit_sec=time_limit_sec, ramp_minutes=ramp_minutes, ramp_mult=ramp_mult, max_shed=max_shed, max_curtail=max_curtail,
         short_term_multi=short_term_multi, long_term_multi=long_term_multi, p_failure=p_failure, silent=silent, debug=debug)
     return run_contingency_select!(SC, type, mod, opf, pf, oplim, Pc, Pcc, Pccx, lim, max_itr, branch_c, rate_c, debug)
