@@ -292,8 +292,8 @@ function init_P!(Pc::Dict{<:Integer,ExprC}, opf::OPFsystem, oplim::Oplimits, mod
         for in_vec in itr
             for n in in_vec
                 JuMP.@constraint(mod, [g = list[n].ctrl_generation], mod[:pg0][g] - pgc[g] == 0.0)
-                fix(prc, oplim.pr_lim, list[n].renewables)
-                fix(lsc, oplim.pd_lim, list[n].demands)
+                fix!(prc, oplim.pr_lim, list[n].renewables)
+                fix!(lsc, oplim.pd_lim, list[n].demands)
             end
         end
     end
@@ -356,10 +356,10 @@ function init_P!(Pcc::Dict{<:Integer,ExprCC}, opf::OPFsystem, oplim::Oplimits, m
         for in_vec in itr
             for n in in_vec
                 JuMP.@constraint(mod, [g = list[n].ctrl_generation], mod[:pg0][g] - pgd[g] == 0.0)
-                fix(pgu, list[n].ctrl_generation)
-                fix(pfdccc, list[n].dc_branches)
-                fix(prcc, oplim.pr_lim, list[n].renewables)
-                fix(lscc, oplim.pd_lim, list[n].demands)
+                fix!(pgu, list[n].ctrl_generation)
+                fix!(pfdccc, list[n].dc_branches)
+                fix!(prcc, oplim.pr_lim, list[n].renewables)
+                fix!(lscc, oplim.pd_lim, list[n].demands)
             end
         end
     end
@@ -406,38 +406,38 @@ function init_P!(Pccx::Dict{<:Integer,ExprCCX}, opf::OPFsystem, oplim::Oplimits,
     return pgd, prcc, lscc
 end
 
-fix(var::AbstractVector{JuMP.VariableRef}, val::AbstractVector{<:Real}, vec::AbstractVector) =
+fix!(var::AbstractVector{JuMP.VariableRef}, val::AbstractVector{<:Real}, vec::AbstractVector) =
     JuMP.fix.(var[vec], val[vec]; force=true)
-fix(var::AbstractVector{JuMP.VariableRef}, vec::AbstractVector) =
+fix!(var::AbstractVector{JuMP.VariableRef}, vec::AbstractVector) =
     JuMP.fix.(var[vec], 0.0; force=true)
 
-function fix_base_case(mod::Model)
-    fix_values(mod, :pg0)
-    fix_values(mod, :pfdc0)
-    fix_values(mod, :ls0)
-    fix_values(mod, :pr0)
+fix_values!(mod::Model, symb::Symbol) = JuMP.fix.(mod[symb], get_value(mod, symb), force=true)
+fix_values!(mod::Model, var::AbstractVector{JuMP.VariableRef}) = JuMP.fix.(var, get_value(mod, var), force=true)
+
+function fix_base_case!(mod::Model)
+    fix_values!(mod, :pg0)
+    fix_values!(mod, :pfdc0)
+    fix_values!(mod, :ls0)
+    fix_values!(mod, :pr0)
 end
 
-function fix_short_term(mod::Model, Pc::Dict{<:Integer,ExprC})
+function fix_short_term!(mod::Model, Pc::Dict{<:Integer,ExprC})
     for (_, c) in Pc
-        fix_values(mod, c.pgc)
-        fix_values(mod, c.prc)
-        fix_values(mod, c.lsc)
+        fix_values!(mod, c.pgc)
+        fix_values!(mod, c.prc)
+        fix_values!(mod, c.lsc)
     end
 end
 
-function fix_long_term(mod::Model, Pcc::Dict{<:Integer,ExprCC})
+function fix_long_term!(mod::Model, Pcc::Dict{<:Integer,ExprCC})
     for (_, c) in Pcc
-        fix_values(mod, c.pgu)
-        fix_values(mod, c.pgd)
-        fix_values(mod, c.pfdccc)
-        fix_values(mod, c.prcc)
-        fix_values(mod, c.lscc)
+        fix_values!(mod, c.pgu)
+        fix_values!(mod, c.pgd)
+        fix_values!(mod, c.pfdccc)
+        fix_values!(mod, c.prcc)
+        fix_values!(mod, c.lscc)
     end
 end
-
-fix_values(mod::Model, symb::Symbol) = JuMP.fix.(mod[symb], get_value(mod, symb), force=true)
-fix_values(mod::Model, var::AbstractVector{JuMP.VariableRef}) = JuMP.fix.(var, get_value(mod, var), force=true)
 
 calc_cens(mod::Model, opf::OPFsystem, var::AbstractVector{JuMP.VariableRef}) = sum(opf.voll .* get_value(mod, var))
 calc_ctrl_cost(mod::Model, opf::OPFsystem, var::AbstractVector{JuMP.VariableRef}) =

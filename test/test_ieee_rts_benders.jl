@@ -68,6 +68,7 @@ ramp_minutes = 10.
 max_shed = 0.1
 ramp_mult = 10.
 
+println("Preventive-Corrective SCOPF")
 println("Start PTDF")
 @time mod_ptdf, opf_ptdf, pf_ptdf, oplim_ptdf, Pc_ptdf, Pcc_ptdf, Pccx_ptdf = SCOPF.opf_base(SCOPF.PCSC, system, optimizer, voll=voll, contingencies=contingencies, prob=prob, max_shed=max_shed,
     ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long);
@@ -93,13 +94,17 @@ SCOPF.print_contingency_P(opf, Pc, Pcc, Pccx)
 @test JuMP.objective_value(mod_ptdf) ≈ JuMP.objective_value(mod_cont)
 @test JuMP.objective_value(mod_ptdf) ≈ JuMP.objective_value(model)
 
-# model, opf, pf, oplim, Pc, Pcc, Pccx = SCOPF.opf_base(SCOPF.SC, system, optimizer, voll=voll, contingencies=contingencies, prob=prob, max_shed=max_shed,
-#     ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long);
-# idx = SCOPF.get_nodes_idx(opf.nodes);
-# list = SCOPF.make_list(opf, idx, opf.nodes);
-# model, opf, pf, oplim, Pc, Pcc, Pccx = SCOPF.add_all_contingencies!(SCOPF.SC, SCOPF.SC, opf, oplim, model, list, pf, idx, Pc, Pcc, Pccx);
-# SCOPF.solve_model!(model);
-# model, opf, pf, oplim, tot_t = SCOPF.run_benders!(Val(SCOPF.SC), model, opf, pf, oplim);
+println("Preventive SCOPF")
+mod_ptdf, opf_ptdf, pf_ptdf, oplim_ptdf, Pc_ptdf, Pcc_ptdf, Pccx_ptdf = SCOPF.opf_base(SCOPF.SC, system, optimizer, voll=voll, contingencies=contingencies, prob=prob, max_shed=max_shed,
+    ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long);
+idx = SCOPF.get_nodes_idx(opf_ptdf.nodes);
+list = SCOPF.make_list(opf_ptdf, idx, opf_ptdf.nodes);
+mod_ptdf, opf_ptdf, pf_ptdf, oplim_ptdf, Pc_ptdf, Pcc_ptdf, Pccx_ptdf = SCOPF.add_all_contingencies!(SCOPF.SC, SCOPF.SC, opf_ptdf, oplim_ptdf, mod_ptdf, list, pf_ptdf, idx, Pc_ptdf, Pcc_ptdf, Pccx_ptdf);
+SCOPF.solve_model!(mod_ptdf);
+
+model, opf, pf, oplim, Pc, Pcc, Pccx = SCOPF.opf_base(SCOPF.SC, system, optimizer, voll=voll, contingencies=contingencies, prob=prob, max_shed=max_shed,
+    ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long);
+model, opf, pf, oplim, tot_t = SCOPF.run_benders!(Val(SCOPF.SC), model, opf, pf, oplim);
 
 
 # SCOPF.print_corrective_results(opfm_norm)

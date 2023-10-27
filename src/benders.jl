@@ -55,7 +55,100 @@ function run_benders(
     mod, opf, pf, oplim, Pc, Pcc, Pccx = opf_base(SC, system, optimizer, voll=voll, contingencies=contingencies, prob=prob,
         time_limit_sec=time_limit_sec, ramp_minutes=ramp_minutes, ramp_mult=ramp_mult, max_shed=max_shed, max_curtail=max_curtail,
         short_term_multi=short_term_multi, long_term_multi=long_term_multi, p_failure=p_failure, silent=silent, debug=debug)
-    return run_benders!(SC, type, mod, opf, pf, oplim, Pc, Pcc, Pccx, lim, max_itr, branch_c, rate_c, debug)
+    return run_benders!(SC, type, mod, opf, pf, oplim, Pc, Pcc, Pccx, lim, max_itr, branch_c, rate_c)
+end
+
+function run_benders!(
+    ::Val{SC::OPF}, 
+    mod::Model, 
+    opf::OPFsystem, 
+    pf::DCPowerFlow, 
+    oplim::Oplimits, 
+    lim=1e-6,
+    max_itr=length(opf.contingencies),
+    branch_c=nothing, 
+    rate_c=0.0
+)
+    solve_model!(mod)
+    total_solve_time = solve_time(mod)
+    !has_values(mod) && return mod, opf, pf, oplim, total_solve_time
+    @debug "lower_bound = $(objective_value(mod))"
+
+    # Set variables
+    bd = benders(opf, mod)
+    calc_θ!(pf, bd.Pᵢ)
+    calc_Pline!(pf)
+    overloads = zeros(length(opf.contingencies))
+
+    contids = get_branch_bus_idx(opf.branches, opf.contingencies, bd.idx)
+    flow = similar(pf.F)
+    for contid in contids
+        (c, cont) = contid
+        if !is_islanded(pf, cont, c)
+            calculate_line_flows!(flow, pf, cont, c)
+        else
+            islands, island, island_b = handle_islands(pf.B, pf.DA, cont, c, pf.slack)
+            calculate_line_flows!(flow, pf, cont, c, nodes=islands[island], branches=island_b)
+            # for in_vec in islands[1:end.!=island]
+            #     for n in in_vec
+            #         add_to_expression!(bd.obj, opf.prob[c], sum((opf.voll[d] * get_active_power(opf.demands[d]) for d in bd.list[n].demands), init=0.0))
+            #     end
+            # end
+            # continue
+        end
+
+        # Calculate the power flow with the new outage and find if there are any overloads
+        overload = filter_overload(flow, oplim.branch_rating * oplim.short_term_multi)
+
+        if !isempty(overload)
+            overloads[c] = maximum(x -> abs(x[2]), overload)
+        end
+    end
+
+    pre = 0
+    ptdf = copy(pf.ϕ)
+    X = copy(pf.X)
+    olc = Vector{Tuple{Int,Float64}}[]
+
+    permutation = sortperm(overloads, rev=true)
+    cut_added = 1
+    for iterations in 1:max_itr
+        if cut_added == 0 # loops until no new cuts are added for the contingencies
+            # @printf "\nEND: Total solve time %.4f.\n" total_solve_time
+            return mod, opf, pf, oplim, total_solve_time
+        end
+        cut_added = 0
+        @info "Iteration $iterations"
+
+        for contid in contids[permutation]
+            (c, cont) = contid
+            empty!(olc)
+            if is_islanded(pf, cont, c)
+                islands, island, island_b = handle_islands(pf.B, pf.DA, cont, c, pf.slack)
+                calculate_line_flows!(flow, pf, cont, c, nodes=islands[island], branches=island_b)
+            else
+                calculate_line_flows!(flow, pf, cont, c)
+            end
+            olc = filter_overload(flow, (oplim.branch_rating * oplim.short_term_multi))
+            if !isempty(olc)
+                if !is_islanded(pf, cont, c)
+                    get_isf!(ptdf, X, pf.X, pf.B, pf.DA, cont, c)
+                else
+                    get_isf!(ptdf, pf.ϕ, islands[island], island_b)
+                end
+                cut_added, pre = add_cut(opf, mod, bd, ptdf, olc, cont, c, cut_added, lim, pre)
+                # Cannot change the model before all data is exctracted!
+                if cut_added > 1
+                    total_solve_time = update_model!(mod, pf, bd, total_solve_time)
+                    cut_added = 1
+                end
+            end
+            !has_values(mod) && return mod, opf, pf, oplim, total_solve_time
+        end
+
+    end
+    @warn "Reached $(length(opf.contingencies)) iterations without a stable solution."
+    return mod, opf, pf, oplim, total_solve_time
 end
 
 """ 
@@ -78,8 +171,7 @@ function run_benders!(
     lim=1e-6,
     max_itr=length(opf.contingencies),
     branch_c=nothing, 
-    rate_c=0.0, 
-    debug=false
+    rate_c=0.0
 )
     @assert isempty(Pc) || basetype == PSC::OPF
     @assert (isempty(Pcc) && isempty(Pccx)) || type < PCSC::OPF
@@ -542,94 +634,4 @@ function print_benders_results(opf::OPFsystem, mod::Model, Pc::Dict=Dict(), Pcc:
         print_c(Pcc, "lscc", i_g, lim)
         print_c(Pccx, "lsccx", i_g, lim)
     end
-end
-
-function run_benders!(
-    ::Val{SC::OPF}, 
-    mod::Model, 
-    opf::OPFsystem, 
-    pf::DCPowerFlow, 
-    oplim::Oplimits, 
-    lim=1e-6,
-    max_itr=length(opf.contingencies),
-    branch_c=nothing, 
-    rate_c=0.0, 
-    debug=false
-)
-    solve_model!(mod)
-    total_solve_time = solve_time(mod)
-    !has_values(mod) && return mod, opf, pf, oplim, total_solve_time
-    @debug "lower_bound = $(objective_value(mod))"
-
-    # Set variables
-    bd = benders(opf, mod)
-    calc_θ!(pf, bd.Pᵢ)
-    calc_Pline!(pf)
-    overloads = zeros(length(opf.contingencies))
-
-    contids = get_branch_bus_idx(opf.branches, opf.contingencies, bd.idx)
-    flow = similar(pf.F)
-    for contid in contids
-        (c, cont) = contid
-        if !is_islanded(pf, cont, c)
-            calculate_line_flows!(flow, pf, cont, c)
-        else
-            islands, island, island_b = handle_islands(pf.B, pf.DA, cont, c, pf.slack)
-            for in_vec in islands[1:end.!=island]
-                for n in in_vec
-                    add_to_expression!(bd.obj, opf.prob[c], sum((opf.voll[d] * get_active_power(opf.demands[d]) for d in bd.list[n].demands), init=0.0))
-                end
-            end
-            continue
-        end
-
-        # Calculate the power flow with the new outage and find if there are any overloads
-        overload = filter_overload(flow, oplim.branch_rating * oplim.short_term_multi)
-
-        if !isempty(overload)
-            overloads[c] = maximum(x -> abs(x[2]), overload)
-        end
-    end
-
-    pre = 0
-    ptdf = copy(pf.ϕ)
-    X = copy(pf.X)
-    olc = Vector{Tuple{Int,Float64}}[]
-
-    permutation = sortperm(overloads, rev=true)
-    cut_added = 1
-    for iterations in 1:max_itr
-        if cut_added == 0 # loops until no new cuts are added for the contingencies
-            # @printf "\nEND: Total solve time %.4f.\n" total_solve_time
-            return mod, opf, pf, oplim, total_solve_time
-        end
-        cut_added = 0
-        @info "Iteration $iterations"
-
-        for contid in contids[permutation]
-            (c, cont) = contid
-            empty!(olc)
-            if is_islanded(pf, cont, c)
-                continue
-            end
-            calculate_line_flows!(flow, pf, cont, c)
-            olc = filter_overload(flow, (oplim.branch_rating * oplim.short_term_multi))
-            if !isempty(olc) # ptdf calculation is more computational expensive than line flow
-                get_isf!(ptdf, X, pf.X, pf.B, pf.DA, cont, c)
-            end
-
-            # Cannot change the model before all data is exctracted!
-            if !isempty(olc)
-                cut_added, pre = add_cut(opf, mod, bd, ptdf, olc, cont, c, cut_added, lim, pre)
-            end
-            if cut_added > 1
-                total_solve_time = update_model!(mod, pf, bd, total_solve_time)
-                cut_added = 1
-            end
-            !has_values(mod) && return mod, opf, pf, oplim, total_solve_time
-        end
-
-    end
-    @warn "Reached $(length(opf.contingencies)) iterations without a stable solution."
-    return mod, opf, pf, oplim, total_solve_time
 end

@@ -11,9 +11,9 @@ Random.seed!(42)
 # SETUP
 LinearAlgebra.BLAS.set_num_threads(Threads.nthreads())
 # system = System("data\\ELK14\\A5.m"); c1 = 1; c2 = 5
-system = SCOPF.System("data\\matpower\\IEEE_RTS.m"); c1 = 1; c2 = 11
+# system = SCOPF.System("data\\matpower\\IEEE_RTS.m"); c1 = 1; c2 = 11
 # system = SCOPF.System("data\\matpower\\RTS_GMLC.m"); c1 = 1; c2 = 52
-# system = SCOPF.System("data\\matpower\\ACTIVSg500.m"); c1 = 2; c2 = 1
+system = SCOPF.System("data\\matpower\\ACTIVSg500.m"); c1 = 2; c2 = 1
 # system = SCOPF.System("data\\matpower\\ACTIVSg2000.m"); c1 = 1; c2 = 9
 SCOPF.fix_generation_cost!(system);
 voll = SCOPF.make_voll(system)

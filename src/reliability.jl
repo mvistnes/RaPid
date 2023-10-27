@@ -63,7 +63,7 @@ function run_cases!(result, i, sys, voll, prob, cont, max_shed, ramp_mult, ramp_
     MOI.get(model, MOI.ResultCount()) < 1 && return
     idx = SCOPF.get_nodes_idx(opf.nodes);
     list = SCOPF.make_list(opf, idx, opf.nodes);
-    SCOPF.fix_base_case(model)
+    SCOPF.fix_base_case!(model)
     model, opf, pf, oplim, Pc, Pcc, Pccx = add_all_contingencies!(SCOPF.SC, SCOPF.PCSC, opf, oplim, model, list, pf, idx, Pc, Pcc, Pccx)
     SCOPF.solve_model!(model);
     gather_run_data!(result, 1, i, model, opf, Pc, Pcc, ramp_mult)
@@ -72,8 +72,8 @@ function run_cases!(result, i, sys, voll, prob, cont, max_shed, ramp_mult, ramp_
         ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long);
     model, opf, pf, oplim, Pc, Pcc, Pccx = add_all_contingencies!(SCOPF.PSC, SCOPF.PCSC, opf, oplim, model, list, pf, idx, Pc, Pcc, Pccx)
     SCOPF.solve_model!(model);
-    SCOPF.fix_base_case(model)
-    SCOPF.fix_short_term(model, Pc)
+    SCOPF.fix_base_case!(model)
+    SCOPF.fix_short_term!(model, Pc)
     model, opf, pf, oplim, Pc, Pcc, Pccx = add_all_contingencies!(SCOPF.SC, SCOPF.PSC, opf, oplim, model, list, pf, idx, Pc, Pcc, Pccx)
     SCOPF.solve_model!(model);
     gather_run_data!(result, 2, i, model, opf, Pc, Pcc, ramp_mult)
@@ -81,8 +81,8 @@ function run_cases!(result, i, sys, voll, prob, cont, max_shed, ramp_mult, ramp_
     model, opf, pf, oplim, Pc, Pcc, Pccx = SCOPF.opf_base(SCOPF.PSC, sys, Gurobi.Optimizer, voll=voll, contingencies=cont, prob=prob, max_shed=max_shed,
         ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long);
     SCOPF.solve_model!(model);
-    SCOPF.fix_base_case(model)
-    SCOPF.fix_short_term(model, Pc)
+    SCOPF.fix_base_case!(model)
+    SCOPF.fix_short_term!(model, Pc)
     model, opf, pf, oplim, Pc, Pcc, Pccx = add_all_contingencies!(SCOPF.PSC, SCOPF.PCSC, opf, oplim, model, list, pf, idx, Pc, Pcc, Pccx)
     SCOPF.solve_model!(model);
     gather_run_data!(result, 3, i, model, opf, Pc, Pcc, ramp_mult)
@@ -98,22 +98,22 @@ function run_contingency_select_cases!(result, i, sys, voll, prob, cont, max_she
         ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long);
     SCOPF.solve_model!(model);
     MOI.get(model, MOI.ResultCount()) < 1 && return
-    SCOPF.fix_base_case(model)
+    SCOPF.fix_base_case!(model)
     model, opf, pf, oplim, Pc, Pcc, Pccx, tot_t = run_contingency_select!(SCOPF.SC, SCOPF.PCSC, model, opf, pf, oplim, Pc, Pcc, Pccx)
     gather_run_data!(result, 1, i, model, opf, Pc, Pcc, ramp_mult)
 
     model, opf, pf, oplim, Pc, Pcc, Pccx = SCOPF.opf_base(SCOPF.SC, sys, Gurobi.Optimizer, voll=voll, contingencies=cont, prob=prob, max_shed=max_shed,
         ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long);
     model, opf, pf, oplim, Pc, Pcc, Pccx, tot_t = run_contingency_select!(SCOPF.PSC, SCOPF.PCSC, model, opf, pf, oplim, Pc, Pcc, Pccx)
-    SCOPF.fix_base_case(model)
-    SCOPF.fix_long_term(model, Pcc)
+    SCOPF.fix_base_case!(model)
+    SCOPF.fix_long_term!(model, Pcc)
     model, opf, pf, oplim, Pc, Pcc, Pccx, tot_t = run_contingency_select!(SCOPF.SC, SCOPF.PSC, model, opf, pf, oplim, Pc, Pcc, Pccx)
     gather_run_data!(result, 2, i, model, opf, Pc, Pcc, ramp_mult)
 
     model, opf, pf, oplim, Pc, Pcc, Pccx, tot_t = SCOPF.run_contingency_select(SCOPF.PSC, sys, Gurobi.Optimizer, voll, prob, cont, max_shed=max_shed,
         ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=p_failure);
-    SCOPF.fix_base_case(model)
-    SCOPF.fix_short_term(model, Pc)
+    SCOPF.fix_base_case!(model)
+    SCOPF.fix_short_term!(model, Pc)
     model, opf, pf, oplim, Pc, Pcc, Pccx, tot_t = run_contingency_select!(SCOPF.PSC, SCOPF.PCSC, model, opf, pf, oplim, Pc, Pcc, Pccx)
     gather_run_data!(result, 3, i, model, opf, Pc, Pcc, ramp_mult)
 
@@ -128,22 +128,22 @@ function run_benders_cases!(result, i, sys, voll, prob, cont, max_shed, ramp_mul
         ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long);
     SCOPF.solve_model!(model);
     MOI.get(model, MOI.ResultCount()) < 1 && return
-    SCOPF.fix_base_case(model)
+    SCOPF.fix_base_case!(model)
     model, opf, pf, oplim, Pc, Pcc, Pccx, tot_t = run_benders!(SCOPF.SC, SCOPF.PCSC, model, opf, pf, oplim, Pc, Pcc, Pccx)
     gather_run_data!(result, 1, i, model, opf, Pc, Pcc, ramp_mult)
 
     model, opf, pf, oplim, Pc, Pcc, Pccx = SCOPF.opf_base(SCOPF.SC, sys, Gurobi.Optimizer, voll=voll, contingencies=cont, prob=prob, max_shed=max_shed,
         ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long);
     model, opf, pf, oplim, Pc, Pcc, Pccx, tot_t = run_benders!(SCOPF.PSC, SCOPF.PCSC, model, opf, pf, oplim, Pc, Pcc, Pccx)
-    SCOPF.fix_base_case(model)
-    # SCOPF.fix_long_term(model, Pcc)
+    SCOPF.fix_base_case!(model)
+    # SCOPF.fix_long_term!(model, Pcc)
     model, opf, pf, oplim, Pc, Pcc, Pccx, tot_t = run_benders!(SCOPF.SC, SCOPF.PSC, model, opf, pf, oplim, Pc, Pcc, Pccx)
     gather_run_data!(result, 2, i, model, opf, Pc, Pcc, ramp_mult)
 
     model, opf, pf, oplim, Pc, Pcc, Pccx, tot_t = SCOPF.run_benders(SCOPF.PSC, sys, Gurobi.Optimizer, voll, prob, cont, max_shed=max_shed,
         ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=p_failure);
-    SCOPF.fix_base_case(model)
-    # SCOPF.fix_short_term(model, Pc)
+    SCOPF.fix_base_case!(model)
+    # SCOPF.fix_short_term!(model, Pc)
     model, opf, pf, oplim, Pc, Pcc, Pccx, tot_t = run_benders!(SCOPF.PSC, SCOPF.PCSC, model, opf, pf, oplim, Pc, Pcc, Pccx)
     gather_run_data!(result, 3, i, model, opf, Pc, Pcc, ramp_mult)
 
