@@ -1,69 +1,83 @@
+using Test
 using PowerSystems
+import JuMP
+import HiGHS
+import LinearAlgebra
+import Random
+Random.seed!(42)
 
-# system = get_system("ELK14.json")
-system = System("data\\ELK14\\A5.m")
-opfm = scopf(SCOPF.SC, system, HiGHS.Optimizer)
-solve_model!(opfm.mod)
-nodes = get_sorted_nodes(opfm.sys)
-branches = get_sorted_branches(opfm.sys)
-idx = get_nodes_idx(nodes)
-slack = find_slack(nodes)[1]
+# SETUP
+LinearAlgebra.BLAS.set_num_threads(Threads.nthreads())
+# system = System("data\\ELK14\\A5.m"); c1 = 1; c2 = 5
+system = SCOPF.System("data\\matpower\\IEEE_RTS.m"); c1 = 1; c2 = 11
+# system = SCOPF.System("data\\matpower\\RTS_GMLC.m"); c1 = 1; c2 = 52
+# system = SCOPF.System("data\\matpower\\ACTIVSg500.m"); c1 = 2; c2 = 1
+# system = SCOPF.System("data\\matpower\\ACTIVSg2000.m"); c1 = 1; c2 = 9
+SCOPF.fix_generation_cost!(system);
+voll = SCOPF.make_voll(system)
+model, opf, pf, oplim, _, _, _ = SCOPF.opf_base(SCOPF.SC, system, HiGHS.Optimizer, voll=voll);
+SCOPF.solve_model!(model)
+idx = SCOPF.get_nodes_idx(opf.nodes)
+bx = SCOPF.get_bus_idx.(opf.branches, [idx])
+slack = SCOPF.find_slack(opf.nodes)[1]
 
-A = calc_A(branches, length(nodes), idx)
-D = calc_D(branches)
-B = calc_B(A, D)
-X = calc_X(B, slack)
-ϕ = calc_isf(A, D, X)
-Pᵢ = get_net_Pᵢ(opfm, nodes, idx)
-θ = run_pf(B, Pᵢ)
+Pᵢ = SCOPF.get_value(model, :p0)
+pf = SCOPF.DCPowerFlow(opf.nodes, opf.branches, idx, Pᵢ)
+B = copy(pf.B)
+X = copy(pf.X)
+ϕ = copy(pf.ϕ)
+θ = copy(pf.θ)
+F = copy(pf.F)
+K = SCOPF.get_klu(B, pf.slack)
+  
+# CONTAINERS FOR POWER FLOW
+flow1 = copy(pf.F)
+flow2 = copy(pf.F)
+flow3 = copy(pf.F)
+flow4 = copy(pf.F)
+flow5 = copy(pf.F)
+flow6 = copy(pf.F)
+flow7 = copy(pf.F)
 
-pf = SCOPF.DCPowerFlow(nodes, branches, idx, Pᵢ)
-b1 = get_bus_idx(branches[1], idx)
-@test calc_Pline(A, D, get_changed_angles(pf.X, pf.DA, pf.θ, b1[1], b1[2], slack)) ≈ 
-    calculate_line_flows(calc_isf(D*A, get_changed_X(X, D*A, b1[1], b1[2])), Pᵢ) ≈
-    calculate_line_flows(F, ptdf, X, B, angles, b1[1], b1[2], 1)
+cont1 = bx[c1]
+ΔPc = rand(length(Pᵢ))
+θ₂ = pf.X * (Pᵢ .+ ΔPc)
+F₂ = pf.DA * θ₂
 
-b3 = get_bus_idx(branches[3], idx)
-@test get_changed_angles(pf.X, pf.DA, pf.θ, b2[1], b2[2], slack)
-@test get_changed_X(X, D*A, b2[1], b2[2])
-@test calculate_line_flows(F, ptdf, X, B, angles, b2[1], b2[2], 2)
+# CONTINGENCY WITHOUT POWER INJECTION CHANGE OR ISLANDING
+SCOPF.calculate_line_flows!(flow1, pf, cont1, c1) # IMML flow
+SCOPF.calculate_line_flows!(flow2, θ, B, pf.DA, pf.B, Pᵢ, cont1, c1, pf.slack) # inverse with theta
+@test flow1 ≈ flow2
+SCOPF.get_isf!(ϕ, X, pf.X, pf.B, pf.DA, cont1, c1); LinearAlgebra.mul!(flow3, ϕ, Pᵢ); # IMML ptdf
+@test flow2 ≈ flow3
+SCOPF.get_isf!(ϕ, K, pf.DA, pf.B, cont1, c1, pf.slack); LinearAlgebra.mul!(flow4, ϕ, Pᵢ); # inverse with ptdf
+@test flow3 ≈ flow4
+SCOPF.calc_Pline!(flow5, θ, pf.X, pf.B, pf.DA, pf.θ, cont1, c1) # IMML theta
+@test flow4 ≈ flow5 
 
-@test θ ≈ pf.θ
-@test D*A*θ ≈ calculate_line_flows(pf)
+# CONTINGENCY WITH POWER INJECTION CHANGE AND WITHOUT ISLANDING
+SCOPF.calculate_line_flows!(flow1, pf, cont1, c1, Pᵢ=(Pᵢ .+ ΔPc)) # IMML flow
+SCOPF.calculate_line_flows!(flow2, θ, B, pf.DA, pf.B, (Pᵢ .+ ΔPc), cont1, c1, pf.slack) # inverse with theta
+@test flow1 ≈ flow2
+SCOPF.get_isf!(ϕ, X, pf.X, pf.B, pf.DA, cont1, c1); LinearAlgebra.mul!(flow3, ϕ, (Pᵢ .+ ΔPc)); # IMML ptdf
+@test flow2 ≈ flow3
+SCOPF.get_isf!(ϕ, K, pf.DA, pf.B, cont1, c1, pf.slack); LinearAlgebra.mul!(flow4, ϕ, (Pᵢ .+ ΔPc)); # inverse with ptdf
+@test flow3 ≈ flow4
 
-b5 = get_bus_idx(branches[5], idx)
-@test_throws DivideError get_changed_anglespf.(X, pf.DA, pf.θ, b5[1], b5[2], slack)
-@test_throws DivideError get_changed_X(X, D*A, b5[1], b5[2])
-@test_throws DivideError calculate_line_flows(F, ptdf, X, B, angles, b5[1], b5[2], 2)
+# CONTINGENCY WITH POWER INJECTION CHANGE AND ISLANDING
+cont2 = bx[c2]
+islands, island, island_b = SCOPF.handle_islands(pf.B, pf.DA, cont2, c2, pf.slack)
+SCOPF.calculate_line_flows!(flow1, pf, cont2, c2, Pᵢ=(Pᵢ .+ ΔPc), nodes=islands[island], branches=island_b) # IMML flow
+SCOPF.calculate_line_flows!(flow2, θ, pf.DA, pf.B, (Pᵢ .+ ΔPc), cont2, c2, pf.slack, islands[island], island_b) # inverse with theta
+@test flow1 ≈ flow2
+SCOPF.get_isf!(ϕ, pf.DA, pf.B, cont2, c2, pf.slack, islands[island], island_b); LinearAlgebra.mul!(flow3, ϕ, (Pᵢ .+ ΔPc)); # inverse with ptdf
+@test flow2 ≈ flow3 
+SCOPF.calc_Pline!(flow4, θ, pf.X, pf.B, pf.DA, θ₂, cont2, c2) # IMML theta
+@test flow3 ≈ flow4
+SCOPF.get_isf!(ϕ, X, pf.X, pf.B, pf.DA, cont2, c2); LinearAlgebra.mul!(flow5, ϕ, (Pᵢ .+ ΔPc)); # IMML ptdf
+@test flow4 ≈ flow5 
+SCOPF.get_isf!(ϕ, pf.ϕ, islands[island], island_b); LinearAlgebra.mul!(flow6, ϕ, (Pᵢ .+ ΔPc)); # hack
+@test flow5 ≈ flow6 
+SCOPF.calculate_line_flows!(flow7, ϕ, pf.ϕ, (Pᵢ .+ ΔPc), islands[island], island_b); # hack2
+@test flow6 ≈ flow7 
 
-function test_imml_island_handling(pf::DCPowerFlow, bx::Vector{<:Tuple{Integer, Integer}})
-    ptdf1 = copy(pf.ϕ)
-    ptdf2 = copy(pf.ϕ)
-    for (c,cont) in enumerate(bx)
-        island, island_b = handle_islands(pf, cont, c)
-        try
-            flow = SCOPF.calculate_line_flows(pf, cont, c)
-            if length(island) < 500
-                println(c, cont)
-            end
-        catch DivideError
-            if length(island) < 2
-                @warn "Error and no islands!"
-            end
-        end
-        try
-            if isempty(island)
-                ptdf1 = get_isf(pf.DA, pf.B, cont, c, pf.slack)
-                ptdf2 = get_isf(pf, cont, c)
-            end
-            if any(abs.(ptdf1 .- ptdf2) .> 0.0001)
-                @error "Diff $c $(cont[1])-$(cont[2])!"
-            end
-        catch
-            @error "$c $(cont[1])-$(cont[2])!"
-            break
-        end
-    end
-end
-
-test_imml_island_handling(pf, get_bus_idx.(branches, [idx]))
