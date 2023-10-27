@@ -1,31 +1,27 @@
 # CC BY 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2022
 
-module SCOPF
+module RaPidSCOPF
 
 using PowerSystems
 using JuMP
-using Plots
-using StatsPlots
+# using Plots
+# using StatsPlots
 using Printf
 # using PowerSystemCaseBuilder
-using Test
-using Statistics
-using DelimitedFiles
+# using Test
+# using DelimitedFiles
 
+import Statistics: mean
 import Logging
 import SparseArrays
 # import StaticArrays
 # import Octavian
 # import SuiteSparseGraphBLAS
 import MathOptInterface
-import KLU
 const MOI = MathOptInterface
+import KLU
 import LinearAlgebra
-import Ipopt # LP, SOCP, Nonconvex
-import Gurobi # LP, SOCP, Integer
-import GLPK # LP, Integer
-# import Tulip
-import Test
+
 
 ## For timing functions (with allocations)
 # using TimerOutputs
@@ -55,11 +51,19 @@ include("cont_dc_power_flow.jl")
 export get_isf, get_ptdf, calculate_line_flows, calculate_line_flows!
     
 #=
+    AC power flow functions.
+=#
+include("ac_power_flow.jl")
+export calc_Ybus, calc_B_mark, calc_B_doublemark
+
+#=
     Functions using the Inverse Matrix Modification Lemma.
 =#
 include("imml.jl")
 export IMML, get_changed_angles, calc_Pline, get_changed_X, get_isf, calculate_line_flows,
     calculate_line_flows!, get_overload, get_lodf
+
+include("FDLF.jl")
 
 #=
     Functions for handling islands in the system.
@@ -109,7 +113,7 @@ export run_reliability_calculation
     Functions for printing and plotting SCOPF results.
 =#
 include("post_process_opf.jl")
-export scatterplot, make_save_plot, scatter_all, print_variabel, print_results, print_active_power,
+export scatter_all, print_variabel, print_results, print_active_power,
     print_power_flow, print_contingency_power_flow, print_contingency_overflow
 
 end
