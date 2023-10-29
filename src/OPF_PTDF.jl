@@ -123,19 +123,24 @@ function opf_base(type::OPF, system::System, optimizer;
 
     @expression(mod, inj_p0, -p0)
     for n = 1:length(opf.nodes)
-        add_to_expression!.(inj_p0[n], sum((pg0[g] for g in list[n].ctrl_generation), init=0.0))
-        add_to_expression!.(inj_p0[n], sum((pr[d] for d in list[n].renewables), init=0.0))
-        add_to_expression!.(inj_p0[n], -1, sum((pd[d] for d in list[n].demands), init=0.0))
-        add_to_expression!.(inj_p0[n], sum((beta(opf.nodes[n], opf.dc_branches[l]) * pfdc0[l] for l in list[n].dc_branches), init=0.0))
-        add_to_expression!.(inj_p0[n], -1, sum((pr0[d] for d in list[n].renewables), init=0.0))
-        add_to_expression!.(inj_p0[n], sum((ls0[d] for d in list[n].demands), init=0.0))
+        add_to_expression!(inj_p0[n], sum((pg0[g] for g in list[n].ctrl_generation), init=0.0))
+        add_to_expression!(inj_p0[n], sum((pr[d] for d in list[n].renewables), init=0.0))
+        add_to_expression!(inj_p0[n], -1, sum((pd[d] for d in list[n].demands), init=0.0))
+        add_to_expression!(inj_p0[n], sum((beta(opf.nodes[n], opf.dc_branches[l]) * pfdc0[l] for l in list[n].dc_branches), init=0.0))
+        add_to_expression!(inj_p0[n], -1, sum((pr0[d] for d in list[n].renewables), init=0.0))
+        add_to_expression!(inj_p0[n], sum((ls0[d] for d in list[n].demands), init=0.0))
     end
     @constraint(mod, inj_p0 .== 0.0)
 
-    @constraint(mod, branch_lim_n, -oplim.branch_rating .<= pf.ϕ * p0)
-    @constraint(mod, branch_lim_p, pf.ϕ * p0 .<= oplim.branch_rating)
-    @constraint(mod, power_balance, sum(pg0, init=0.0) + sum(ls0, init=0.0) + sum(pr, init=0.0) ==
-                                    sum(pd, init=0.0) + sum(pr0, init=0.0))
+    @expression(mod, ptdf0, pf.ϕ * p0)
+    @constraint(mod, branch_lim_n, -oplim.branch_rating .<= ptdf0)
+    @constraint(mod, branch_lim_p, ptdf0 .<= oplim.branch_rating)
+    @expression(mod, balance, sum(pg0, init=0.0))
+    add_to_expression!.(balance, ls0)
+    add_to_expression!.(balance, pr)
+    add_to_expression!.(balance, -pd)
+    add_to_expression!.(balance, -pr0)
+    @constraint(mod, power_balance, balance == 0.0)
 
     if unit_commit
         add_unit_commit!(opf)
@@ -179,12 +184,12 @@ function add_contingencies!(opf::OPFsystem, oplim::Oplimits, mod::Model, ptdf::A
 
     inj_p = @expression(mod, -p)
     for n = 1:length(opf.nodes)
-        add_to_expression!.(inj_p[n], sum((mod[:pg0][g] for g in list[n].ctrl_generation), init=0.0))
-        add_to_expression!.(inj_p[n], sum((beta(opf.nodes[n], opf.dc_branches[l]) * mod[:pfdc0][l] for l in list[n].dc_branches), init=0.0))
-        add_to_expression!.(inj_p[n], sum((mod[:pr][d] for d in list[n].renewables), init=0.0))
-        add_to_expression!.(inj_p[n], -1, sum((mod[:pd][d] for d in list[n].demands), init=0.0))
-        add_to_expression!.(inj_p[n], -1, sum((mod[:pr0][d] for d in list[n].renewables), init=0.0))
-        add_to_expression!.(inj_p[n], sum((mod[:ls0][d] for d in list[n].demands), init=0.0))
+        add_to_expression!(inj_p[n], sum((mod[:pg0][g] for g in list[n].ctrl_generation), init=0.0))
+        add_to_expression!(inj_p[n], sum((beta(opf.nodes[n], opf.dc_branches[l]) * mod[:pfdc0][l] for l in list[n].dc_branches), init=0.0))
+        add_to_expression!(inj_p[n], sum((mod[:pr][d] for d in list[n].renewables), init=0.0))
+        add_to_expression!(inj_p[n], -1, sum((mod[:pd][d] for d in list[n].demands), init=0.0))
+        add_to_expression!(inj_p[n], -1, sum((mod[:pr0][d] for d in list[n].renewables), init=0.0))
+        add_to_expression!(inj_p[n], sum((mod[:ls0][d] for d in list[n].demands), init=0.0))
     end
     @constraint(mod, inj_p .== 0.0)
     ptdf_p = @expression(mod, ptdf * p)
@@ -201,13 +206,13 @@ function add_contingencies!(Pc::Dict{<:Integer,ExprC}, opf::OPFsystem, oplim::Op
 
     inj_pc = @expression(mod, -pc)
     for n = 1:length(opf.nodes)
-        add_to_expression!.(inj_pc[n], sum((mod[:pg0][g] for g in list[n].ctrl_generation), init=0.0))
-        add_to_expression!.(inj_pc[n], sum((beta(opf.nodes[n], opf.dc_branches[l]) * mod[:pfdc0][l] for l in list[n].dc_branches), init=0.0))
-        add_to_expression!.(inj_pc[n], sum((mod[:pr][d] for d in list[n].renewables), init=0.0))
-        add_to_expression!.(inj_pc[n], -1, sum((mod[:pd][d] for d in list[n].demands), init=0.0))
-        add_to_expression!.(inj_pc[n], -1, sum((pgc[g] for g in list[n].ctrl_generation), init=0.0))
-        add_to_expression!.(inj_pc[n], -1, sum((prc[d] for d in list[n].renewables), init=0.0))
-        add_to_expression!.(inj_pc[n], sum((lsc[d] for d in list[n].demands), init=0.0))
+        add_to_expression!(inj_pc[n], sum((mod[:pg0][g] for g in list[n].ctrl_generation), init=0.0))
+        add_to_expression!(inj_pc[n], sum((beta(opf.nodes[n], opf.dc_branches[l]) * mod[:pfdc0][l] for l in list[n].dc_branches), init=0.0))
+        add_to_expression!(inj_pc[n], sum((mod[:pr][d] for d in list[n].renewables), init=0.0))
+        add_to_expression!(inj_pc[n], -1, sum((mod[:pd][d] for d in list[n].demands), init=0.0))
+        add_to_expression!(inj_pc[n], -1, sum((pgc[g] for g in list[n].ctrl_generation), init=0.0))
+        add_to_expression!(inj_pc[n], -1, sum((prc[d] for d in list[n].renewables), init=0.0))
+        add_to_expression!(inj_pc[n], sum((lsc[d] for d in list[n].demands), init=0.0))
     end
     @constraint(mod, inj_pc .== 0.0)
     ptdf_pc = @expression(mod, ptdf * pc)
@@ -224,13 +229,13 @@ function add_contingencies!(Pcc::Dict{<:Integer,ExprCC}, opf::OPFsystem, oplim::
 
     inj_pcc = @expression(mod, -pcc)
     for n = 1:length(opf.nodes)
-        add_to_expression!.(inj_pcc[n], sum((mod[:pg0][g] for g in list[n].ctrl_generation), init=0.0))
-        add_to_expression!.(inj_pcc[n], sum((mod[:pr][d] for d in list[n].renewables), init=0.0))
-        add_to_expression!.(inj_pcc[n], -1, sum((mod[:pd][d] for d in list[n].demands), init=0.0))
-        add_to_expression!.(inj_pcc[n], sum((pgu[g] - pgd[g] for g in list[n].ctrl_generation), init=0.0))
-        add_to_expression!.(inj_pcc[n], sum((beta(opf.nodes[n], opf.dc_branches[l]) * pfdccc[l] for l in list[n].dc_branches), init=0.0))
-        add_to_expression!.(inj_pcc[n], -1, sum((prcc[d] for d in list[n].renewables), init=0.0))
-        add_to_expression!.(inj_pcc[n], sum((lscc[d] for d in list[n].demands), init=0.0))
+        add_to_expression!(inj_pcc[n], sum((mod[:pg0][g] for g in list[n].ctrl_generation), init=0.0))
+        add_to_expression!(inj_pcc[n], sum((mod[:pr][d] for d in list[n].renewables), init=0.0))
+        add_to_expression!(inj_pcc[n], -1, sum((mod[:pd][d] for d in list[n].demands), init=0.0))
+        add_to_expression!(inj_pcc[n], sum((pgu[g] - pgd[g] for g in list[n].ctrl_generation), init=0.0))
+        add_to_expression!(inj_pcc[n], sum((beta(opf.nodes[n], opf.dc_branches[l]) * pfdccc[l] for l in list[n].dc_branches), init=0.0))
+        add_to_expression!(inj_pcc[n], -1, sum((prcc[d] for d in list[n].renewables), init=0.0))
+        add_to_expression!(inj_pcc[n], sum((lscc[d] for d in list[n].demands), init=0.0))
     end
     @constraint(mod, inj_pcc .== 0.0)
     ptdf_pcc = @expression(mod, ptdf * pcc)
@@ -247,12 +252,12 @@ function add_contingencies!(Pccx::Dict{<:Integer,ExprCCX}, opf::OPFsystem, oplim
 
     inj_pccx = @expression(mod, -pccx)
     for n = 1:length(opf.nodes)
-        add_to_expression!.(inj_pccx[n], sum((mod[:pg0][g] for g in list[n].ctrl_generation), init=0.0))
-        add_to_expression!.(inj_pccx[n], sum((mod[:pr][d] for d in list[n].renewables), init=0.0))
-        add_to_expression!.(inj_pccx[n], -1, sum((mod[:pd][d] for d in list[n].demands), init=0.0))
-        add_to_expression!.(inj_pccx[n], sum((-pgd[g] for g in list[n].ctrl_generation), init=0.0))
-        add_to_expression!.(inj_pccx[n], -1, sum((prcc[d] for d in list[n].renewables), init=0.0))
-        add_to_expression!.(inj_pccx[n], sum((lscc[d] for d in list[n].demands), init=0.0))
+        add_to_expression!(inj_pccx[n], sum((mod[:pg0][g] for g in list[n].ctrl_generation), init=0.0))
+        add_to_expression!(inj_pccx[n], sum((mod[:pr][d] for d in list[n].renewables), init=0.0))
+        add_to_expression!(inj_pccx[n], -1, sum((mod[:pd][d] for d in list[n].demands), init=0.0))
+        add_to_expression!(inj_pccx[n], sum((-pgd[g] for g in list[n].ctrl_generation), init=0.0))
+        add_to_expression!(inj_pccx[n], -1, sum((prcc[d] for d in list[n].renewables), init=0.0))
+        add_to_expression!(inj_pccx[n], sum((lscc[d] for d in list[n].demands), init=0.0))
     end
     @constraint(mod, inj_pccx .== 0.0)
     @constraint(mod, ptdf * pccx .>= -oplim.branch_rating)
@@ -272,15 +277,18 @@ function init_P!(Pc::Dict{<:Integer,ExprC}, opf::OPFsystem, oplim::Oplimits, mod
     Pc[c] = ExprC(JuMP.VariableRef[], pgc, prc, lsc)
 
     p_survive = 1.0 - oplim.p_failure
-    add_to_expression!.(obj, opf.prob[c], sum(opf.voll' * lsc))
-    add_to_expression!.(obj, opf.prob[c], sum(oplim.ramp_mult * 1 * prc))
+    add_to_expression!(obj, opf.prob[c], sum(opf.voll' * lsc))
+    add_to_expression!(obj, opf.prob[c], sum(oplim.ramp_mult * 1 * prc))
     for (cost, g) in zip(opf.cost_ctrl_gen, pgc)
         add_to_expression!.(obj, opf.prob[c], p_survive * oplim.ramp_mult * (cost[2] * g))
         # add_to_expression!.(obj, opf.prob[c], p_survive * oplim.ramp_mult * (cost[1] * g^2 + cost[2] * g))
     end
 
     # Add new constraints that limit the corrective variables within operating limits
-    JuMP.@constraint(mod, sum(lsc) - sum(prc) - sum(pgc) == 0)
+    balance_pc = JuMP.@expression(mod, sum(lsc))
+    add_to_expression!.(balance_pc, -prc)
+    add_to_expression!.(balance_pc, -pgc)
+    JuMP.@constraint(mod, balance_pc == 0.0)
     if isempty(islands)
         JuMP.@constraint(mod, mod[:pg0] .- pgc .>= 0)
     else
@@ -329,7 +337,7 @@ function init_P!(Pcc::Dict{<:Integer,ExprCC}, opf::OPFsystem, oplim::Oplimits, m
         # sum(opf.cost_ctrl_gen' * ramp_mult * pgu) # +
         # sum(opf.cost_ctrl_gen' * pgd)
         ))
-    add_to_expression!.(obj, opf.prob[c], sum(p_survive * oplim.ramp_mult * 1 * prcc))
+    add_to_expression!(obj, opf.prob[c], sum(p_survive * oplim.ramp_mult * 1 * prcc))
     for (cost, gu, gd) in zip(opf.cost_ctrl_gen, pgu, pgd)
         add_to_expression!.(obj, opf.prob[c], p_survive * oplim.ramp_mult * (cost[2] * gu))
         add_to_expression!.(obj, opf.prob[c], p_survive * oplim.ramp_mult * (cost[2] * gd))
@@ -338,7 +346,11 @@ function init_P!(Pcc::Dict{<:Integer,ExprCC}, opf::OPFsystem, oplim::Oplimits, m
     end
 
     # Add new constraints that limit the corrective variables within operating limits
-    JuMP.@constraint(mod, sum(pgu) + sum(lscc) - sum(pgd) - sum(prcc) == 0)
+    balance_pcc = JuMP.@expression(mod, sum(pgu))
+    add_to_expression!.(balance_pcc, lscc)
+    add_to_expression!.(balance_pcc, -pgd)
+    add_to_expression!.(balance_pcc, -prcc)
+    JuMP.@constraint(mod, balance_pcc == 0.0)
     if isempty(islands)
         JuMP.@constraints(mod, begin
             mod[:pg0] .+ pgu .- pgd .>= 0.0
@@ -348,7 +360,7 @@ function init_P!(Pcc::Dict{<:Integer,ExprCC}, opf::OPFsystem, oplim::Oplimits, m
         itr = length(islands[island]) < 2 ? Int[] : islands[island]
         for n in itr
             JuMP.@constraints(mod, begin
-                [g = list[n].ctrl_generation], mod[:pg0][g] + pgu[g] - pgd[g] .>= 0.0
+                [g = list[n].ctrl_generation], mod[:pg0][g] + pgu[g] - pgd[g] >= 0.0
                 [g = list[n].ctrl_generation], mod[:pg0][g] + pgu[g] - pgd[g] <= oplim.pg_lim_max[g]
             end)
         end
@@ -381,12 +393,14 @@ function init_P!(Pccx::Dict{<:Integer,ExprCCX}, opf::OPFsystem, oplim::Oplimits,
     Pccx[c] = ExprCCX(JuMP.VariableRef[], pgd, prcc, lscc)
 
     # Extend the objective with the corrective variables
-    add_to_expression!.(obj, opf.prob[c] * oplim.p_failure, sum(opf.voll' * lscc))
-    add_to_expression!.(obj, opf.prob[c], sum(oplim.p_failure .* 1 .* prccx))
-    add_to_expression!.(obj, opf.prob[c] * oplim.p_failure, sum(60 * pgd))
+    add_to_expression!(obj, opf.prob[c] * oplim.p_failure, sum(opf.voll' * lscc))
+    add_to_expression!(obj, opf.prob[c], sum(oplim.p_failure .* 1 .* prccx))
+    add_to_expression!(obj, opf.prob[c] * oplim.p_failure, sum(60 * pgd))
 
     # Add new constraints that limit the corrective variables within operating limits
-    JuMP.@constraint(mod, sum(lscc) == sum(pgd))
+    balance_pccx = JuMP.@expression(mod, sum(lscc))
+    add_to_expression!.(balance_pccx, -pgd)
+    JuMP.@constraint(mod, balance_pccx == 0.0)
     if isempty(islands)
         JuMP.@constraint(mod, mod[:pg0] .- pgd .>= 0.0)
     else

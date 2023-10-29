@@ -292,7 +292,7 @@ run_pf(K::KLU.KLUFactorization, P::AbstractVector{<:Real}, slack::Integer) = run
 function run_pf!(pf::DCPowerFlow, Pᵢ::AbstractVector{<:Real})
     copy!(pf.θ, Pᵢ)
     KLU.solve!(pf.K, pf.θ)
-    pf.θ[slack] = 0.0
+    pf.θ[pf.slack] = 0.0
     return pf.θ
 end
 
