@@ -3,9 +3,10 @@
 using Test
 using PowerSystems
 import JuMP
-# import Ipopt # LP, SOCP, Nonconvex
-import Gurobi # LP, SOCP, Integer
-# import GLPK # LP, Integer
+# import Ipopt # LP, SOCP, NLP
+import Gurobi # LP, SOCP, NLP, MILP, MINLP
+# import GLPK # LP, MILP
+# import HiGHS # LP, MILP
 # import Tulip
 import Random
 

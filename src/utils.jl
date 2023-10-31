@@ -147,7 +147,7 @@ mutable struct OPFsystem
 end
 
 """ Constructor for OPFsystem """
-function opfsystem(sys::System, voll::Vector{<:Real}, contingencies::Vector{<:Branch}=Component[], prob::Vector{<:Real}=[]; debug=false)
+function opfsystem(sys::System, voll::Vector{<:Real}, contingencies::Vector{<:Branch}=Component[], prob::Vector{<:Real}=[])
 
     ctrl_generation = sort_components!(get_ctrl_generation(sys))
     branches = sort_components!(get_branches(sys))
@@ -156,28 +156,20 @@ function opfsystem(sys::System, voll::Vector{<:Real}, contingencies::Vector{<:Br
     demands = sort_components!(get_demands(sys))
     renewables = sort_components!(get_renewables(sys))
 
-    cost_ctrl_gen = Vector{Tuple{Float64, Float64}}([get_generator_cost(g) for g in ctrl_generation])
+    cost_ctrl_gen = get_generator_cost.(ctrl_generation)::Vector{Tuple{Float64, Float64}}
     cost_renewables = Vector{Float64}() # Vector{Float64}([get_generator_cost(g)[2] for g in renewables])
 
-    check_values(getindex.(cost_ctrl_gen, 1), ctrl_generation, "cost")
-    check_values(getindex.(cost_ctrl_gen, 2), ctrl_generation, "cost")
+    check_values(getindex.(cost_ctrl_gen, 1), ctrl_generation, "cost_1")
+    check_values(getindex.(cost_ctrl_gen, 2), ctrl_generation, "cost_2")
     check_values(voll, demands, "voll")
-    check_values(getindex.(get_active_power_limits.(ctrl_generation), :max), ctrl_generation, "max_active_power")
-    check_values(get_active_power.(demands), demands, "max_active_power")
-    check_values(get_active_power.(renewables), renewables, "max_active_power")
-    (rampup, rampdown) = split_pair(get_ramp_limits.(ctrl_generation))
-    check_values(rampup, ctrl_generation, "rampup")
-    check_values(rampdown, ctrl_generation, "rampdown")
-    check_values(get_r.(branches), branches, "r")
-    check_values(get_x.(branches), branches, "x")
-    check_values(get_rate.(branches), branches, "rate")
-    limits = split_pair(get_active_power_limits_from.(dc_branches))
-    check_values(limits[1], dc_branches, "rate_dc_branches_min")
-    check_values(limits[2], dc_branches, "rate_dc_branches_max")
+    check_values.(ctrl_generation)
+    check_values.(branches)
+    check_values.(dc_branches)
 
-    islands = island_detection(calc_B(branches, nodes))
+    A = calc_B(branches, nodes)
+    islands = island_detection(A'A)
     if length(islands) > 1
-        @info "The system is separated into islands" islands
+        @warn "The system is separated into islands" islands
     end
 
     return OPFsystem(cost_ctrl_gen, cost_renewables, voll, prob,
@@ -185,18 +177,41 @@ function opfsystem(sys::System, voll::Vector{<:Real}, contingencies::Vector{<:Br
 end
 
 """ Automatic constructor for OPFsystem where voll, prob, and contingencies are automatically computed. """
-function opfsystem(sys::System; debug=false)
+function opfsystem(sys::System)
     voll, prob, contingencies = setup(sys, 1, 4)
     fix_generation_cost!(sys)
-    return opfsystem(voll, contingencies, prob; debug=debug)
+    return opfsystem(sys, voll, contingencies, prob)
 end
 
-function check_values(val::Real, var::Component, name::String; atol=1e-5)
-    if isapprox(val, zero(typeof(val)); atol=atol)
-        @info "$(get_name(var)) has $val value in $name."
+function check_values(val::Real, var::Component, typename::String; comp=<, atol=1e-5)
+    if comp(val, atol)
+    # if isapprox(val, zero(typeof(val)); atol=atol)
+        @info "$(get_name(var)) has $val value in $typename."
     end
 end
-check_values(val::AbstractVector, var::AbstractVector{<:Component}, name::String; atol=1e-5) = check_values.(val, var, [name], atol=atol)
+check_values(val::AbstractVector{<:Real}, var::AbstractVector{<:Component}, typename::String; atol=1e-5) =
+    check_values.(val, var, [typename], atol=atol)
+
+function check_values(val::Generator)
+    lmt = get_active_power_limits(val)
+    check_values(lmt[:min], val, "min_active_power")
+    check_values(lmt[:max], val, "max_active_power")
+    ramp = get_ramp_limits(val)
+    check_values(ramp[1], val, "rampup")
+    check_values(ramp[2], val, "rampdown")
+end
+
+function check_values(val::ACBranch)
+    check_values(get_r(val), val, "r")
+    check_values(get_x(val), val, "x")
+    check_values(get_rate(val), val, "rate")
+end
+
+function check_values(val::TwoTerminalHVDCLine)
+    lmt = get_active_power_limits_from(val)
+    check_values(lmt[1], val, "rate_dc_branches_min", comp=≈)
+    check_values(lmt[2], val, "rate_dc_branches_max")
+end
 
 """Find value of β, β = 1 if from-bus is the bus, β = -1 if to-bus is the bus, 0 else"""
 beta(bus::ACBus, branch::Branch) = bus == branch.arc.from ? 1 : bus == branch.arc.to ? -1 : 0
@@ -471,7 +486,7 @@ get_value(mod::Model, var::Vector{JuMP.VariableRef})::Vector{Float64} =
     MOI.get(JuMP.backend(mod), MOI.VariablePrimal(), JuMP.index.(var))
 
 " Fix for name difference in StandardLoad "
-PowerSystems.get_active_power(value::StandardLoad) = value.current_active_power
+PowerSystems.get_active_power(value::StandardLoad) = value.constant_active_power
 
 """ Return the net power injected at each node. """
 function get_net_Pᵢ(opf::OPFsystem, mod::Model, idx::Dict{<:Int,<:Int}=get_nodes_idx(opf.nodes))

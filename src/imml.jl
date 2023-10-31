@@ -194,6 +194,45 @@ Input:
     - to_bus: To bus index
     - branch: Contingency branch index
 """
+@views function single_contingency_delta(
+    B::AbstractMatrix{T},
+    DA::AbstractMatrix{T},
+    X::AbstractMatrix{T},
+    θ::AbstractVector{T},
+    from_bus::Integer,
+    to_bus::Integer,
+    branch::Integer;
+    atol::Real=1e-10
+) where {T<:Real}
+    change = DA[branch, to_bus] / B[from_bus, to_bus]
+    c⁻¹ = inv(B[from_bus, to_bus]) + change * (X[from_bus, from_bus] - X[from_bus, to_bus] - X[to_bus, from_bus] + X[to_bus, to_bus])
+    if isapprox(c⁻¹, zero(T); atol=atol)
+        return throw(DivideError())
+    end
+    delta = inv(c⁻¹) * (θ[from_bus] - θ[to_bus])
+    return change * delta
+end
+@views function calculate_line_flows!(
+    Pl::AbstractVector{T},
+    Pl0::AbstractVector{T},
+    ptdf::AbstractMatrix{T},
+    B::AbstractMatrix{T},
+    DA::AbstractMatrix{T},
+    X::AbstractMatrix{T},
+    θ::AbstractVector{T},
+    from_bus::AbstractVector{<:Integer},
+    to_bus::AbstractVector{<:Integer},
+    branch::AbstractVector{<:Integer};
+    atol::Real=1e-10
+) where {T<:Real}
+    delta = single_contingency_delta.([B], [DA], [X], [θ], from_bus, to_bus, branch, atol=atol)
+    copy!(Pl, Pl0)
+    for (fb, tb, d) in zip(from_bus, to_bus, delta)
+        Pl .-= (ptdf[:, fb] .- ptdf[:, tb]) .* d 
+    end
+    Pl[branch] .= 0.0
+    return nothing
+end
 @views function calculate_line_flows!(
     Pl::AbstractVector{T},
     Pl0::AbstractVector{T},
@@ -207,14 +246,8 @@ Input:
     branch::Integer;
     atol::Real=1e-10
 ) where {T<:Real}
-    change = DA[branch, to_bus] / B[from_bus, to_bus]
-    # x = change * (X[:,from_bus] - X[:,to_bus])
-    c⁻¹ = inv(B[from_bus, to_bus]) + change * (X[from_bus, from_bus] - X[from_bus, to_bus] - X[to_bus, from_bus] + X[to_bus, to_bus])
-    if isapprox(c⁻¹, zero(T); atol=atol)
-        return throw(DivideError())
-    end
-    delta = inv(c⁻¹) * (θ[from_bus] - θ[to_bus])
-    @. Pl = Pl0 - (ptdf[:, from_bus] - ptdf[:, to_bus]) * change * delta
+    delta = single_contingency_delta(B, DA, X, θ, from_bus, to_bus, branch, atol=atol)
+    @. Pl = Pl0 - (ptdf[:, from_bus] - ptdf[:, to_bus]) * delta
     Pl[branch] = 0.0
     return nothing
 end
@@ -300,6 +333,32 @@ function calculate_line_flows(
     Pl = similar(pf.F)
     calculate_line_flows!(Pl, pf, cont, branch)
     return Pl
+end
+
+function calculate_line_flows!(
+    Pl::AbstractVector{<:Real},
+    pf::DCPowerFlow,
+    cont::Tuple{AbstractVector{<:Integer}, AbstractVector{<:Integer}},
+    branch::AbstractVector{<:Integer};
+    Pᵢ::AbstractVector{<:Real} = Float64[],
+    nodes::AbstractVector{<:Integer} = Int[],
+    branches::AbstractVector{<:Integer} = Int[]
+)
+    if !isempty(Pᵢ)
+        θ = run_pf!(pf.vn_tmp, pf.K, Pᵢ, pf.slack)
+        F = LinearAlgebra.mul!(pf.vb_tmp, pf.DA, pf.vn_tmp)
+    else
+        θ = pf.θ
+        F = pf.F
+    end
+    if !isempty(nodes)
+        island = not_insorted_nodes.(first(cont), last(cont), [nodes])
+        calculate_line_flows!(Pl, F, pf.ϕ, pf.B, pf.DA, pf.X, θ, first(cont), last(cont), branch, Val(island))
+        zero_not_in_array!(Pl, branches)
+    else
+        calculate_line_flows!(Pl, F, pf.ϕ, pf.B, pf.DA, pf.X, θ, first(cont), last(cont), branch)
+    end
+    return nothing
 end
 
 """ 

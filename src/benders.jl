@@ -27,6 +27,13 @@ function benders(opf::OPFsystem, mod::Model)
     return Benders(idx, list, obj, Pᵢ, Pg, Pd)
 end
 
+""" 
+Solve the optimization model using Benders decomposition.
+
+Function creates extra production constraints on generators in the system
+based on the power transfer distribution factors of the generators in the
+system. 
+"""
 function run_benders(
     type::OPF, 
     system::System, 
@@ -58,6 +65,9 @@ function run_benders(
     return run_benders!(SC, type, mod, opf, pf, oplim, Pc, Pcc, Pccx, lim, max_itr, branch_c, rate_c)
 end
 
+""" 
+Solve the optimization model using Benders decomposition with only preventive actions. 
+"""
 function run_benders!(
     ::Val{SC::OPF}, 
     mod::Model, 
@@ -151,12 +161,8 @@ function run_benders!(
     return mod, opf, pf, oplim, total_solve_time
 end
 
-""" 
-Solve the optimization model using Benders decomposition.
-
-Function creates extra production constraints on generators in the system
-based on the power transfer distribution factors of the generators in the
-system. 
+"""
+Solve the optimization model using Benders decomposition for corrective actions.
 """
 function run_benders!(
     basetype::OPF, 
