@@ -172,10 +172,12 @@ function get_isf(
     cont::Tuple{Integer,Integer},
     branch::Integer
 )
-    isf = similar(pf.ϕ)
-    X = similar(pf.X)
-    get_isf!(isf, X, pf.X, pf.B, pf.DA, cont, branch)
-    return isf
+    get_isf!(pf.mbn_tmp, pf.mnn_tmp, pf.X, pf.B, pf.DA, cont, branch)
+    return pf.mbn_tmp
+end
+
+function get_isf(pf::DCPowerFlow, cont::Real, c::Integer)
+    return pf.ϕ
 end
 
 """

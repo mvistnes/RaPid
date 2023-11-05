@@ -113,8 +113,8 @@ function get_specs(branch::PhaseShiftingTransformer)
 end
 
 """ An array of the Value Of Lost Load for the demand and renewables """
-make_voll(sys::System, x_range::UnitRange=1000:3000) = rand(x_range, length(get_demands(sys)))
-make_cost_renewables(sys::System, x_range::UnitRange=1:30) = rand(x_range, length(get_renewables(sys)))
+make_voll(sys::System, x_range::UnitRange=UnitRange(1000.0,3000.0)) = rand(x_range, length(get_demands(sys)))
+make_cost_renewables(sys::System, x_range::UnitRange=UnitRange(1.0,30.0)) = rand(x_range, length(get_renewables(sys)))
 
 """ An array of the outage probability of the contingencies """
 make_prob(contingencies::AbstractVector, prob_min=0.1, prob_max=0.4) =
@@ -131,23 +131,25 @@ function create_model(optimizer; time_limit_sec::Integer=10000, silent::Bool=tru
 end
 
 """ OPF system type """
-mutable struct OPFsystem
-    cost_ctrl_gen::Vector{<:Tuple{Real, Real}}
-    cost_renewables::Vector{<:Real}
-    voll::Vector{<:Real}
-    prob::Vector{<:Real}
+mutable struct OPFsystem{T<:Real}
+    cost_ctrl_gen::Vector{<:Tuple{T, T}}
+    cost_renewables::Vector{T}
+    voll::Vector{T}
+    prob::Vector{T}
 
     ctrl_generation::Vector{Generator}
-    branches::Vector{<:ACBranch}
+    branches::Vector{ACBranch}
     dc_branches::Vector{TwoTerminalHVDCLine}
     nodes::Vector{ACBus}
     demands::Vector{StaticLoad}
     renewables::Vector{RenewableGen}
-    contingencies::Vector{<:Component}
+    contingencies::Vector{Component}
 end
 
 """ Constructor for OPFsystem """
-function opfsystem(sys::System, voll::Vector{<:Real}, contingencies::Vector{<:Branch}=Component[], prob::Vector{<:Real}=[])
+function opfsystem(sys::System, voll::Vector{T}, contingencies::Vector{<:Component}=Component[], prob::Vector{T}=[];
+    check=false
+) where {T<:Real}
 
     ctrl_generation = sort_components!(get_ctrl_generation(sys))
     branches = sort_components!(get_branches(sys))
@@ -159,12 +161,14 @@ function opfsystem(sys::System, voll::Vector{<:Real}, contingencies::Vector{<:Br
     cost_ctrl_gen = get_generator_cost.(ctrl_generation)::Vector{Tuple{Float64, Float64}}
     cost_renewables = Vector{Float64}() # Vector{Float64}([get_generator_cost(g)[2] for g in renewables])
 
-    check_values(getindex.(cost_ctrl_gen, 1), ctrl_generation, "cost_1")
-    check_values(getindex.(cost_ctrl_gen, 2), ctrl_generation, "cost_2")
-    check_values(voll, demands, "voll")
-    check_values.(ctrl_generation)
-    check_values.(branches)
-    check_values.(dc_branches)
+    if check
+        check_values(getindex.(cost_ctrl_gen, 1), ctrl_generation, "cost_1")
+        check_values(getindex.(cost_ctrl_gen, 2), ctrl_generation, "cost_2")
+        check_values(voll, demands, "voll")
+        check_values.(ctrl_generation)
+        check_values.(branches)
+        check_values.(dc_branches)
+    end
 
     A = calc_B(branches, nodes)
     islands = island_detection(A'A)
@@ -172,7 +176,7 @@ function opfsystem(sys::System, voll::Vector{<:Real}, contingencies::Vector{<:Br
         @warn "The system is separated into islands" islands
     end
 
-    return OPFsystem(cost_ctrl_gen, cost_renewables, voll, prob,
+    return OPFsystem{T}(cost_ctrl_gen, cost_renewables, voll, prob,
         ctrl_generation, branches, dc_branches, nodes, demands, renewables, contingencies)
 end
 
@@ -182,6 +186,19 @@ function opfsystem(sys::System)
     fix_generation_cost!(sys)
     return opfsystem(sys, voll, contingencies, prob)
 end
+
+get_cost_ctrl_gen(opf::OPFsystem) = opf.cost_ctrl_gen
+get_cost_renewables(opf::OPFsystem) = opf.cost_renewables
+get_voll(opf::OPFsystem) = opf.voll
+get_prob(opf::OPFsystem) = opf.prob
+
+get_ctrl_generation(opf::OPFsystem) = opf.ctrl_generation
+get_branches(opf::OPFsystem) = opf.branches
+get_dc_branches(opf::OPFsystem) = opf.dc_branches
+get_nodes(opf::OPFsystem) = opf.nodes
+get_demands(opf::OPFsystem) = opf.demands
+get_renewables(opf::OPFsystem) = opf.renewables
+get_contingencies(opf::OPFsystem) = opf.contingencies
 
 function check_values(val::Real, var::Component, typename::String; comp=<, atol=1e-5)
     if comp(val, atol)
@@ -248,8 +265,45 @@ sort_components!(branches::Vector{<:Branch}) = sort!(branches,
 
 get_sorted_angles(model::Model) = get_value(model, :va0)
 
-# it_name(::Type{T}, mos::Model) where {T <:Component} = get_name.(get_components(T,mod))
+function typesort_components(list::AbstractVector{<:Component})
+    gen = Generator[]
+    demand = StaticLoad[]
+    bus = ACBus[]
+    branch = ACBranch[]
+    for comp in list
+        t = typeof(comp)
+        if t <: Generator
+            push!(gen, comp)
+        elseif t <: StaticLoad
+            push!(demand, comp)
+        elseif t <: ACBus
+            push!(bus, comp)
+        elseif t <: ACBranch
+            push!(branch, comp)
+        else
+            error(string(typeof(comp)) + " is not supported")
+        end
+    end
+    return (gen=gen, demand=demand, bus=bus, branch=branch)
+end
 
+function find_component(val::Component, list::AbstractVector{<:Component})
+    i = findfirst(in([val]), list)
+    i === nothing && error(string(get_name(val)) + " is not found")
+    return i
+end
+
+typesort_component(val::Generator, opf::OPFsystem, idx::Dict{<:Int,<:Int}) =
+    (:ctrl_generation, find_component(val, get_ctrl_generation(opf)), get_bus_idx(val, idx))
+
+typesort_component(val::StaticLoad, opf::OPFsystem, idx::Dict{<:Int,<:Int}) =
+    (:demands, find_component(val, get_demands(opf)), get_bus_idx(val, idx))
+
+typesort_component(val::ACBus, opf::OPFsystem, idx::Dict{<:Int,<:Int}) =
+    (:nodes, find_component(val, get_nodes(opf)), get_bus_idx(val, idx))
+
+typesort_component(val::ACBranch, opf::OPFsystem, idx::Dict{<:Int,<:Int}) =
+    (:branches, find_component(val, get_branches(opf)), get_bus_idx(val, idx))
 
 """ Make a DenseAxisArray using the list and function for the value of each element """
 make_named_array(value_func, list) = JuMP.Containers.DenseAxisArray(
@@ -371,23 +425,20 @@ get_bus_id(branch::Branch) = (branch.arc.from.number, branch.arc.to.number)
 get_bus_idx(branch::Branch, idx::Dict{<:Int,T}) where {T<:Int} =
     (idx[branch.arc.from.number]::T, idx[branch.arc.to.number]::T)
 
+get_bus_idx(val::StaticInjection, idx::Dict{<:Int,T}) where {T<:Int} =
+    idx[val.bus.number]::T
+
 " Get the bus number index of the from-bus and to-bus from all branches "
 function get_bus_idx(branches::AbstractVector{<:Branch}, idx::Dict{<:Int,<:Int})
     return get_bus_idx.(branches, [idx])
 end
 
-get_branch_bus_idx(branches::AbstractVector{<:Branch}, contingencies::AbstractVector{<:Branch}, idx::Dict{<:Int,<:Int}) =
-    [(x, get_bus_idx(branches[x], idx)) for x in indexin(contingencies, branches)]
-
-function extract_bus_idx(branch::String, idx::Dict{<:Int,<:Int})
-    (f, t) = extract_bus(branch)
-    return (idx[f], idx[t])
+function get_component_bus_idx(comp::Component, contingencies::AbstractVector{<:Branch}, idx::Dict{<:Int,<:Int})
+    ix = indexin(contingencies, comp)
+    return (ix, get_bus_idx(comp, idx))
 end
-
-function extract_bus(branch::String)
-    x = split(branch, "-")
-    return (parse(Int, x[1]), parse(Int, x[2]))
-end
+get_component_bus_idx(comps::AbstractVector{<:Component}, contingencies::AbstractVector{<:Component}, idx::Dict{<:Int,<:Int}) =
+    [(x, get_bus_idx(comps[x], idx)) for x in indexin(contingencies, comps)]
 
 " Get the bus number index of the from-bus and to-bus from all branches "
 function get_bus_idx(A::SparseArrays.SparseMatrixCSC{T}) where {T}

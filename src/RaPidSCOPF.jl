@@ -22,14 +22,11 @@ const MOI = MathOptInterface
 import KLU
 import LinearAlgebra
 
-
 ## For timing functions (with allocations)
 # using TimerOutputs
 # const tmr = TimerOutput();
 ## SCOPF.tmr
 ## SCOPF.reset_timer!(SCOPF.tmr)
-
-@enum OPF SC = 0 PSC = 1 PCSC = 2 PCFSC = 3 # SCOPF, P-SCOPF, PC-SCOPF
 
 #=
     Utilities for running and analyzing the SCOPFs.

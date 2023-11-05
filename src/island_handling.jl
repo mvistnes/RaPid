@@ -137,6 +137,8 @@ end
 is_islanded(pf::DCPowerFlow, cont::Tuple{Integer,Integer}, branch::Integer; atol::Real=1e-5) =
     is_islanded(pf.DA, pf.B, pf.X, cont, branch, atol=atol)
 
+is_islanded(pf::DCPowerFlow, cont::Integer, branch::Integer; atol::Real=1e-5) = false
+
 " Find nodes connected to a node "
 function find_connected(branches::AbstractVector{<:Branch}, node::Bus)
     new_branches = Vector{Branch}()
