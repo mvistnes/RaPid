@@ -1,5 +1,42 @@
 # CC BY 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2022
 
+"""
+    Container for OPF state types.
+    Base: base case.
+    P: Only preventive actions.
+    C1: Preventive and corrective actions short term. 
+    C2: Preventive and corrective actions long term.
+    C2F: Preventive and corrective actions failures long term.
+
+    P cannot be combined with C1.
+    C2F cannot be used without C2.
+    Use ex.:
+        - OPF(true, false, true, true, true)
+        - OPF(true, true, false, true, false)
+"""
+struct OPF 
+    Base::Bool
+    P::Bool
+    C1::Bool
+    C2::Bool
+    C2F::Bool
+end
+
+"OPF with only preventive actions"
+const P_SCOPF = OPF(true, true, false, false, false)
+
+"OPF with preventive and corrective actions for one post-contingency state"
+const PC_SCOPF = OPF(true, true, false, true, false)
+
+"OPF with preventive and corrective actions for one post-contingency state"
+const PC2_SCOPF = OPF(true, false, true, true, false)
+
+function assert(opf::OPF)
+    @assert opf.P ⊼ opf.C1
+    @assert !opf.C2F | (opf.C2 & opf.C2F)
+    return
+end
+
 """ Operational limits type """
 struct Oplimits{TR<:Real}
     max_shed::TR
@@ -70,9 +107,9 @@ end
 
 """ Run an OPF of a power system """
 function opf_base(type::OPF, system::System, optimizer;
-    voll=Vector{Float64}(),
-    contingencies=Vector{ACBranch}(),
-    prob=Vector{Float64}(),
+    voll=Float64[],
+    contingencies=Component[],
+    prob=Float64[],
     time_limit_sec::Int64=600,
     unit_commit::Bool=false,
     ramp_minutes::Real=10.0,
@@ -85,10 +122,11 @@ function opf_base(type::OPF, system::System, optimizer;
     silent=true,
     debug=false
 )
+    assert(type)
     @assert short_term_multi >= long_term_multi
-    @assert type < PCFSC::OPF || p_failure > 0.0
+    @assert type.C2F ⊻ (p_failure == 0.0)
     mod = create_model(optimizer, time_limit_sec=time_limit_sec, silent=silent, debug=debug)
-    opf = isempty(voll) ? opfsystem(system, debug=debug) : opfsystem(system, voll, contingencies, prob, debug=debug)
+    opf = isempty(voll) ? opfsystem(system) : opfsystem(system, voll, contingencies, prob)
     idx = get_nodes_idx(opf.nodes)
     pf = DCPowerFlow(opf.nodes, opf.branches, idx)
     opf.dc_branches = DCBranch[]
@@ -146,34 +184,33 @@ function opf_base(type::OPF, system::System, optimizer;
         add_unit_commit!(opf)
     end
 
-    if type != SC::OPF
-        return add_all_contingencies!(SC, type, opf, oplim, mod, list, pf, idx, Pc, Pcc, Pccx)
+    if any([type.P, type.C1, type.C2, type.C2F])
+        return add_all_contingencies!(type, opf, oplim, mod, list, pf, idx, Pc, Pcc, Pccx)
     end
     return mod, opf, pf, oplim, Pc, Pcc, Pccx
 end
 
-function add_all_contingencies!(basetype::OPF, type::OPF, opf::OPFsystem, oplim::Oplimits, mod::Model, list::Vector{<:CTypes{Int}},
+function add_all_contingencies!(type::OPF, opf::OPFsystem, oplim::Oplimits, mod::Model, list::Vector{<:CTypes{Int}},
     pf::DCPowerFlow, idx::Dict{<:Int,<:Int},
     Pc::Dict{<:Integer,ExprC}, Pcc::Dict{<:Integer,ExprCC}, Pccx::Dict{<:Integer,ExprCCX}
 )
     obj = objective_function(mod)
-    ptdf = similar(pf.ϕ)
-    X = similar(pf.X)
-    for (c, cont) in get_branch_bus_idx(opf.branches, opf.contingencies, idx)
-        if !is_islanded(pf, cont, c)
-            get_isf!(ptdf, X, pf.X, pf.B, pf.DA, cont, c)
+    for (i, c_obj) in enumerate(opf.contingencies)
+        (typelist, c, cont) = typesort_component(c_obj, opf, idx)
+        if is_islanded(pf, cont, c)
+            islands, island, island_b = handle_islands(pf.B, pf.DA, cont, c, pf.slack)
+            ptdf = get_isf(pf, cont, c, islands, island, island_b)
+        else
+            ptdf = get_isf(pf, cont, c)
             islands = Vector{Vector{Int}}[]
             island = 0
-        else
-            islands, island, island_b = handle_islands(pf.B, pf.DA, cont, c, pf.slack)
-            get_isf!(ptdf,  pf.ϕ, islands[island], island_b)
         end
-        basetype < PSC::OPF && type == SC::OPF && add_contingencies!(opf, oplim, mod, ptdf, list, c)
-        basetype < PSC::OPF && type >= PSC::OPF && add_contingencies!(Pc, opf, oplim, mod, obj, islands, island, ptdf, list, c)
-        basetype < PCSC::OPF && type >= PCSC::OPF && add_contingencies!(Pcc, opf, oplim, mod, obj, islands, island, ptdf, list, c)
-        type >= PCFSC::OPF && add_contingencies!(Pccx, opf, oplim, mod, obj, islands, island, ptdf, list, c)
+        type.P && add_contingencies!(opf, oplim, mod, ptdf, list, i)
+        type.C1 && add_contingencies!(Pc, opf, oplim, mod, obj, islands, island, ptdf, list, i)
+        type.C2 && add_contingencies!(Pcc, opf, oplim, mod, obj, islands, island, ptdf, list, i)
+        type.C2F && add_contingencies!(Pccx, opf, oplim, mod, obj, islands, island, ptdf, list, i)
 
-        @info "Contingency $(cont[1])-$(cont[2]) is added"
+        @info "Contingency $(get_name(c_obj)) is added"
     end
     set_objective_function(mod, obj)
     return mod, opf, pf, oplim, Pc, Pcc, Pccx

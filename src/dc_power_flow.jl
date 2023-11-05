@@ -14,7 +14,8 @@ mutable struct DCPowerFlow{T1<:Real,T2<:Integer} <: PowerFlow
 
     sp_tmp::SparseArrays.SparseMatrixCSC{T1,T2} # branch x bus sparse matrix
     K_tmp::KLU.KLUFactorization{T1, T2} # A factorization of the admittance matrix
-    m_tmp::Matrix{T1} # bus x bus matrix
+    mnn_tmp::Matrix{T1} # bus x bus matrix
+    mbn_tmp::Matrix{T1} # branch x bus matrix
     vn_tmp::Vector{T1} # bus vector
     vb_tmp::Vector{T1} # branch vector
 end
@@ -27,7 +28,7 @@ function DCPowerFlow(branches::AbstractVector{<:Tuple{T2,T2}}, susceptance::Abst
     ϕ = get_isf(K, DA, slack)
     X = calc_X(K, slack)
     return DCPowerFlow{T1,T2}(DA, B, K, X, ϕ, zeros(T1, numnodes), zeros(T1, length(branches)), slack,
-        zeros(T1, size(DA)), get_klu(B, slack), zeros(T1, size(X)), zeros(T1, numnodes), zeros(T1, length(branches)))
+        zeros(T1, size(DA)), get_klu(B, slack), zeros(T1, size(X)), zeros(T1, size(ϕ)), zeros(T1, numnodes), zeros(T1, length(branches)))
 end
 DCPowerFlow(nodes::AbstractVector{<:Bus}, branches::AbstractVector{<:Branch}, idx::Dict{<:Int,<:Int}) =
     DCPowerFlow(get_bus_idx.(branches, [idx]), PowerSystems.get_series_susceptance.(branches), length(nodes), find_slack(nodes)[1])

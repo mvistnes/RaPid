@@ -25,14 +25,13 @@ function run_contingency_select(
     silent=true,
     debug=false
 )
-    mod, opf, pf, oplim, Pc, Pcc, Pccx = opf_base(SC, system, optimizer, voll=voll, contingencies=contingencies, prob=prob,
+    mod, opf, pf, oplim, Pc, Pcc, Pccx = opf_base(OPF(true, false, false, false, false), system, optimizer, voll=voll, contingencies=contingencies, prob=prob,
         time_limit_sec=time_limit_sec, ramp_minutes=ramp_minutes, ramp_mult=ramp_mult, max_shed=max_shed, max_curtail=max_curtail,
         short_term_multi=short_term_multi, long_term_multi=long_term_multi, p_failure=p_failure, silent=silent, debug=debug)
-    return run_contingency_select!(SC, type, mod, opf, pf, oplim, Pc, Pcc, Pccx, lim, max_itr, branch_c, rate_c, debug)
+    return run_contingency_select!(type, mod, opf, pf, oplim, Pc, Pcc, Pccx, lim, max_itr, branch_c, rate_c, debug)
 end
         
 function run_contingency_select!(
-    basetype::OPF, 
     type::OPF, 
     mod::Model, 
     opf::OPFsystem, 
@@ -47,9 +46,11 @@ function run_contingency_select!(
     rate_c=0.0, 
     debug=false
 )
-    @assert isempty(Pc) || basetype == PSC::OPF
-    @assert (isempty(Pcc) && isempty(Pccx)) || type < PCSC::OPF
-    MOI.set(mod, MOI.Silent(), true) # supress output from the solver
+    assert(type)
+    @assert isempty(Pc) || type.C1
+    @assert isempty(Pcc) || type.C2
+    @assert isempty(Pccx) || type.C2F
+    
     solve_model!(mod)
     total_solve_time = solve_time(mod)
     termination_status(mod) != MOI.OPTIMAL && return mod, opf, pf, oplim, Pc, Pcc, Pccx, total_solve_time
@@ -60,113 +61,145 @@ function run_contingency_select!(
     calc_θ!(pf, bd.Pᵢ)
     calc_Pline!(pf)
     overloads = zeros(length(opf.contingencies))
+    
     pre = 0
-    corr = 0
+    corr1 = 0
+    corr2 = 0
+    corr2f = 0
 
-    contids = get_branch_bus_idx(opf.branches, opf.contingencies, bd.idx)
-    flow = similar(pf.F)
-    θ = similar(pf.θ)
-    ptdf = copy(pf.ϕ)
-    for contid in contids 
-        (c, cont) = contid
-        if !is_islanded(pf, cont, c)
-            calculate_line_flows!(flow, pf, cont, c)
+    for c_obj in opf.contingencies
+        (typelist, c, cont) = typesort_component(c_obj, opf, bd.idx)
+        if is_islanded(pf, cont, c)
+            islands, island, island_b = handle_islands(pf.B, pf.DA, cont, c, pf.slack)
+            ptdf = get_isf(pf, cont, c, islands, island, island_b)
+            if type.P 
+                add_contingencies!(opf, oplim, mod, ptdf, list, i)
+                pre += 1
+            end
+            if type.C1 
+                add_contingencies!(Pc, opf, oplim, mod, bd.obj, islands, island, ptdf, bd.list, c)
+                corr1 += 1
+            end
+            if type.C2  
+                add_contingencies!(Pcc, opf, oplim, mod, bd.obj, islands, island, ptdf, bd.list, c)
+                corr2 += 1
+            end
+            if type.C2F 
+                add_contingencies!(Pccx, opf, oplim, mod, bd.obj, islands, island, ptdf, bd.list, c)
+                corr2f += 1
+            end
+            @debug "Island: Contingency $(string(typeof(c_obj))) $(get_name(c_obj))"
+            overloads[c] = -1.0
+        else
+            flow = calculate_contingency_line_flows(mod, pf, bd, cont, c, c_obj)
             # Calculate the power flow with the new outage and find if there are any overloads
             overload = filter_overload(flow, oplim.branch_rating * oplim.short_term_multi)
             if !isempty(overload)
                 overloads[c] = maximum(x -> abs(x[2]), overload)
             end
-        else
-            islands, island, island_b = handle_islands(pf.B, pf.DA, cont, c, pf.slack)
-            get_isf!(ptdf, pf.ϕ, islands[island], island_b)
-            basetype == SC::OPF && add_contingencies!(Pc, opf, oplim, mod, bd.obj, islands, island, ptdf, bd.list, c)
-            type == PCSC::OPF && add_contingencies!(Pcc, opf, oplim, mod, bd.obj, islands, island, ptdf, bd.list, c)
-            type == PCFSC::OPF && add_contingencies!(Pccx, opf, oplim, mod, bd.obj, islands, island, ptdf, bd.list, c)
-            pre += 1
-            corr += 1
-            @debug "Island: Contingency line $(cont[1])-$(cont[2])-i_$(c)"
         end
     end
     set_objective_function(mod, bd.obj)
     total_solve_time = update_model!(mod, pf, bd, total_solve_time)
     termination_status(mod) != MOI.OPTIMAL && return mod, opf, pf, oplim, Pc, Pcc, Pccx, total_solve_time
-    GC.safepoint()
 
     ΔPc = zeros(length(bd.Pg))
     ΔPcc = zeros(length(bd.Pg))
     ΔPccx = zeros(length(bd.Pg))
 
-    X = copy(pf.X)
-    B = copy(pf.B)
-    θ = copy(pf.θ)
-    flow = copy(pf.F)
-    olc = Vector{Tuple{Int,Float64}}[]
-    olcc = Vector{Tuple{Int,Float64}}[]
-    olccx = Vector{Tuple{Int,Float64}}[]
-    islands = Vector{Vector{Int}}[]
+    olc = Vector{Tuple{Int,Float64}}()
+    olcc = Vector{Tuple{Int,Float64}}()
+    olccx = Vector{Tuple{Int,Float64}}()
+    islands = Vector{Vector{Int}}()
     island = 0
     island_b = Int[]
+    
+    brst = oplim.branch_rating * oplim.short_term_multi
+    brlt = oplim.branch_rating * oplim.long_term_multi
 
     permutation = sortperm(overloads, rev=true)
-    contids = contids[permutation]
-    ix = [i for (i, (c, cont)) in enumerate(contids) if !is_islanded(pf, cont, c)]
-    contids = contids[ix]
+    (typelist, c, cont) = typesort_component(opf.contingencies[permutation[end]], opf, bd.idx)
+    i = length(permutation)
+    while is_islanded(pf, cont, c)
+        pop!(permutation)
+        (typelist, c, cont) = typesort_component(opf.contingencies[permutation[end]], opf, bd.idx)
+    end
 
     i = 1
     iterations = 1
     cut_added = 0
-    while !isempty(contids)
-        (c, cont) = contids[i]
-        empty!(olc)
-        empty!(olcc)
-        empty!(olccx)
+    while !isempty(permutation)
+        c_obj = opf.contingencies[permutation[i]]
+        (typelist, c, cont) = typesort_component(c_obj, opf, bd.idx)
         if is_islanded(pf, cont, c)
-            islands, island, island_b = handle_islands(pf.B, pf.DA, cont, c, pf.slack) 
+            islands, island, island_b = handle_islands(pf.B, pf.DA, cont, c, pf.slack)
+            inodes = islands[island]
         else
             empty!(islands)
             island = 0
             empty!(island_b)
+            inodes = Int[]
         end
-        
-        olc = basetype == SC::OPF ? calculate_contingency_overload!(ΔPc, flow, (oplim.branch_rating * oplim.short_term_multi), θ, B, Pc, opf, mod, pf, bd, cont, c, islands, island, island_b) : Tuple{Int64,Float64}[]
-        olcc = basetype < PCSC::OPF && type >= PCSC::OPF ? calculate_contingency_overload!(ΔPcc, flow, (oplim.branch_rating * oplim.long_term_multi), θ, B, Pccx, opf, mod, pf, bd, cont, c, islands, island, island_b) : Tuple{Int64,Float64}[]
-        olccx = type >= PCFSC::OPF ? calculate_contingency_overload!(ΔPccx, flow, (oplim.branch_rating * oplim.long_term_multi), θ, B, Pccx, opf, mod, pf, bd, cont, c, islands, island, island_b) : Tuple{Int64,Float64}[]
-        if !isempty(olc) || !isempty(olcc) || !isempty(olccx)
-            # Calculate the power flow with the new outage and find if there are any overloads
-            if !is_islanded(pf, cont, c)
-                get_isf!(ptdf, X, pf.X, pf.B, pf.DA, cont, c) # ptdf calculation is more computational expensive than line flow
+
+        if type.P
+            olc = calculate_contingency_overload(brst, mod, pf, bd, cont, c, c_obj, inodes, island_b)
+        end
+        if type.C1
+            olc = calculate_contingency_overload!(ΔPc, brst, Pc, opf, mod, pf, bd, cont, c, c_obj, inodes, island_b)
+        end
+        if type.C2
+            olcc = calculate_contingency_overload!(ΔPcc, brlt, Pcc, opf, mod, pf, bd, cont, c, c_obj, inodes, island_b)
+        end
+        if type.C2F
+            olccx = calculate_contingency_overload!(ΔPccx, brlt, Pccx, opf, mod, pf, bd, cont, c, c_obj, inodes, island_b)
+        end
+        if !isempty(olc) || !isempty(olcc) || !isempty(olccx) # ptdf calculation is more computational expensive than line flow
+            if is_islanded(pf, cont, c)
+                ptdf = get_isf(pf, cont, c, islands, island, island_b)
             else
-                get_isf!(ptdf, pf.ϕ, islands[island], island_b)
+                ptdf = get_isf(pf, cont, c)
             end
         end
-        # (overload || !isempty(olc) || !isempty(olcc)) && println(c, " ", Int(overload), Int(!isempty(olc)), Int(!isempty(olcc)))
 
         # Cannot change the model before all data is exctracted!
         if !isempty(olc)
-            add_contingencies!(Pc, opf, oplim, mod, bd.obj, islands, island, ptdf, bd.list, c)
-            pre += 1
-            @info @sprintf "Pre %d: Contingency line %d-%d-i_%d" pre cont[1] cont[2] c 
+            if type.P
+                add_contingencies!(opf, oplim, mod, ptdf, list, c)
+                pre += 1
+                @info @sprintf "Pre %d: Contingency %s %s" pre string(typeof(c_obj)) get_name(c_obj)
+            else
+                add_contingencies!(Pc, opf, oplim, mod, bd.obj, islands, island, ptdf, bd.list, c)
+                corr1 += 1
+                @info @sprintf "Corr1 %d: Contingency %s %s" corr1 string(typeof(c_obj)) get_name(c_obj)
+            end
             cut_added = 2
         end
         if !isempty(olcc)
             add_contingencies!(Pcc, opf, oplim, mod, bd.obj, islands, island, ptdf, bd.list, c)
-            corr += 1
-            @info @sprintf "Corr %d: Contingency line %d-%d-i_%d" corr cont[1] cont[2] c
+            corr2 += 1
+            @info @sprintf "Corr2 %d: Contingency %s %s" corr2 string(typeof(c_obj)) get_name(c_obj)
+            cut_added = 2
+        end
+        if !isempty(olccx)
+            add_contingencies!(Pccx, opf, oplim, mod, bd.obj, islands, island, ptdf, bd.list, c)
+            corr2f += 1
+            @info @sprintf "Corr2 %d: Contingency %s %s" corr2f string(typeof(c_obj)) get_name(c_obj)
             cut_added = 2
         end
         if cut_added > 1
             set_objective_function(mod, bd.obj)
             total_solve_time = update_model!(mod, pf, bd, total_solve_time)
-            deleteat!(contids, findfirst(x -> x[1] == c, contids))
+            deleteat!(permutation, i)
             cut_added = 1
         else
             i += 1
         end
         termination_status(mod) != MOI.OPTIMAL && return mod, opf, pf, oplim, Pc, Pcc, Pccx, total_solve_time
-        if i > length(contids)
+        if i > length(permutation)
             iterations > max_itr && break
             if cut_added == 0 # loops until no new cuts are added for the contingencies
                 # @printf "END: Total solve time %.4f.\n" total_solve_time
+                println("Cuts added: pre=", pre, ", corr1=", corr1, ", corr2=", corr2, ", corr2f=", corr2f)
                 return mod, opf, pf, oplim, Pc, Pcc, Pccx, total_solve_time
             else
                 cut_added = 0
@@ -178,108 +211,4 @@ function run_contingency_select!(
     end
     # @warn "Reached $(length(opf.contingencies)) iterations without a stable solution."
     return mod, opf, pf, oplim, Pc, Pcc, Pccx, total_solve_time
-end
-
-function run_contingency_select!(
-    ::Val{SC::OPF}, 
-    mod::Model, 
-    opf::OPFsystem, 
-    pf::DCPowerFlow, 
-    oplim::Oplimits, 
-    lim=1e-6,
-    max_itr=length(opf.contingencies),
-    branch_c=nothing, 
-    rate_c=0.0, 
-    debug=false
-)
-    MOI.set(mod, MOI.Silent(), true) # supress output from the solver
-    solve_model!(mod)
-    total_solve_time = solve_time(mod)
-    termination_status(mod) != MOI.OPTIMAL && return mod, opf, pf, oplim, total_solve_time
-    @debug "lower_bound = $(objective_value(mod))"
-
-    # Set variables
-    bd = benders(opf, mod)
-    calc_θ!(pf, bd.Pᵢ)
-    calc_Pline!(pf)
-    overloads = zeros(length(opf.contingencies))
-    pre = 0
-    corr = 0
-
-    contids = get_branch_bus_idx(opf.branches, opf.contingencies, bd.idx)
-    flow = similar(pf.F)
-    for contid in contids 
-        (c, cont) = contid
-        if !is_islanded(pf, cont, c)
-            calculate_line_flows!(flow, pf, cont, c)
-            # Calculate the power flow with the new outage and find if there are any overloads
-            overload = filter_overload(flow, oplim.branch_rating * oplim.short_term_multi)
-            if !isempty(overload)
-                overloads[c] = maximum(x -> abs(x[2]), overload)
-            end
-        else
-            islands, island, island_b = handle_islands(pf.B, pf.DA, cont, c, pf.slack)
-            for n in islands[island]
-                add_to_expression!(obj, opf.prob[c], sum(opf.voll[d] * get_active_power(opf.demands[d]) for d in list[n].demands))
-            end
-            continue
-        end
-    end
-
-    X = copy(pf.X)
-    ptdf = copy(pf.ϕ)
-    olc = Vector{Tuple{Int,Float64}}[]
-
-    permutation = sortperm(overloads, rev=true)
-    contids = contids[permutation]
-    ix = [i for (i, (c, cont)) in enumerate(contids) if !is_islanded(pf, cont, c)]
-    contids = contids[ix]
-
-    i = 1
-    iterations = 1
-    cut_added = 0
-    while !isempty(contids)
-        (c, cont) = contids[i]
-        empty!(olc)
-        if is_islanded(pf, cont, c)
-            continue
-        end
-        
-        calculate_line_flows!(flow, pf, cont, c)
-        olc = filter_overload(flow, (oplim.branch_rating * oplim.short_term_multi))
-        if !isempty(olc) # ptdf calculation is more computational expensive than line flow
-            get_isf!(ptdf, X, pf.X, pf.B, pf.DA, cont, c)
-        end
-
-        # Cannot change the model before all data is exctracted!
-        if !isempty(olc)
-            add_contingencies!(opf, oplim, mod, ptdf, bd.list, c)
-            pre += 1
-            @info @sprintf "Pre %d: Contingency line %d-%d-i_%d" pre cont[1] cont[2] c 
-            cut_added = 2
-        end
-        if cut_added > 1
-            set_objective_function(mod, bd.obj)
-            total_solve_time = update_model!(mod, pf, bd, total_solve_time)
-            deleteat!(contids, findfirst(x -> x[1] == c, contids))
-            cut_added = 1
-        else
-            i += 1
-        end
-        termination_status(mod) != MOI.OPTIMAL && return mod, opf, pf, oplim, total_solve_time
-        if i > length(contids)
-            iterations > max_itr && break
-            if cut_added == 0 # loops until no new cuts are added for the contingencies
-                # @printf "END: Total solve time %.4f.\n" total_solve_time
-                return mod, opf, pf, oplim, total_solve_time
-            else
-                cut_added = 0
-            end
-            iterations += 1
-            @info "Iteration $iterations"
-            i = 1
-        end
-    end
-    # @warn "Reached $(length(opf.contingencies)) iterations without a stable solution."
-    return mod, opf, pf, oplim, total_solve_time
 end

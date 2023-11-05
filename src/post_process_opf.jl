@@ -415,7 +415,7 @@ end
 
 function print_contingency_P(opf::OPFsystem, Pc, Pcc, Pccx=Dict())
     idx = get_nodes_idx(opf.nodes)
-    println("Pc")
+    println("Pc; cont, node, val")
     for (c, cont) in enumerate(opf.contingencies)
         P = zeros(length(opf.nodes))
         x = get(Pc, c, 0)
@@ -437,7 +437,7 @@ function print_contingency_P(opf::OPFsystem, Pc, Pcc, Pccx=Dict())
         end
     end
 
-    println("Pcc")
+    println("Pcc; cont, node, val")
     for (c, cont) in enumerate(opf.contingencies)
         P = zeros(length(opf.nodes))
         x = get(Pcc, c, 0)
