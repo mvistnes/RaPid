@@ -73,7 +73,7 @@ function run_contingency_select!(
             islands, island, island_b = handle_islands(pf.B, pf.DA, cont, c, pf.slack)
             ptdf = get_isf(pf, cont, c, islands, island, island_b)
             if type.P 
-                add_contingencies!(opf, oplim, mod, ptdf, list, i)
+                add_contingencies!(opf, oplim, mod, ptdf, bd.list, c)
                 pre += 1
             end
             if type.C1 
@@ -91,7 +91,7 @@ function run_contingency_select!(
             @debug "Island: Contingency $(string(typeof(c_obj))) $(get_name(c_obj))"
             overloads[c] = -1.0
         else
-            flow = calculate_contingency_line_flows(mod, pf, bd, cont, c, c_obj)
+            flow = calculate_contingency_line_flows(mod, pf, bd.Pᵢ, cont, c, c_obj, Int[], Int[])
             # Calculate the power flow with the new outage and find if there are any overloads
             overload = filter_overload(flow, oplim.branch_rating * oplim.short_term_multi)
             if !isempty(overload)
@@ -164,7 +164,7 @@ function run_contingency_select!(
         # Cannot change the model before all data is exctracted!
         if !isempty(olc)
             if type.P
-                add_contingencies!(opf, oplim, mod, ptdf, list, c)
+                add_contingencies!(opf, oplim, mod, ptdf, bd.list, c)
                 pre += 1
                 @info @sprintf "Pre %d: Contingency %s %s" pre string(typeof(c_obj)) get_name(c_obj)
             else
@@ -199,7 +199,7 @@ function run_contingency_select!(
             iterations > max_itr && break
             if cut_added == 0 # loops until no new cuts are added for the contingencies
                 # @printf "END: Total solve time %.4f.\n" total_solve_time
-                println("Cuts added: pre=", pre, ", corr1=", corr1, ", corr2=", corr2, ", corr2f=", corr2f)
+                print_cuts(type, pre, corr1, corr2, corr2f)
                 return mod, opf, pf, oplim, Pc, Pcc, Pccx, total_solve_time
             else
                 cut_added = 0

@@ -210,7 +210,7 @@ function add_all_contingencies!(type::OPF, opf::OPFsystem, oplim::Oplimits, mod:
         type.C2 && add_contingencies!(Pcc, opf, oplim, mod, obj, islands, island, ptdf, list, i)
         type.C2F && add_contingencies!(Pccx, opf, oplim, mod, obj, islands, island, ptdf, list, i)
 
-        @info "Contingency $(get_name(c_obj)) is added"
+        @debug "Contingency $(get_name(c_obj)) is added"
     end
     set_objective_function(mod, obj)
     return mod, opf, pf, oplim, Pc, Pcc, Pccx

@@ -263,8 +263,6 @@ sort_components!(branches::Vector{<:Branch}) = sort!(branches,
     by=x -> (get_number(get_arc(x).from), get_number(get_arc(x).to))
 )
 
-get_sorted_angles(model::Model) = get_value(model, :va0)
-
 function typesort_components(list::AbstractVector{<:Component})
     gen = Generator[]
     demand = StaticLoad[]
