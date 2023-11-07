@@ -58,8 +58,9 @@ function run_benders(
         time_limit_sec=time_limit_sec, ramp_minutes=ramp_minutes, ramp_mult=ramp_mult, max_shed=max_shed, max_curtail=max_curtail,
         short_term_multi=short_term_multi, long_term_multi=long_term_multi, p_failure=p_failure, silent=silent, debug=debug)
 
+    solve_model!(mod)
     if !type.P & !type.C1 & !type.C2 & !type.C2F
-        return mod, opf, pf, oplim, Pc, Pcc, Pccx, total_solve_time
+        return mod, opf, pf, oplim, Pc, Pcc, Pccx, solve_time(mod)
     end
     return run_benders!(type, mod, opf, pf, oplim, Pc, Pcc, Pccx, lim, max_itr)
 end
@@ -80,11 +81,10 @@ function run_benders!(
     max_itr=length(opf.contingencies)
 )
     assert(type)
-    @assert isempty(Pc) || type.C1
-    @assert isempty(Pcc) || type.C2
-    @assert isempty(Pccx) || type.C2F
+    @assert !type.C1 || isempty(Pc)
+    @assert !type.C2 || isempty(Pcc)
+    @assert !type.C2F || isempty(Pccx)
     
-    solve_model!(mod)
     total_solve_time = solve_time(mod)
     !has_values(mod) && return mod, opf, pf, oplim, Pc, Pcc, Pccx, total_solve_time
     @debug "lower_bound = $(objective_value(mod))"
@@ -95,6 +95,7 @@ function run_benders!(
     calc_Pline!(pf)
     overloads = zeros(length(opf.contingencies))
 
+    pg = get_value(mod, :pg0)
     for c_obj in opf.contingencies
         (typelist, c, cont) = typesort_component(c_obj, opf, bd.idx)
         # cont  = get_bus_idx(opf.contingencies[c], bd.idx)
@@ -111,7 +112,11 @@ function run_benders!(
                 flow = pf.vb_tmp
             end
         else
-            flow = calculate_contingency_line_flows(mod, pf, bd.Pᵢ, cont, c, c_obj, Int[], Int[])
+            if typeof(c_obj) <: ACBranch
+                flow = calculate_contingency_line_flows(mod, pf, bd.Pᵢ, cont, c, c_obj, Int[], Int[])
+            else
+                flow = calculate_contingency_line_flows(mod, pf, bd.Pᵢ, cont, c, c_obj, Int[], Int[], pg[c])
+            end
         end
 
         # Calculate the power flow with the new outage and find if there are any overloads
@@ -290,18 +295,18 @@ end
 """
 function calculate_contingency_line_flows(
     mod::Model, pf::DCPowerFlow, P::Vector{<:Real}, cont::Tuple{Real,Real}, c::Integer, c_obj::Component,
-    island::Vector, island_b::Vector{<:Integer}
+    island::Vector, island_b::Vector{<:Integer}, val=0.0
 )
     calculate_line_flows!(pf.vb_tmp, pf, cont, c, nodes=island, branches=island_b)
     return pf.vb_tmp
 end
 function calculate_contingency_line_flows(
     mod::Model, pf::DCPowerFlow, P::Vector{<:Real}, cont::Real, c::Integer, c_obj::StaticInjection,
-    island::Vector, island_b::Vector{<:Integer}
+    island::Vector, island_b::Vector{<:Integer}, val=get_ΔP(mod, c, c_obj)
 )
-    P[cont] -= get_ΔP(mod, c, c_obj)
+    P[cont] -= val
     LinearAlgebra.mul!(pf.vb_tmp, pf.ϕ, P)
-    P[cont] += get_ΔP(mod, c, c_obj)
+    P[cont] += val
     return pf.vb_tmp
 end
 
@@ -330,21 +335,21 @@ end
 
 get_ΔP(mod::Model, c::Integer, ::Generator) = 
     value(mod[:pg0][c])
-get_ΔP(mod::Model, c::Integer, ::Generator, ::Dict{<:Integer, ExprC}) = 
-    value(mod[:pg0][c]) - value(mod[:pgc][c])
-get_ΔP(mod::Model, c::Integer, ::Generator, ::Dict{<:Integer, ExprCC}) = 
-    value(mod[:pg0][c]) + value(mod[:pgu][c]) - value(mod[:pgd][c])
-get_ΔP(mod::Model, c::Integer, ::Generator, ::Dict{<:Integer, ExprCCX}) = 
-    value(mod[:pg0][c]) - value(mod[:pgdx][c])
+get_ΔP(mod::Model, c::Integer, ::Generator, Pc::Dict{<:Integer, ExprC}) = 
+    value(mod[:pg0][c]) - value(Pc[c].pgc[c])
+get_ΔP(mod::Model, c::Integer, ::Generator, Pcc::Dict{<:Integer, ExprCC}) = 
+    value(mod[:pg0][c]) + value(Pcc[c].pgu[c]) - value(Pcc[c].pgd[c])
+get_ΔP(mod::Model, c::Integer, ::Generator, Pccx::Dict{<:Integer, ExprCCX}) = 
+    value(mod[:pg0][c]) - value(Pccx[c].pgdx[c])
 
 get_ΔP(mod::Model, c::Integer, ::StaticLoad) = 
     value(mod[:pd0][c]) - value(mod[:ls0][c])
-get_ΔP(mod::Model, c::Integer, ::StaticLoad, ::Dict{<:Integer, ExprC}) = 
-    value(mod[:pd0][c]) - value(mod[:lsc][c])
-get_ΔP(mod::Model, c::Integer, ::StaticLoad, ::Dict{<:Integer, ExprCC}) = 
-    value(mod[:pd0][c]) - value(mod[:lscc][c])
-get_ΔP(mod::Model, c::Integer, ::StaticLoad, ::Dict{<:Integer, ExprCCX}) = 
-    value(mod[:pd0][c]) - value(mod[:lsccx][c])
+get_ΔP(mod::Model, c::Integer, ::StaticLoad, Pc::Dict{<:Integer, ExprC}) = 
+    value(mod[:pd0][c]) - value(Pc[c].lsc[c])
+get_ΔP(mod::Model, c::Integer, ::StaticLoad, Pcc::Dict{<:Integer, ExprCC}) = 
+    value(mod[:pd0][c]) - value(Pcc[c].lscc[c])
+get_ΔP(mod::Model, c::Integer, ::StaticLoad, Pccx::Dict{<:Integer, ExprCCX}) = 
+    value(mod[:pd0][c]) - value(Pccx[c].lsccx[c])
 
 """ Return the short term post-contingency power injection change at each node. """
 function get_ΔP!(ΔP::Vector{T}, mod::Model, opf::OPFsystem, list::Vector{<:CTypes{Int}}, 

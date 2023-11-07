@@ -56,8 +56,9 @@ SCOPF.set_operation_cost!.(SCOPF.get_gens_h(system), [15.0, 16.0, 17.0, 18.0, 19
 # voll, prob, contingencies = SCOPF.setup(system, 10, 40);
 voll = [4304., 5098., 5245., 5419., 4834., 5585., 5785., 5192., 4575., 5244., 4478., 5698., 4465., 4859., 5032., 5256., 4598.]
 branches = SCOPF.sort_components!(SCOPF.get_branches(system));
+ctrl_generation = SCOPF.sort_components!(SCOPF.get_ctrl_generation(system));
 # c = [7,12,13,21,22,23,27]
-contingencies = branches
+contingencies = vcat(branches, ctrl_generation)
 prob =
     [ # spesified for the RTS-96
         0.24, 0.51, 0.33, 0.39, 0.48, 0.38, 0.02, 0.36, 0.34, 0.33, 0.30, 0.44, 0.44,

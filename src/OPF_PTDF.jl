@@ -22,19 +22,36 @@ struct OPF
     C2F::Bool
 end
 
+"OPF with only case"
+const Base_SCOPF = OPF(true, false, false, false, false)
+
 "OPF with only preventive actions"
 const P_SCOPF = OPF(true, true, false, false, false)
 
-"OPF with preventive and corrective actions for one post-contingency state"
+"OPF with preventive for one post-contingency state and corrective actions for one post-contingency state"
 const PC_SCOPF = OPF(true, true, false, true, false)
 
-"OPF with preventive and corrective actions for one post-contingency state"
+"OPF with preventive for one post-contingency state and corrective actions for one post-contingency state with corrective failures"
+const PCF_SCOPF = OPF(true, true, false, true, true)
+
+"OPF with preventive and corrective actions for two post-contingency state"
 const PC2_SCOPF = OPF(true, false, true, true, false)
+
+"OPF with preventive and corrective actions for two post-contingency state with corrective failures"
+const PC2F_SCOPF = OPF(true, false, true, true, true)
 
 function assert(opf::OPF)
     @assert opf.P ⊼ opf.C1
     @assert !opf.C2F | (opf.C2 & opf.C2F)
     return
+end
+
+function +(x::OPF, y::OPF)
+    return OPF(x.Base | y.Base, x.P | y.P, x.C1 | y.C1, x.C2 | y.C2, x.C2F | y.C2F)
+end
+
+function -(x::OPF, y::OPF)
+    return OPF(x.Base > y.Base, x.P > y.P, x.C1 > y.C1, x.C2 > y.C2, x.C2F > y.C2F)
 end
 
 """ Operational limits type """
@@ -122,9 +139,10 @@ function opf_base(type::OPF, system::System, optimizer;
     silent=true,
     debug=false
 )
+    @assert type.Base
     assert(type)
     @assert short_term_multi >= long_term_multi
-    @assert type.C2F ⊻ (p_failure == 0.0)
+    @assert type.C2F ⊻ iszero(p_failure)
     mod = create_model(optimizer, time_limit_sec=time_limit_sec, silent=silent, debug=debug)
     opf = isempty(voll) ? opfsystem(system) : opfsystem(system, voll, contingencies, prob)
     idx = get_nodes_idx(opf.nodes)

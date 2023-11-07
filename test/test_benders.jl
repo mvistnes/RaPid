@@ -1,149 +1,80 @@
 # CC BY 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2022
-include("C:\\Users\\matiaskv\\OneDrive - NTNU\\Documents\\PhD\\SCOPF\\src\\SCOPF.jl")
+
 using PowerSystems
 import JuMP
 import Gurobi
 import Logging
 import Random
 Random.seed!(42)
-Logging.disable_logging(Logging.Info)
 
-function comparison(fname::String)
-    system = System(fname)
-    set_rate!.(SCOPF.get_branches(system), get_rate.(SCOPF.get_branches(system))*0.8);
-    SCOPF.fix_generation_cost!(system);
-    voll, prob, contingencies = SCOPF.setup(system, 1, 4);
-
-    @time opfm_sc = SCOPF.scopf(SCOPF.SC, system, Gurobi.Optimizer, voll=voll);
-    @time SCOPF.solve_model!(opfm_sc.mod);
-    SCOPF.print_results(opfm_sc)
-    SCOPF.print_power_flow(opfm_sc)
-
-    @time opfm, pf, Pc, Pcc = SCOPF.run_benders(SCOPF.PCSC, system, voll, prob, short_term_limit_multi=1.2);
-    SCOPF.print_benders_results(opfm, Pc, Pcc)
-    SCOPF.print_power_flow(opfm)
-
-    @time opfm_norm = SCOPF.scopf(SCOPF.PCSC, system, Gurobi.Optimizer, voll=voll, contingencies=contingencies, prob=prob, short_term_limit_multi=1.2);
-    @time SCOPF.solve_model!(opfm_norm.mod);
-    SCOPF.print_corrective_results(opfm_norm)
-    SCOPF.print_power_flow(opfm_norm)
-end
-
-function run_timed_cases(sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long)
+function run_timed_cases(optimizer, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long)
     run_time = []
-    t = @timed begin model, opf, pf, oplim, Pc, Pcc, Pccx = SCOPF.opf_base(SCOPF.SC, sys, Gurobi.Optimizer, voll=voll, contingencies=cont, prob=prob, max_shed=max_shed,
-        ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long);
-    SCOPF.solve_model!(model);
+    for case in [SCOPF.Base_SCOPF, SCOPF.P_SCOPF, SCOPF.PC_SCOPF, SCOPF.PC2_SCOPF]
+        t = @timed begin model, opf, pf, oplim, Pc, Pcc, Pccx = SCOPF.opf_base(case, sys, optimizer, voll=voll, contingencies=cont, prob=prob, max_shed=max_shed,
+            ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long);
+        SCOPF.solve_model!(model);
+        end
+        push!(run_time, (t.time, SCOPF.solve_time(model)))
     end
-    push!(run_time, (t.time, SCOPF.solve_time(model)))
-    idx = SCOPF.get_nodes_idx(opf.nodes);
-    list = SCOPF.make_list(opf, idx, opf.nodes);
-
-    t = @timed begin model, opf, pf, oplim, Pc, Pcc, Pccx = SCOPF.opf_base(SCOPF.SC, sys, Gurobi.Optimizer, voll=voll, contingencies=cont, prob=prob, max_shed=max_shed,
-        ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long);
-    model, opf, pf, oplim, Pc, Pcc, Pccx = SCOPF.add_all_contingencies!(SCOPF.PSC, SCOPF.PCSC, opf, oplim, model, list, pf, idx, Pc, Pcc, Pccx)
-    SCOPF.solve_model!(model);
-    end
-    push!(run_time, (t.time, SCOPF.solve_time(model)))
-
-    t = @timed begin model, opf, pf, oplim, Pc, Pcc, Pccx = SCOPF.opf_base(SCOPF.PSC, sys, Gurobi.Optimizer, voll=voll, contingencies=cont, prob=prob, max_shed=max_shed,
-        ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long);
-    SCOPF.solve_model!(model);
-    end
-    push!(run_time, (t.time, SCOPF.solve_time(model)))
-
-    t = @timed begin model, opf, pf, oplim, Pc, Pcc, Pccx = SCOPF.opf_base(SCOPF.PCSC, sys, Gurobi.Optimizer, voll=voll, contingencies=cont, prob=prob, max_shed=max_shed,
-        ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long);
-    SCOPF.solve_model!(model);
-    end
-    push!(run_time, (t.time, SCOPF.solve_time(model)))
     return run_time
 end
 
-function run_timed_contingency_select_cases(sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long, p_failure=0.00)
+function run_timed_contingency_select_cases(optimizer, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long, p_failure=0.00)
     run_time = []
-    t = @timed begin model, opf, pf, oplim, Pc, Pcc, Pccx = SCOPF.opf_base(SCOPF.SC, sys, Gurobi.Optimizer, voll=voll, contingencies=cont, prob=prob, max_shed=max_shed,
-        ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long);
-    SCOPF.solve_model!(model);
+    for case in [SCOPF.Base_SCOPF, SCOPF.P_SCOPF, SCOPF.PC_SCOPF, SCOPF.PC2_SCOPF]
+        t = @timed model, opf, pf, oplim, Pc, Pcc, Pccx, tot_t = SCOPF.run_contingency_select(case, sys, optimizer, voll, prob, cont, max_shed=max_shed,
+            ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=p_failure);
+        push!(run_time, (t.time, tot_t))
     end
-    push!(run_time, (t.time, SCOPF.solve_time(model)))
-    
-    t = @timed begin model, opf, pf, oplim, Pc, Pcc, Pccx = SCOPF.opf_base(SCOPF.SC, sys, Gurobi.Optimizer, voll=voll, contingencies=cont, prob=prob, max_shed=max_shed,
-        ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long);
-    model, opf, pf, oplim, Pc, Pcc, Pccx, tot_t = SCOPF.run_contingency_select!(SCOPF.PSC, SCOPF.PCSC, model, opf, pf, oplim, Pc, Pcc, Pccx)
-    end
-    push!(run_time, (t.time, tot_t))
-
-    t = @timed begin model, opf, pf, oplim, Pc, Pcc, Pccx, tot_t = SCOPF.run_contingency_select(SCOPF.PSC, sys, Gurobi.Optimizer, voll, prob, cont, max_shed=max_shed,
-        ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=p_failure);
-    end
-    push!(run_time, (t.time, tot_t))
-
-    t = @timed begin model, opf, pf, oplim, Pc, Pcc, Pccx, tot_t = SCOPF.run_contingency_select(SCOPF.PCSC, sys, Gurobi.Optimizer, voll, prob, cont, max_shed=max_shed,
-        ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=p_failure);
-    end
-    push!(run_time, (t.time, tot_t))
-        
+    return run_time        
 end
 
-function run_timed_benders_cases(sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long, p_failure=0.00)
+function run_timed_benders_cases(optimizer, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long, p_failure=0.00)
     run_time = []
-    t = @timed begin model, opf, pf, oplim, Pc, Pcc, Pccx = SCOPF.opf_base(SCOPF.SC, sys, Gurobi.Optimizer, voll=voll, contingencies=cont, prob=prob, max_shed=max_shed,
-        ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long);
-    SCOPF.solve_model!(model);
+    for case in [SCOPF.Base_SCOPF, SCOPF.P_SCOPF, SCOPF.PC_SCOPF, SCOPF.PC2_SCOPF]
+        t = @timed model, opf, pf, oplim, Pc, Pcc, Pccx, tot_t = SCOPF.run_benders(case, sys, optimizer, voll, prob, cont, max_shed=max_shed,
+            ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=p_failure);
+        push!(run_time, (t.time, tot_t))
     end
-    push!(run_time, (t.time, SCOPF.solve_time(model)))
-
-    t = @timed begin model, opf, pf, oplim, Pc, Pcc, Pccx = SCOPF.opf_base(SCOPF.SC, sys, Gurobi.Optimizer, voll=voll, contingencies=cont, prob=prob, max_shed=max_shed,
-        ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long);
-    model, opf, pf, oplim, Pc, Pcc, Pccx, tot_t = SCOPF.run_benders!(SCOPF.PSC, SCOPF.PCSC, model, opf, pf, oplim, Pc, Pcc, Pccx)
-    end
-    push!(run_time, (t.time, tot_t))
-    
-    t = @timed begin model, opf, pf, oplim, Pc, Pcc, Pccx, tot_t = SCOPF.run_benders(SCOPF.PSC, sys, Gurobi.Optimizer, voll, prob, cont, max_shed=max_shed,
-        ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=p_failure);
-    end
-    push!(run_time, (t.time, tot_t))
-
-    t = @timed begin model, opf, pf, oplim, Pc, Pcc, Pccx, tot_t = SCOPF.run_benders(SCOPF.PCSC, sys, Gurobi.Optimizer, voll, prob, cont, max_shed=max_shed,
-        ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=p_failure);
-    end
-    push!(run_time, (t.time, tot_t))
     return run_time
 end
-function run_all(systems)
+
+function run_all(systems, optimizer)
     result = SCOPF.SystemRunData(4, length(systems))
     Logging.disable_logging(Logging.Info)
+    cases = [SCOPF.Base_SCOPF, SCOPF.P_SCOPF, SCOPF.OPF(true, false, true, false, false), SCOPF.PC2_SCOPF]
     # Threads.@threads for i in eachindex(systems)
     for i in eachindex(systems)
         sys, voll, cont, prob, short, long, ramp_minutes, ramp_mult, max_shed = systems[i]
-        SCOPF.run_cases!(result, i, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long)
+        SCOPF.run_cases!(result, i, cases, optimizer, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long)
         println(i)
     end
     Logging.disable_logging(Logging.Debug)
     return result
 end
 
-function run_all_contingency_select(systems)
+function run_all_contingency_select(systems, optimizer)
     result = SCOPF.SystemRunData(4, length(systems))
     Logging.disable_logging(Logging.Info)
+    cases = [SCOPF.Base_SCOPF, SCOPF.P_SCOPF, SCOPF.OPF(true, false, true, false, false), SCOPF.PC2_SCOPF]
     # Threads.@threads for i in eachindex(systems)
     for i in eachindex(systems)
         sys, voll, cont, prob, short, long, ramp_minutes, ramp_mult, max_shed = systems[i]
-        SCOPF.run_contingency_select_cases!(result, i, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long)
+        SCOPF.run_contingency_select_cases!(result, i, cases, optimizer, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long)
         println(i)
     end
     Logging.disable_logging(Logging.Debug)
     return result
 end
 
-function run_all_benders(systems)
+function run_all_benders(systems, optimizer)
     result = SCOPF.SystemRunData(4, length(systems))
     Logging.disable_logging(Logging.Info)
+    cases = [SCOPF.Base_SCOPF, SCOPF.P_SCOPF, SCOPF.OPF(true, false, true, false, false), SCOPF.PC2_SCOPF]
     # Threads.@threads for i in eachindex(systems)
     for i in eachindex(systems)
         sys, voll, cont, prob, short, long, ramp_minutes, ramp_mult, max_shed = systems[i]
-        SCOPF.run_benders_cases!(result, i, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long)
+        SCOPF.run_benders_cases!(result, i, cases, optimizer, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long)
         println(i)
     end
     Logging.disable_logging(Logging.Debug)
@@ -189,6 +120,8 @@ function setup_system(fname::String)
 end
 
 function run_test_benders()
+    optimizer = JuMP.optimizer_with_attributes(Gurobi.Optimizer, "Threads" => Threads.nthreads())
+    # optimizer = JuMP.optimizer_with_attributes(GLPK.Optimizer, "msg_lev" => GLPK.GLP_MSG_ON)
     systems = []
     push!(systems, setup_system(joinpath("data","matpower","case5.m")))
     push!(systems, setup_ieee_rts(joinpath("data","matpower","IEEE_RTS.m")))
@@ -196,9 +129,10 @@ function run_test_benders()
     # push!(systems, setup_system(joinpath("data","matpower","ACTIVSg500.m")))
     # push!(systems, setup_system(joinpath("data","matpower","ACTIVSg2000.m")))
     # push!(systems, setup_system(joinpath("data","matpower","caseACTIVSg10k.m")))
-    results1 = run_all_benders(systems);
-    results2 = run_all_contingency_select(systems);
-    results3 = run_all(systems);
+    
+    results1 = run_all_benders(systems, optimizer);
+    results2 = run_all_contingency_select(systems, optimizer);
+    results3 = run_all(systems, optimizer);
     println("Benders")
     SCOPF.print_data(results1)
     println("Cont")
@@ -209,11 +143,11 @@ function run_test_benders()
     rt = []
     for x in systems
         system, voll, contingencies, prob, short, long, ramp_minutes, ramp_mult, max_shed = x
-        t = run_timed_cases(system, voll, prob, contingencies, max_shed, ramp_mult, ramp_minutes, short, long)
+        t = run_timed_cases(optimizer, system, voll, prob, contingencies, max_shed, ramp_mult, ramp_minutes, short, long)
         push!(rt, t)
-        t = run_timed_contingency_select_cases(system, voll, prob, contingencies, max_shed, ramp_mult, ramp_minutes, short, long)
+        t = run_timed_contingency_select_cases(optimizer, system, voll, prob, contingencies, max_shed, ramp_mult, ramp_minutes, short, long)
         push!(rt, t)
-        t = run_timed_benders_cases(system, voll, prob, contingencies, max_shed, ramp_mult, ramp_minutes, short, long)
+        t = run_timed_benders_cases(optimizer, system, voll, prob, contingencies, max_shed, ramp_mult, ramp_minutes, short, long)
         push!(rt, t)
     end
     return rt

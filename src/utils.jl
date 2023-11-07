@@ -287,7 +287,7 @@ end
 
 function find_component(val::Component, list::AbstractVector{<:Component})
     i = findfirst(in([val]), list)
-    i === nothing && error(string(get_name(val)) + " is not found")
+    i === nothing && error(string(get_name(val)) * " is not found")
     return i
 end
 

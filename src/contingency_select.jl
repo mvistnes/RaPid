@@ -28,6 +28,11 @@ function run_contingency_select(
     mod, opf, pf, oplim, Pc, Pcc, Pccx = opf_base(OPF(true, false, false, false, false), system, optimizer, voll=voll, contingencies=contingencies, prob=prob,
         time_limit_sec=time_limit_sec, ramp_minutes=ramp_minutes, ramp_mult=ramp_mult, max_shed=max_shed, max_curtail=max_curtail,
         short_term_multi=short_term_multi, long_term_multi=long_term_multi, p_failure=p_failure, silent=silent, debug=debug)
+    
+    solve_model!(mod)
+    if !type.P & !type.C1 & !type.C2 & !type.C2F
+        return mod, opf, pf, oplim, Pc, Pcc, Pccx, solve_time(mod)
+    end
     return run_contingency_select!(type, mod, opf, pf, oplim, Pc, Pcc, Pccx, lim, max_itr, branch_c, rate_c, debug)
 end
         
@@ -47,11 +52,10 @@ function run_contingency_select!(
     debug=false
 )
     assert(type)
-    @assert isempty(Pc) || type.C1
-    @assert isempty(Pcc) || type.C2
-    @assert isempty(Pccx) || type.C2F
+    @assert !type.C1 || isempty(Pc)
+    @assert !type.C2 || isempty(Pcc)
+    @assert !type.C2F || isempty(Pccx)
     
-    solve_model!(mod)
     total_solve_time = solve_time(mod)
     termination_status(mod) != MOI.OPTIMAL && return mod, opf, pf, oplim, Pc, Pcc, Pccx, total_solve_time
     @debug "lower_bound = $(objective_value(mod))"
@@ -67,6 +71,7 @@ function run_contingency_select!(
     corr2 = 0
     corr2f = 0
 
+    pg = get_value(mod, :pg0)
     for c_obj in opf.contingencies
         (typelist, c, cont) = typesort_component(c_obj, opf, bd.idx)
         if is_islanded(pf, cont, c)
@@ -91,7 +96,11 @@ function run_contingency_select!(
             @debug "Island: Contingency $(string(typeof(c_obj))) $(get_name(c_obj))"
             overloads[c] = -1.0
         else
-            flow = calculate_contingency_line_flows(mod, pf, bd.Pᵢ, cont, c, c_obj, Int[], Int[])
+            if typeof(c_obj) <: ACBranch
+                flow = calculate_contingency_line_flows(mod, pf, bd.Pᵢ, cont, c, c_obj, Int[], Int[])
+            else
+                flow = calculate_contingency_line_flows(mod, pf, bd.Pᵢ, cont, c, c_obj, Int[], Int[], pg[c])
+            end
             # Calculate the power flow with the new outage and find if there are any overloads
             overload = filter_overload(flow, oplim.branch_rating * oplim.short_term_multi)
             if !isempty(overload)

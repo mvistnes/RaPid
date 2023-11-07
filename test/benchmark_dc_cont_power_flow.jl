@@ -17,7 +17,7 @@ system = SCOPF.System("data\\matpower\\ACTIVSg500.m"); c1 = 2; c2 = 1
 # system = SCOPF.System("data\\matpower\\ACTIVSg2000.m"); c1 = 1; c2 = 9
 SCOPF.fix_generation_cost!(system);
 voll = SCOPF.make_voll(system)
-model, opf, pf, oplim, _, _, _ = SCOPF.opf_base(SCOPF.SC, system, HiGHS.Optimizer, voll=voll);
+model, opf, pf, oplim, _, _, _ = SCOPF.opf_base(SCOPF.Base_SCOPF, system, HiGHS.Optimizer, voll=voll);
 SCOPF.solve_model!(model)
 idx = SCOPF.get_nodes_idx(opf.nodes)
 bx = SCOPF.get_bus_idx.(opf.branches, [idx])

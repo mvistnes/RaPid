@@ -22,6 +22,8 @@ const MOI = MathOptInterface
 import KLU
 import LinearAlgebra
 
+import Base: +, -
+
 ## For timing functions (with allocations)
 # using TimerOutputs
 # const tmr = TimerOutput();
