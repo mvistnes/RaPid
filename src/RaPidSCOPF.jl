@@ -31,6 +31,12 @@ import Base: +, -
 ## SCOPF.reset_timer!(SCOPF.tmr)
 
 #=
+
+=#
+include("types.jl")
+export OPF, ExprC, ExprCC, ExprCCX
+
+#=
     Utilities for running and analyzing the SCOPFs.
 =#
 include("utils.jl")

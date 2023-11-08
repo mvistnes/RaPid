@@ -130,76 +130,6 @@ function create_model(optimizer; time_limit_sec::Integer=10000, silent::Bool=tru
     return mod
 end
 
-""" OPF system type """
-mutable struct OPFsystem{T<:Real}
-    cost_ctrl_gen::Vector{<:Tuple{T, T}}
-    cost_renewables::Vector{T}
-    voll::Vector{T}
-    prob::Vector{T}
-
-    ctrl_generation::Vector{Generator}
-    branches::Vector{ACBranch}
-    dc_branches::Vector{TwoTerminalHVDCLine}
-    nodes::Vector{ACBus}
-    demands::Vector{StaticLoad}
-    renewables::Vector{RenewableGen}
-    contingencies::Vector{Component}
-end
-
-""" Constructor for OPFsystem """
-function opfsystem(sys::System, voll::Vector{T}, contingencies::Vector{<:Component}=Component[], prob::Vector{T}=[];
-    check=false
-) where {T<:Real}
-
-    ctrl_generation = sort_components!(get_ctrl_generation(sys))
-    branches = sort_components!(get_branches(sys))
-    dc_branches = sort_components!(get_dc_branches(sys))
-    nodes = sort_components!(get_nodes(sys))
-    demands = sort_components!(get_demands(sys))
-    renewables = sort_components!(get_renewables(sys))
-
-    cost_ctrl_gen = get_generator_cost.(ctrl_generation)::Vector{Tuple{Float64, Float64}}
-    cost_renewables = Vector{Float64}() # Vector{Float64}([get_generator_cost(g)[2] for g in renewables])
-
-    if check
-        check_values(getindex.(cost_ctrl_gen, 1), ctrl_generation, "cost_1")
-        check_values(getindex.(cost_ctrl_gen, 2), ctrl_generation, "cost_2")
-        check_values(voll, demands, "voll")
-        check_values.(ctrl_generation)
-        check_values.(branches)
-        check_values.(dc_branches)
-    end
-
-    A = calc_B(branches, nodes)
-    islands = island_detection(A'A)
-    if length(islands) > 1
-        @warn "The system is separated into islands" islands
-    end
-
-    return OPFsystem{T}(cost_ctrl_gen, cost_renewables, voll, prob,
-        ctrl_generation, branches, dc_branches, nodes, demands, renewables, contingencies)
-end
-
-""" Automatic constructor for OPFsystem where voll, prob, and contingencies are automatically computed. """
-function opfsystem(sys::System)
-    voll, prob, contingencies = setup(sys, 1, 4)
-    fix_generation_cost!(sys)
-    return opfsystem(sys, voll, contingencies, prob)
-end
-
-get_cost_ctrl_gen(opf::OPFsystem) = opf.cost_ctrl_gen
-get_cost_renewables(opf::OPFsystem) = opf.cost_renewables
-get_voll(opf::OPFsystem) = opf.voll
-get_prob(opf::OPFsystem) = opf.prob
-
-get_ctrl_generation(opf::OPFsystem) = opf.ctrl_generation
-get_branches(opf::OPFsystem) = opf.branches
-get_dc_branches(opf::OPFsystem) = opf.dc_branches
-get_nodes(opf::OPFsystem) = opf.nodes
-get_demands(opf::OPFsystem) = opf.demands
-get_renewables(opf::OPFsystem) = opf.renewables
-get_contingencies(opf::OPFsystem) = opf.contingencies
-
 function check_values(val::Real, var::Component, typename::String; comp=<, atol=1e-5)
     if comp(val, atol)
     # if isapprox(val, zero(typeof(val)); atol=atol)
@@ -263,6 +193,18 @@ sort_components!(branches::Vector{<:Branch}) = sort!(branches,
     by=x -> (get_number(get_arc(x).from), get_number(get_arc(x).to))
 )
 
+function get_interarea(branches::AbstractVector{T}) where {T<:Branch}
+    vals = Vector{T}()
+    for br in branches
+        from = get_area(get_from(get_arc(br)))
+        to = get_area(get_to(get_arc(br)))
+        if from != to
+            push!(vals, br)
+        end
+    end
+    return vals
+end
+
 function typesort_components(list::AbstractVector{<:Component})
     gen = Generator[]
     demand = StaticLoad[]
@@ -317,7 +259,7 @@ struct CTypes{T<:Integer}
     dc_branches::Vector{T}
 end
 
-""" Make a list where all components distributed on their node """
+""" Make a list where all component numbers are distributed on their node """
 function make_list(opf::OPFsystem, idx::Dict{<:Int,<:Int}, nodes::AbstractVector{ACBus})
     list = [CTypes(n, [Int[] for _ in 1:5]...) for n in nodes]
     for (i, r) in enumerate(opf.ctrl_generation)
@@ -359,11 +301,11 @@ function get_in_list(type::Symbol, nodes::Vector{Int}, list::Vector)
     return res
 end
 
-find_in_model(mod::Model, ctrl::ThermalGen, name::String) = mod[:pg0][name]
-find_in_model(mod::Model, ctrl::HydroGen, name::String) = mod[:pg0][name]
-find_in_model(mod::Model, r::RenewableGen, name::String) = mod[:pr0][name]
-find_in_model(mod::Model, d::StaticLoad, name::String) = mod[:ls0][name]
-find_in_model(mod::Model, dc::DCBranch, name::String) = mod[:pfdc0][name]
+find_in_model(mod::Model, ::ThermalGen, name::String) = mod[:pg0][name]
+find_in_model(mod::Model, ::HydroGen, name::String) = mod[:pg0][name]
+find_in_model(mod::Model, ::RenewableGen, name::String) = mod[:pr0][name]
+find_in_model(mod::Model, ::StaticLoad, name::String) = mod[:ls0][name]
+find_in_model(mod::Model, ::DCBranch, name::String) = mod[:pfdc0][name]
 
 """ Return the (first) slack bus in the system. 
 Return: slack bus number in nodes. The slack bus.
@@ -392,10 +334,6 @@ end
 function set_warm_start!(model::JuMP.Model, symb::Symbol)
     x_sol = get_value(model, symb)
     JuMP.set_start_value.(model[symb], x_sol)
-    return model
-end
-function set_warm_start!(model::JuMP.Model, symbs::AbstractVector{Symbol})
-    set_warm_start!.([model], symbs)
     return model
 end
 
@@ -533,6 +471,26 @@ get_value(mod::Model, var::JuMP.VariableRef) =
     MOI.get(JuMP.backend(mod), MOI.VariablePrimal(), JuMP.index(var))
 get_value(mod::Model, var::Vector{JuMP.VariableRef})::Vector{Float64} =
     MOI.get(JuMP.backend(mod), MOI.VariablePrimal(), JuMP.index.(var))
+
+function get_variable_values(mod::Model)
+    vals = Dict{Symbol, Vector{Float64}}()
+    for obj in mod.obj_dict
+        if typeof(last(obj)) <: Vector{VariableRef}
+            vals[first(obj)] = get_value(mod, first(obj))
+        end
+    end
+    return vals
+end
+
+function get_variable_values(mod::Model, Pc::Dict{<:Int,T}) where {T<:Union{ExprC, ExprCC, ExprCCX}}
+    vals = Dict(x => Dict{Int, Vector{Float64}}() for x in fieldnames(T))
+    for (c, cont) in Pc
+        for symb in fieldnames(T)
+            vals[symb][c] = get_value(mod, getfield(cont, symb))
+        end
+    end
+    return vals
+end
 
 " Fix for name difference in StandardLoad "
 PowerSystems.get_active_power(value::StandardLoad) = value.constant_active_power
