@@ -27,28 +27,6 @@ system = System("data\\matpower\\IEEE_RTS.m")
 # SCOPF.fix_generation_cost!(system);
 # nodes = SCOPF.sort_components!(SCOPF.get_nodes(system))
 # idx = SCOPF.get_nodes_idx(nodes)
-# active_capacities = zeros(length(nodes))
-# reactive_capacities = zeros(length(nodes))
-# cost = zeros(length(nodes))
-# for g in SCOPF.get_generation(system)
-#     if typeof(g) == HydroDispatch
-#         SCOPF.set_operation_cost!(g, 30)
-#     end
-# end
-# for g in SCOPF.get_generation(system)
-#     n = idx[g.bus.number]
-#     active_capacities[n] += g.active_power_limits.max
-#     reactive_capacities[n] += g.reactive_power_limits.max
-#     cost[n] = max(SCOPF.get_generator_cost(g)[2], cost[n])
-# end
-# PowerSystems.remove_component!.([system], SCOPF.get_generation(system))
-# for (i, (ac, rc, c)) in enumerate(zip(active_capacities, reactive_capacities, cost))
-#     if ac > 0.0
-#         PowerSystems.add_component!(system, PowerSystems.ThermalStandard(string(i), true, true, 
-#             nodes[i], ac, rc, sqrt(ac^2+rc^2), (min=0.0, max=ac), (min=-rc, max=rc), (up=0.01*ac, down=0.01*ac), 
-#             PowerSystems.ThreePartCost(PowerSystems.VariableCost((0.0, c)), 0.0, 0.0, 0.0), 100.0))
-#     end
-# end
 # SCOPF.set_ramp_limits!(system, 0.01)
 SCOPF.set_rate!.(SCOPF.get_branches(system), SCOPF.get_rate.(SCOPF.get_branches(system)) * 0.8);
 SCOPF.set_operation_cost!.(SCOPF.get_gens_h(system), [15.0, 16.0, 17.0, 18.0, 19.0, 20.0])
@@ -68,14 +46,14 @@ prob =
         0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 
         0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01 # generators
     ]
-# prob /= 8760
-prob /= 100
+prob /= 8760
+# prob /= 100
 # prob = prob[c]
 short = 1.2
 long = 1.0
 ramp_minutes = 10.
 max_shed = 0.1
-ramp_mult = 10.
+ramp_mult = 2.
 
 println("\nPreventive-Corrective SCOPF")
 println("Start PTDF")

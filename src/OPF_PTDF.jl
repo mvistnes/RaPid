@@ -64,7 +64,7 @@ function opf_base(type::OPF, system::System, optimizer;
     @assert short_term_multi >= long_term_multi
     @assert type.C2F ⊻ iszero(p_failure)
     mod = create_model(optimizer, time_limit_sec=time_limit_sec, silent=silent, debug=debug)
-    opf = isempty(voll) ? opfsystem(system) : opfsystem(system, voll, contingencies, prob)
+    opf = isempty(voll) ? opfsystem(system) : opfsystem(system, voll, contingencies, prob, ramp_mult)
     idx = get_nodes_idx(opf.nodes)
     pf = DCPowerFlow(opf.nodes, opf.branches, idx)
     opf.dc_branches = DCBranch[]
@@ -91,7 +91,7 @@ function opf_base(type::OPF, system::System, optimizer;
         # renewable curtailment variables
     end)
 
-    @objective(mod, Min, sum(c[2] * g for (c, g) in zip(opf.cost_ctrl_gen, pg0)) + sum(opf.voll' * ls0) + sum(pr0 * 1))
+    @objective(mod, Min, sum(c.var * g for (c, g) in zip(opf.cost_ctrl_gen, pg0)) + sum(opf.voll' * ls0) + sum(pr0 * 1))
     # @objective(mod, Min, sum(c[1] * g^2 + c[2] * g for (c, g) in zip(opf.cost_ctrl_gen, pg0)) + sum(opf.voll' * ls0) + sum(pr0 * 1))
 
     JuMP.fix.(pd, get_active_power.(opf.demands))
@@ -255,7 +255,7 @@ function init_P!(Pc::Dict{<:Integer,ExprC}, opf::OPFsystem, oplim::Oplimits, mod
     add_to_expression!(obj, opf.prob[c], sum(opf.voll' * lsc))
     add_to_expression!(obj, opf.prob[c], sum(oplim.ramp_mult * 1 * prc))
     for (cost, g) in zip(opf.cost_ctrl_gen, pgc)
-        add_to_expression!.(obj, opf.prob[c], p_survive * oplim.ramp_mult * (cost[2] * g))
+        add_to_expression!.(obj, opf.prob[c], p_survive * oplim.ramp_mult * (cost.var * g))
         # add_to_expression!.(obj, opf.prob[c], p_survive * oplim.ramp_mult * (cost[1] * g^2 + cost[2] * g))
     end
 
@@ -314,8 +314,8 @@ function init_P!(Pcc::Dict{<:Integer,ExprCC}, opf::OPFsystem, oplim::Oplimits, m
         ))
     add_to_expression!(obj, opf.prob[c], sum(p_survive * oplim.ramp_mult * 1 * prcc))
     for (cost, gu, gd) in zip(opf.cost_ctrl_gen, pgu, pgd)
-        add_to_expression!.(obj, opf.prob[c], p_survive * oplim.ramp_mult * (cost[2] * gu))
-        add_to_expression!.(obj, opf.prob[c], p_survive * oplim.ramp_mult * (cost[2] * gd))
+        add_to_expression!.(obj, opf.prob[c], p_survive * (cost.ramp * gu))
+        add_to_expression!.(obj, opf.prob[c], p_survive * (cost.ramp * gd))
         # add_to_expression!.(obj, opf.prob[c], p_survive * oplim.ramp_mult * (cost[1] * gu^2 + cost[2] * gu))
         # add_to_expression!.(obj, opf.prob[c], p_survive * oplim.ramp_mult * (cost[1] * gd^2 + cost[2] * gd))
     end

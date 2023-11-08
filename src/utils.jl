@@ -35,7 +35,6 @@ function setup(system::System, prob_min=0.1, prob_max=0.4)
     voll = make_voll(system)
     contingencies = sort_components!(get_branches(system))
     prob = make_prob(contingencies, prob_min, prob_max)
-    # contingencies = ["2-3-i_3"]
     return voll, prob, contingencies
 end
 
@@ -79,9 +78,19 @@ function set_ramp_limit!(gen::Generator, ramp_mult::Real=0.01, min_ramp=1e-6)
     end
 end
 
-get_generator_cost(gen) = get_operation_cost(gen) |> get_variable |> get_cost |> _get_g_value
+get_generator_cost(gen::Generator) = get_operation_cost(gen) |> get_variable |> get_cost |> _get_g_value
 _get_g_value(x::AbstractVector{<:Tuple{Real,Real}}) = x[1]
 _get_g_value(x::Tuple{<:Real,<:Real}) = x
+
+function get_generator_cost(ctrl_generation::AbstractVector{<:Generator}, ramp_cost::Float64)
+    cost = Vector{NamedTuple{(:fix, :var, :ramp)}}(undef, length(ctrl_generation))
+    for (i,g) in enumerate(ctrl_generation)
+        c = get_generator_cost(g)
+        cost[i] = (fix=c[1], var=c[2], ramp=c[2]*ramp_cost)
+    end
+    return cost
+end
+
 _get_g_value(x::T) where {T<:Real} = (zero(T), x)
 
 get_y(value::Branch) = 1 / (get_r(value) + get_x(value) * im)
@@ -192,6 +201,77 @@ sort_components!(components::Vector{<:Component}) = sort!(components, by=x -> x.
 sort_components!(branches::Vector{<:Branch}) = sort!(branches,
     by=x -> (get_number(get_arc(x).from), get_number(get_arc(x).to))
 )
+
+""" OPF system type """
+mutable struct OPFsystem{T<:Real}
+    cost_ctrl_gen::Vector{NamedTuple{(:fix, :var, :ramp), Tuple{T, T, T}}}
+    cost_renewables::Vector{T}
+    voll::Vector{T}
+    prob::Vector{T}
+
+    ctrl_generation::Vector{Generator}
+    branches::Vector{ACBranch}
+    dc_branches::Vector{TwoTerminalHVDCLine}
+    nodes::Vector{ACBus}
+    demands::Vector{StaticLoad}
+    renewables::Vector{RenewableGen}
+    contingencies::Vector{Component}
+end
+
+""" Constructor for OPFsystem """
+function opfsystem(sys::System, voll::Vector{T}, contingencies::Vector{<:Component}=Component[], prob::Vector{T}=[],
+    ramp_mult::Real=1.0; check=false
+) where {T<:Real}
+
+    ctrl_generation = sort_components!(get_ctrl_generation(sys))
+    branches = sort_components!(get_branches(sys))
+    dc_branches = sort_components!(get_dc_branches(sys))
+    nodes = sort_components!(get_nodes(sys))
+    demands = sort_components!(get_demands(sys))
+    renewables = sort_components!(get_renewables(sys))
+
+    cost_ctrl_gen = get_generator_cost(ctrl_generation, ramp_mult)
+    cost_renewables = Vector{Float64}() # Vector{Float64}([get_generator_cost(g)[2] for g in renewables])
+
+    if check
+        check_values(getfield.(cost_ctrl_gen, :fix), ctrl_generation, "fixedcost")
+        check_values(getfield.(cost_ctrl_gen, :var), ctrl_generation, "varcost")
+        check_values(getfield.(cost_ctrl_gen, :ramp), ctrl_generation, "rampcost")
+        check_values(voll, demands, "voll")
+        check_values.(ctrl_generation)
+        check_values.(branches)
+        check_values.(dc_branches)
+    end
+
+    A = calc_B(branches, nodes)
+    islands = island_detection(A'A)
+    if length(islands) > 1
+        @warn "The system is separated into islands" islands
+    end
+
+    return OPFsystem{T}(cost_ctrl_gen, cost_renewables, voll, prob,
+        ctrl_generation, branches, dc_branches, nodes, demands, renewables, contingencies)
+end
+
+""" Automatic constructor for OPFsystem where voll, prob, and contingencies are automatically computed. """
+function opfsystem(sys::System)
+    voll, prob, contingencies = setup(sys, 1, 4)
+    fix_generation_cost!(sys)
+    return opfsystem(sys, voll, contingencies, prob)
+end
+
+get_cost_ctrl_gen(opf::OPFsystem) = opf.cost_ctrl_gen
+get_cost_renewables(opf::OPFsystem) = opf.cost_renewables
+get_voll(opf::OPFsystem) = opf.voll
+get_prob(opf::OPFsystem) = opf.prob
+
+get_ctrl_generation(opf::OPFsystem) = opf.ctrl_generation
+get_branches(opf::OPFsystem) = opf.branches
+get_dc_branches(opf::OPFsystem) = opf.dc_branches
+get_nodes(opf::OPFsystem) = opf.nodes
+get_demands(opf::OPFsystem) = opf.demands
+get_renewables(opf::OPFsystem) = opf.renewables
+get_contingencies(opf::OPFsystem) = opf.contingencies
 
 function get_interarea(branches::AbstractVector{T}) where {T<:Branch}
     vals = Vector{T}()
@@ -325,7 +405,7 @@ function solve_model!(model::Model)
     if !has_values(model)
         @warn "Model not optimally solved with status $(termination_status(model))!"
     else
-        @info @sprintf "Model solved in %.6fs with objective value %.4f" MOI.get(model, MOI.SolveTimeSec()) objective_value(model)
+        @info @sprintf "Model solved in %.6fs with objective value %.10f" MOI.get(model, MOI.SolveTimeSec()) objective_value(model)
     end
     return model
 end
@@ -612,7 +692,7 @@ calc_severity(
     pfc,
     lim::Real=0.9
 ) =
-    sum(calc_line_severity(pfc[l, c], rate[l], lim) for c in 1:length(opf.contingencies), l in branches)
+    sum(calc_line_severity(pfc[l, c], rate[l], lim) for c in 1:length(contingencies), l in branches)
 
 calc_severity(values::AbstractVector{<:Real}, rate::AbstractVector{<:Real}, lim::Real=0.9) =
     sum(calc_line_severity.(values, rate, [lim]))
