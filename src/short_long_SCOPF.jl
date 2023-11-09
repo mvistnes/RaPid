@@ -1,8 +1,3 @@
-# CC BY 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2022
-using PowerSystems
-using JuMP
-# include("N-1_SCOPF.jl")
-
 function sl_scopf(system::System, optimizer; 
         voll = nothing, 
         contingencies = nothing, 

@@ -1,5 +1,3 @@
-# CC BY 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2022
-
 using PowerSystems
 import JuMP
 import Gurobi
@@ -39,10 +37,9 @@ function run_timed_benders_cases(optimizer, sys, voll, prob, cont, max_shed, ram
     return run_time
 end
 
-function run_all(systems, optimizer)
+function run_all(systems, optimizer, cases)
     result = SCOPF.SystemRunData(4, length(systems))
     Logging.disable_logging(Logging.Info)
-    cases = [SCOPF.Base_SCOPF, SCOPF.P_SCOPF, SCOPF.OPF(true, false, true, false, false), SCOPF.PC2_SCOPF]
     # Threads.@threads for i in eachindex(systems)
     for i in eachindex(systems)
         sys, voll, cont, prob, short, long, ramp_minutes, ramp_mult, max_shed = systems[i]
@@ -53,10 +50,9 @@ function run_all(systems, optimizer)
     return result
 end
 
-function run_all_contingency_select(systems, optimizer)
+function run_all_contingency_select(systems, optimizer, cases)
     result = SCOPF.SystemRunData(4, length(systems))
     Logging.disable_logging(Logging.Info)
-    cases = [SCOPF.Base_SCOPF, SCOPF.P_SCOPF, SCOPF.OPF(true, false, true, false, false), SCOPF.PC2_SCOPF]
     # Threads.@threads for i in eachindex(systems)
     for i in eachindex(systems)
         sys, voll, cont, prob, short, long, ramp_minutes, ramp_mult, max_shed = systems[i]
@@ -67,10 +63,9 @@ function run_all_contingency_select(systems, optimizer)
     return result
 end
 
-function run_all_benders(systems, optimizer)
+function run_all_benders(systems, optimizer, cases)
     result = SCOPF.SystemRunData(4, length(systems))
     Logging.disable_logging(Logging.Info)
-    cases = [SCOPF.Base_SCOPF, SCOPF.P_SCOPF, SCOPF.OPF(true, false, true, false, false), SCOPF.PC2_SCOPF]
     # Threads.@threads for i in eachindex(systems)
     for i in eachindex(systems)
         sys, voll, cont, prob, short, long, ramp_minutes, ramp_mult, max_shed = systems[i]
@@ -130,9 +125,10 @@ function run_test_benders()
     # push!(systems, setup_system(joinpath("data","matpower","ACTIVSg2000.m")))
     # push!(systems, setup_system(joinpath("data","matpower","caseACTIVSg10k.m")))
     
-    results1 = run_all_benders(systems, optimizer);
-    results2 = run_all_contingency_select(systems, optimizer);
-    results3 = run_all(systems, optimizer);
+    cases = [SCOPF.Base_SCOPF, SCOPF.P_SCOPF, SCOPF.OPF(true, false, true, false, false), SCOPF.PC2_SCOPF]
+    results1 = run_all_benders(systems, optimizer, cases);
+    results2 = run_all_contingency_select(systems, optimizer, cases);
+    results3 = run_all(systems, optimizer, cases);
     println("Benders")
     SCOPF.print_data(results1)
     println("Cont")

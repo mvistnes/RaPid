@@ -3,8 +3,10 @@ using PowerSystems
 import JuMP
 import HiGHS
 import LinearAlgebra
+import Logging
 import Random
 Random.seed!(42)
+Logging.disable_logging(Logging.Info)
 
 # SETUP
 LinearAlgebra.BLAS.set_num_threads(Threads.nthreads())

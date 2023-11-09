@@ -1,5 +1,3 @@
-# CC BY 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2022
-
 mutable struct ACPowerFlow{T1<:Real,T2<:Integer} <: PowerFlow
     DA::SparseArrays.SparseMatrixCSC{T1,T2} # Diagonal admittance matrix times the connectivity matrix
     B::SparseArrays.SparseMatrixCSC{T1,T2} # The admittance matrix

@@ -1,5 +1,3 @@
-# CC BY 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2022 
-
 # FIX: Sometimes breaks
 """ Find island(s) in the system returned in a nested Vector.
 Each element of the Vector consists of two lists, nodes and branches, in that island. """

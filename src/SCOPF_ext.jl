@@ -1,9 +1,3 @@
-# CC BY 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2022
-
-using PowerSystems
-using JuMP
-
-
 """ Add unit commitment to thermal generation (not hydro) """
 function add_unit_commit!(opfm::OPFmodel)
     @variable(opfm.mod, u[g in get_name.(get_gens_t(opfm.sys))], Bin)

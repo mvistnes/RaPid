@@ -1,5 +1,3 @@
-# CC BY 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2022
-
 function neutralize_line!(B::AbstractMatrix, i::Integer, j::Integer, val::Real)
     B[i, j] += val
     B[j, i] += val

@@ -1,5 +1,3 @@
-# CC BY 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2022
-
 function add_system_data_to_json(;
     file_name="system_data.json",
     data_name=joinpath("matpower", "IEEE_RTS.m"),

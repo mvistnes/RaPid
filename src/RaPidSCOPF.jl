@@ -1,4 +1,4 @@
-# CC BY 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2022
+# CC BY 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2023
 
 module RaPidSCOPF
 
@@ -24,14 +24,8 @@ import LinearAlgebra
 
 import Base: +, -
 
-## For timing functions (with allocations)
-# using TimerOutputs
-# const tmr = TimerOutput();
-## SCOPF.tmr
-## SCOPF.reset_timer!(SCOPF.tmr)
-
 #=
-
+    Definition of common types.
 =#
 include("types.jl")
 export OPF, ExprC, ExprCC, ExprCCX
@@ -118,7 +112,7 @@ export run_reliability_calculation
     Functions for printing and plotting SCOPF results.
 =#
 include("post_process_opf.jl")
-export scatter_all, print_variabel, print_results, print_active_power,
-    print_power_flow, print_contingency_power_flow, print_contingency_overflow
+export print_active_power, print_power_flow, print_contingency_power_flow, 
+    print_generation_results, print_results, print_contingency_results, print_contingency_P
 
 end

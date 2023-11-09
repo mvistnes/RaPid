@@ -1,5 +1,3 @@
-# CC BY 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2022
-
 import Plots
 
 system = System("data\\4-area\\4_area.raw")

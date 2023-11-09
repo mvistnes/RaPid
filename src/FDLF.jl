@@ -1,5 +1,3 @@
-# CC BY 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2023
-
 """Fast Decoupled Power Flow
 
 it_max is the maximum number of iterations allowed

@@ -1,5 +1,3 @@
-# CC BY 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2022
-
 # julia.NumThreads": "4" # On laptop with 4 physical cores
 
 function test_g500()

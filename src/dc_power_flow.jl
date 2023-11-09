@@ -1,5 +1,3 @@
-# CC BY 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2022
-
 abstract type PowerFlow end
 
 mutable struct DCPowerFlow{T1<:Real,T2<:Integer} <: PowerFlow

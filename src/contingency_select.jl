@@ -1,5 +1,3 @@
-# CC BY 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2022 
-
 """ 
 Solve the optimization model using contingency selection.
 """

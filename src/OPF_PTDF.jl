@@ -1,5 +1,3 @@
-# CC BY 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2022
-
 """ Operational limits type """
 struct Oplimits{TR<:Real}
     max_shed::TR
@@ -62,7 +60,7 @@ function opf_base(type::OPF, system::System, optimizer;
     @assert type.Base
     assert(type)
     @assert short_term_multi >= long_term_multi
-    @assert type.C2F ⊻ iszero(p_failure)
+    @assert !type.C2F | !iszero(p_failure)
     mod = create_model(optimizer, time_limit_sec=time_limit_sec, silent=silent, debug=debug)
     opf = isempty(voll) ? opfsystem(system) : opfsystem(system, voll, contingencies, prob, ramp_mult)
     idx = get_nodes_idx(opf.nodes)
@@ -358,7 +356,7 @@ function init_P!(Pccx::Dict{<:Integer,ExprCCX}, opf::OPFsystem, oplim::Oplimits,
 )
     # Add corrective variables
     pgd = JuMP.@variable(mod, [g in 1:length(opf.ctrl_generation)], base_name = @sprintf("pgdx%s", c),
-        lower_bound = 0.0, upper_bound = oplim.rampup[g] * oplim.ramp_minutes)
+        lower_bound = 0.0)#, upper_bound = oplim.rampdown[g] * oplim.ramp_minutes)
     # and ramp down
     prcc = JuMP.@variable(mod, [r in 1:length(opf.renewables)], base_name = @sprintf("prccx%s", c),
         lower_bound = 0.0, upper_bound = oplim.pr_lim[d] * oplim.max_curtail)
@@ -369,7 +367,7 @@ function init_P!(Pccx::Dict{<:Integer,ExprCCX}, opf::OPFsystem, oplim::Oplimits,
 
     # Extend the objective with the corrective variables
     add_to_expression!(obj, opf.prob[c] * oplim.p_failure, sum(opf.voll' * lscc))
-    add_to_expression!(obj, opf.prob[c], sum(oplim.p_failure .* 1 .* prccx))
+    add_to_expression!(obj, opf.prob[c], sum(oplim.p_failure .* 1 .* prcc))
     add_to_expression!(obj, opf.prob[c] * oplim.p_failure, sum(60 * pgd))
 
     # Add new constraints that limit the corrective variables within operating limits

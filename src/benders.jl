@@ -1,5 +1,3 @@
-# CC BY 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2022 
-
 """ Benders type """
 mutable struct Benders{TR<:Real,TI<:Integer}
     idx::Dict{TI,TI}

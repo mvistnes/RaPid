@@ -3,8 +3,10 @@ using PowerSystems
 import JuMP
 import HiGHS
 import LinearAlgebra
+import Logging
 import Random
 Random.seed!(42)
+Logging.disable_logging(Logging.Info)
 
 # SETUP
 LinearAlgebra.BLAS.set_num_threads(Threads.nthreads())
@@ -59,10 +61,12 @@ SCOPF.calc_Pline!(flow5, θ, pf.X, pf.B, pf.DA, pf.θ, cont1, c1) # IMML theta
 SCOPF.calculate_line_flows!(flow1, pf, cont1, c1, Pᵢ=(Pᵢ .+ ΔPc)) # IMML flow
 SCOPF.calculate_line_flows!(flow2, θ, B, pf.DA, pf.B, (Pᵢ .+ ΔPc), cont1, c1, pf.slack) # inverse with theta
 @test flow1 ≈ flow2
-SCOPF.get_isf!(ϕ, X, pf.X, pf.B, pf.DA, cont1, c1); LinearAlgebra.mul!(flow3, ϕ, (Pᵢ .+ ΔPc)); # IMML ptdf
+SCOPF.calc_Pline!(flow3, θ, pf.X, pf.B, pf.DA, θ₂, cont1, c1) # IMML theta
 @test flow2 ≈ flow3
-SCOPF.get_isf!(ϕ, K, pf.DA, pf.B, cont1, c1, pf.slack); LinearAlgebra.mul!(flow4, ϕ, (Pᵢ .+ ΔPc)); # inverse with ptdf
+SCOPF.get_isf!(ϕ, X, pf.X, pf.B, pf.DA, cont1, c1); LinearAlgebra.mul!(flow4, ϕ, (Pᵢ .+ ΔPc)); # IMML ptdf
 @test flow3 ≈ flow4
+SCOPF.get_isf!(ϕ, K, pf.DA, pf.B, cont1, c1, pf.slack); LinearAlgebra.mul!(flow5, ϕ, (Pᵢ .+ ΔPc)); # inverse with ptdf
+@test flow4 ≈ flow5
 
 # CONTINGENCY WITH POWER INJECTION CHANGE AND ISLANDING
 cont2 = bx[c2]
