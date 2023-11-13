@@ -106,7 +106,7 @@ function run_contingency_select!(
             end
         end
     end
-    set_objective_function(mod, bd.obj)
+    
     total_solve_time = update_model!(mod, pf, bd, total_solve_time)
     termination_status(mod) != MOI.OPTIMAL && return mod, opf, pf, oplim, Pc, Pcc, Pccx, total_solve_time
 

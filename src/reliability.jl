@@ -90,6 +90,7 @@ function run_contingency_select_case!(result, i, c, case, goal, optimizer, sys, 
         fix_base_case!(model)
         case.C1 && fix_short_term!(model, Pc)
         case.C2 && fix_long_term!(model, Pcc)
+        solve_model!(model);
         model, opf, pf, oplim, Pc, Pcc, Pccx, tot_t = run_contingency_select!(goal - case, model, opf, pf, oplim, Pc, Pcc, Pccx)
     end
     gather_run_data!(result, c, i, model, opf, Pc, Pcc, ramp_mult)
@@ -112,6 +113,7 @@ function run_benders_case!(result, i, c, case, goal, optimizer, sys, voll, prob,
         fix_base_case!(model)
         case.C1 && fix_short_term!(model, Pc)
         case.C2 && fix_long_term!(model, Pcc)
+        solve_model!(model);
         model, opf, pf, oplim, Pc, Pcc, Pccx, tot_t = run_benders!(goal - case, model, opf, pf, oplim, Pc, Pcc, Pccx)
     end
     gather_run_data!(result, c, i, model, opf, Pc, Pcc, ramp_mult)

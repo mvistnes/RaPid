@@ -144,8 +144,8 @@ function get_isf!(ϕ::AbstractMatrix{<:Real}, ϕ₀::AbstractMatrix{<:Real},
     nodes::AbstractVector{<:Integer}, branches::AbstractVector{<:Integer}
 )
     copy!(ϕ, ϕ₀)
-    zero_not_in_array!(ϕ, nodes)
-    zero_not_in_array!(ϕ, branches, 1)
+    zero_not_in_array!(ϕ, nodes, Val(2))
+    zero_not_in_array!(ϕ, branches, Val(1))
     return ϕ
 end
 

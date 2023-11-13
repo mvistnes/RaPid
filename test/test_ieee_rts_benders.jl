@@ -59,25 +59,30 @@ ramp_minutes = 10.
 max_shed = 0.1
 ramp_mult = 2.
 
-for case in [SCOPF.Base_SCOPF, SCOPF.P_SCOPF, SCOPF.OPF(true, false, true, false, false), SCOPF.PC_SCOPF, SCOPF.PCF_SCOPF, SCOPF.PC2_SCOPF, SCOPF.PC2F_SCOPF]
-    p_failure = case.C2F ? 0.10 : 0.00
-    println(case)
-    println("Start PTDF")
-    mod_ptdf, opf_ptdf, pf_ptdf, oplim_ptdf, Pc_ptdf, Pcc_ptdf, Pccx_ptdf = SCOPF.opf_base(case, system, optimizer, voll=voll, contingencies=contingencies, prob=prob, max_shed=max_shed,
-        ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=p_failure);
-    SCOPF.solve_model!(mod_ptdf);
+function test_benders(system, optimizer, voll, contingencies, prob, max_shed,ramp_mult, ramp_minutes, short, long)
+    for case in [SCOPF.Base_SCOPF, SCOPF.P_SCOPF, SCOPF.OPF(true, false, true, false, false), SCOPF.PC_SCOPF, SCOPF.PCF_SCOPF, SCOPF.PC2_SCOPF, SCOPF.PC2F_SCOPF]
+        p_failure = case.C2F ? 0.10 : 0.00
+        println(case)
+        println("Start PTDF")
+        mod_ptdf, opf_ptdf, pf_ptdf, oplim_ptdf, Pc_ptdf, Pcc_ptdf, Pccx_ptdf = SCOPF.opf_base(case, system, optimizer, voll=voll, contingencies=contingencies, prob=prob, max_shed=max_shed,
+            ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=p_failure);
+        SCOPF.solve_model!(mod_ptdf);
 
-    println("Start Contingency select")
-    mod_cont, opf_cont, pf_cont, oplim_cont, Pc_cont, Pcc_cont, Pccx_cont, tot_t = SCOPF.run_contingency_select(case, system, optimizer, voll, prob, contingencies, 
-        max_shed=max_shed, ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=p_failure);
+        println("Start Contingency select")
+        mod_cont, opf_cont, pf_cont, oplim_cont, Pc_cont, Pcc_cont, Pccx_cont, tot_t = SCOPF.run_contingency_select(case, system, optimizer, voll, prob, contingencies, 
+            max_shed=max_shed, ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=p_failure);
 
-    println("Start Benders")
-    model, opf, pf, oplim, Pc, Pcc, Pccx, tot_t = SCOPF.run_benders(case, system, optimizer, voll, prob, contingencies, max_shed=max_shed,
-        ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=p_failure);
+        println("Start Benders")
+        model, opf, pf, oplim, Pc, Pcc, Pccx, tot_t = SCOPF.run_benders(case, system, optimizer, voll, prob, contingencies, max_shed=max_shed,
+            ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=p_failure);
 
-    @test JuMP.objective_value(mod_ptdf) ≈ JuMP.objective_value(mod_cont)
-    @test JuMP.objective_value(mod_ptdf) ≈ JuMP.objective_value(model)
+        @test JuMP.objective_value(mod_ptdf) ≈ JuMP.objective_value(mod_cont)
+        @test JuMP.objective_value(mod_ptdf) ≈ JuMP.objective_value(model)
+    end
+    return
 end
+
+test_benders(system, optimizer, voll, contingencies, prob, max_shed,ramp_mult, ramp_minutes, short, long)
 
 function benders_pc_scopf()
     println("\nPreventive-Corrective SCOPF")

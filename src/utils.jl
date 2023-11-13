@@ -494,18 +494,19 @@ function not_insorted_nodes(from_bus::Integer, to_bus::Integer, nodes::AbstractV
     throw(DivideError())
 end
 
-function zero_not_in_array!(array::AbstractArray{T}, subarray::AbstractVector{<:Integer}, n::Integer = ndims(array)
+function zero_not_in_array!(array::AbstractArray{T}, subarray::AbstractVector{<:Integer}, nval::Val
 ) where {T<:Real}
+    n = ndims(array)
     i = firstindex(array, n)
     x = iterate(subarray)
     while lastindex(array, n) >= i
         if x === nothing 
-            set_zero!.([array], i:lastindex(array, n), [Val(n)])
+            set_zero!.([array], i:lastindex(array, n), [nval])
             break
         end
         val, state = x
         if i != val
-            set_zero!(array, i, Val(n))
+            set_zero!(array, i, nval)
         elseif i == val
             x = iterate(subarray, state)
         else
@@ -516,6 +517,8 @@ function zero_not_in_array!(array::AbstractArray{T}, subarray::AbstractVector{<:
     end
     return array
 end
+zero_not_in_array!(array::AbstractArray{<:Real}, subarray::AbstractVector{<:Integer}) = 
+    zero_not_in_array!(array, subarray, Val(ndims(array)))
 
 set_zero!(mx::AbstractMatrix{T}, i::Integer, ::Val{2}) where {T<:Real} = mx[:,i] .= zero(T)
 set_zero!(mx::AbstractMatrix{T}, i::Integer, ::Val{1}) where {T<:Real} = mx[i,:] .= zero(T)

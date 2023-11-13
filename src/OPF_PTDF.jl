@@ -136,6 +136,7 @@ function add_all_contingencies!(type::OPF, opf::OPFsystem, oplim::Oplimits, mod:
         if is_islanded(pf, cont, c)
             islands, island, island_b = handle_islands(pf.B, pf.DA, cont, c, pf.slack)
             ptdf = get_isf(pf, cont, c, islands, island, island_b)
+            @. ptdf[abs(ptdf) < 1e-12 && ptdf != 0.0] = 0.0
         else
             ptdf = get_isf(pf, cont, c)
             islands = Vector{Vector{Int}}[]
