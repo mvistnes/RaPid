@@ -187,6 +187,7 @@ function run_benders!(
                 else
                     ptdf = get_isf(pf, cont, c)
                 end
+                set_tol_zero!(ptdf)
 
                 type.C1 && get(Pc, c, 0) == 0 && fill!(ΔPc, 0.0)
                 type.C2 && get(Pcc, c, 0) == 0 && fill!(ΔPcc, 0.0)

@@ -25,7 +25,7 @@ function DCPowerFlow(branches::AbstractVector{<:Tuple{T2,T2}}, susceptance::Abst
     B = calc_B(A, DA)
     K = get_klu(B, slack)
     ϕ = get_isf(K, DA, slack)
-    @. ϕ[abs(ϕ) < 1e-12 && ϕ != 0.0] = 0.0
+    set_tol_zero!(ϕ)
     X = calc_X(K, slack)
     return DCPowerFlow{T1,T2}(DA, B, K, X, ϕ, zeros(T1, numnodes), zeros(T1, length(branches)), slack,
         zeros(T1, size(DA)), get_klu(B, slack), zeros(T1, size(X)), zeros(T1, size(ϕ)), zeros(T1, numnodes), zeros(T1, length(branches)))

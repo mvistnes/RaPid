@@ -75,6 +75,7 @@ function run_contingency_select!(
         if is_islanded(pf, cont, c)
             islands, island, island_b = handle_islands(pf.B, pf.DA, cont, c, pf.slack)
             ptdf = get_isf(pf, cont, c, islands, island, island_b)
+            set_tol_zero!(ptdf)
             if type.P 
                 add_contingencies!(opf, oplim, mod, ptdf, bd.list, c)
                 pre += 1
@@ -166,6 +167,7 @@ function run_contingency_select!(
             else
                 ptdf = get_isf(pf, cont, c)
             end
+            set_tol_zero!(ptdf)
         end
 
         # Cannot change the model before all data is exctracted!

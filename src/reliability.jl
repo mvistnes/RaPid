@@ -14,6 +14,8 @@ get_objective(val::SystemRunData, run::Integer, i::Integer) = sum(val.objective[
 function gather_run_data!(vals::SystemRunData, run::Integer, i::Integer, model::Model, opfs::OPFsystem, 
     Pc::Dict{<:Integer,ExprC}, Pcc::Dict{<:Integer,ExprCC}, ramp_mult::Real
 )
+    MOI.get(model, MOI.ResultCount()) < 1 && return
+    
     vals.objective[run, 1, i] = calc_objective(model, opfs)
     vals.objective[run, 2, i] = calc_objective(model, opfs, Pc, ramp_mult)
     vals.objective[run, 3, i] = calc_objective(model, opfs, Pcc, ramp_mult)
