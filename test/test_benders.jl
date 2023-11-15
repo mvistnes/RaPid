@@ -5,11 +5,11 @@ import Logging
 import Random
 Random.seed!(42)
 
-function run_timed_cases(optimizer, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long)
+function run_timed_cases(cases, optimizer, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long; p_failure=0.00, time_limit_sec=600)
     run_time = []
-    for case in [SCOPF.Base_SCOPF, SCOPF.P_SCOPF, SCOPF.PC_SCOPF, SCOPF.PC2_SCOPF]
+    for case in cases
         t = @timed begin model, opf, pf, oplim, Pc, Pcc, Pccx = SCOPF.opf_base(case, sys, optimizer, voll=voll, contingencies=cont, prob=prob, max_shed=max_shed,
-            ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long);
+            ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, time_limit_sec=time_limit_sec);
         SCOPF.solve_model!(model);
         end
         push!(run_time, (t.time, SCOPF.solve_time(model)))
@@ -17,21 +17,21 @@ function run_timed_cases(optimizer, sys, voll, prob, cont, max_shed, ramp_mult, 
     return run_time
 end
 
-function run_timed_contingency_select_cases(optimizer, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long, p_failure=0.00)
+function run_timed_contingency_select_cases(cases, optimizer, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long; p_failure=0.00, time_limit_sec=600)
     run_time = []
-    for case in [SCOPF.Base_SCOPF, SCOPF.P_SCOPF, SCOPF.PC_SCOPF, SCOPF.PC2_SCOPF]
+    for case in cases
         t = @timed model, opf, pf, oplim, Pc, Pcc, Pccx, tot_t = SCOPF.run_contingency_select(case, sys, optimizer, voll, prob, cont, max_shed=max_shed,
-            ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=p_failure);
+            ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=p_failure, time_limit_sec=time_limit_sec);
         push!(run_time, (t.time, tot_t))
     end
     return run_time        
 end
 
-function run_timed_benders_cases(optimizer, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long, p_failure=0.00)
+function run_timed_benders_cases(cases, optimizer, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long; p_failure=0.00, time_limit_sec=600)
     run_time = []
-    for case in [SCOPF.Base_SCOPF, SCOPF.P_SCOPF, SCOPF.PC_SCOPF, SCOPF.PC2_SCOPF]
+    for case in cases
         t = @timed model, opf, pf, oplim, Pc, Pcc, Pccx, tot_t = SCOPF.run_benders(case, sys, optimizer, voll, prob, cont, max_shed=max_shed,
-            ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=p_failure);
+            ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=p_failure, time_limit_sec=time_limit_sec);
         push!(run_time, (t.time, tot_t))
     end
     return run_time
@@ -42,8 +42,8 @@ function run_all(systems, optimizer, cases)
     Logging.disable_logging(Logging.Info)
     # Threads.@threads for i in eachindex(systems)
     for i in eachindex(systems)
-        sys, voll, cont, prob, short, long, ramp_minutes, ramp_mult, max_shed = systems[i]
-        SCOPF.run_cases!(result, i, cases, optimizer, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long)
+        sys, voll, cont, prob, short, long, ramp_minutes, ramp_mult, max_shed, time_limit_sec = systems[i]
+        SCOPF.run_cases!(result, i, cases, optimizer, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long, time_limit_sec=time_limit_sec)
         println(i)
     end
     Logging.disable_logging(Logging.Debug)
@@ -55,8 +55,8 @@ function run_all_contingency_select(systems, optimizer, cases)
     Logging.disable_logging(Logging.Info)
     # Threads.@threads for i in eachindex(systems)
     for i in eachindex(systems)
-        sys, voll, cont, prob, short, long, ramp_minutes, ramp_mult, max_shed = systems[i]
-        SCOPF.run_contingency_select_cases!(result, i, cases, optimizer, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long)
+        sys, voll, cont, prob, short, long, ramp_minutes, ramp_mult, max_shed, time_limit_sec = systems[i]
+        SCOPF.run_contingency_select_cases!(result, i, cases, optimizer, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long, time_limit_sec=time_limit_sec)
         println(i)
     end
     Logging.disable_logging(Logging.Debug)
@@ -68,8 +68,8 @@ function run_all_benders(systems, optimizer, cases)
     Logging.disable_logging(Logging.Info)
     # Threads.@threads for i in eachindex(systems)
     for i in eachindex(systems)
-        sys, voll, cont, prob, short, long, ramp_minutes, ramp_mult, max_shed = systems[i]
-        SCOPF.run_benders_cases!(result, i, cases, optimizer, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long)
+        sys, voll, cont, prob, short, long, ramp_minutes, ramp_mult, max_shed, time_limit_sec = systems[i]
+        SCOPF.run_benders_cases!(result, i, cases, optimizer, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long, time_limit_sec=time_limit_sec)
         println(i)
     end
     Logging.disable_logging(Logging.Debug)
@@ -97,7 +97,8 @@ function setup_ieee_rts(fname::String)
     ramp_minutes = 10.
     max_shed = 0.1
     ramp_mult = 10.
-    return system, voll, contingencies, prob, short, long, ramp_minutes, ramp_mult, max_shed
+    time_limit_sec = 100
+    return system, voll, contingencies, prob, short, long, ramp_minutes, ramp_mult, max_shed, time_limit_sec
 end
 
 function setup_system(fname::String)
@@ -111,7 +112,8 @@ function setup_system(fname::String)
     ramp_minutes = 10.
     max_shed = 0.5
     ramp_mult = 10.
-    return system, voll, contingencies, prob, short, long, ramp_minutes, ramp_mult, max_shed
+    time_limit_sec = length(contingencies)^2 + 10
+    return system, voll, contingencies, prob, short, long, ramp_minutes, ramp_mult, max_shed, time_limit_sec
 end
 
 function run_test_benders()
@@ -120,31 +122,31 @@ function run_test_benders()
     systems = []
     push!(systems, setup_system(joinpath("data","matpower","case5.m")))
     push!(systems, setup_ieee_rts(joinpath("data","matpower","IEEE_RTS.m")))
-    push!(systems, setup_system(joinpath("data","matpower","RTS_GMLC.m")))
+    # push!(systems, setup_system(joinpath("data","matpower","RTS_GMLC.m")))
     # push!(systems, setup_system(joinpath("data","matpower","ACTIVSg500.m")))
     # push!(systems, setup_system(joinpath("data","matpower","ACTIVSg2000.m")))
     # push!(systems, setup_system(joinpath("data","matpower","caseACTIVSg10k.m")))
     
     cases = [SCOPF.Base_SCOPF, SCOPF.P_SCOPF, SCOPF.OPF(true, false, true, false, false), SCOPF.PC2_SCOPF]
     results1 = run_all_benders(systems, optimizer, cases);
-    results2 = run_all_contingency_select(systems, optimizer, cases);
+    # results2 = run_all_contingency_select(systems, optimizer, cases);
     results3 = run_all(systems, optimizer, cases);
     println("Benders")
     SCOPF.print_data(results1)
-    println("Cont")
-    SCOPF.print_data(results2)
+    # println("Cont")
+    # SCOPF.print_data(results2)
     println("PTDF")
     SCOPF.print_data(results3)
 
     rt = []
     for x in systems
-        system, voll, contingencies, prob, short, long, ramp_minutes, ramp_mult, max_shed = x
-        t = run_timed_cases(optimizer, system, voll, prob, contingencies, max_shed, ramp_mult, ramp_minutes, short, long)
-        push!(rt, t)
-        t = run_timed_contingency_select_cases(optimizer, system, voll, prob, contingencies, max_shed, ramp_mult, ramp_minutes, short, long)
-        push!(rt, t)
-        t = run_timed_benders_cases(optimizer, system, voll, prob, contingencies, max_shed, ramp_mult, ramp_minutes, short, long)
-        push!(rt, t)
+        system, voll, contingencies, prob, short, long, ramp_minutes, ramp_mult, max_shed, time_limit_sec = x
+        t = run_timed_cases(cases, optimizer, system, voll, prob, contingencies, max_shed, ramp_mult, ramp_minutes, short, long, time_limit_sec=time_limit_sec)
+        push!(rt, "ptdf"=>t)
+        # t = run_timed_contingency_select_cases(cases, optimizer, system, voll, prob, contingencies, max_shed, ramp_mult, ramp_minutes, short, long, time_limit_sec=time_limit_sec)
+        # push!(rt, "cont"=>t)
+        t = run_timed_benders_cases(cases, optimizer, system, voll, prob, contingencies, max_shed, ramp_mult, ramp_minutes, short, long, time_limit_sec=time_limit_sec)
+        push!(rt, "bend"=>t)
     end
     return rt
 end

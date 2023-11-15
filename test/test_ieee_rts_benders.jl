@@ -40,7 +40,8 @@ voll = [4304., 5098., 5245., 5419., 4834., 5585., 5785., 5192., 4575., 5244., 44
 branches = SCOPF.sort_components!(SCOPF.get_branches(system));
 ctrl_generation = SCOPF.sort_components!(SCOPF.get_ctrl_generation(system));
 # c = [7,12,13,21,22,23,27]
-contingencies = vcat(branches, ctrl_generation)
+contingencies = branches
+# contingencies = vcat(branches, ctrl_generation)
 prob =
     [ # spesified for the RTS-96
         0.24, 0.51, 0.33, 0.39, 0.48, 0.38, 0.02, 0.36, 0.34, 0.33, 0.30, 0.44, 0.44,
@@ -50,14 +51,14 @@ prob =
         0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 
         0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01 # generators
     ]
-prob /= 8760
-# prob /= 100
+# prob /= 8760
+prob /= 100
 # prob = prob[c]
 short = 1.2
 long = 1.0
 ramp_minutes = 10.
 max_shed = 0.1
-ramp_mult = 2.
+ramp_mult = 10.
 
 function test_benders(system, optimizer, voll, contingencies, prob, max_shed,ramp_mult, ramp_minutes, short, long)
     for case in [SCOPF.Base_SCOPF, SCOPF.P_SCOPF, SCOPF.OPF(true, false, true, false, false), SCOPF.PC_SCOPF, SCOPF.PCF_SCOPF, SCOPF.PC2_SCOPF, SCOPF.PC2F_SCOPF]

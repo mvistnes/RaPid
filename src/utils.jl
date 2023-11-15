@@ -524,7 +524,8 @@ set_zero!(mx::AbstractMatrix{T}, i::Integer, ::Val{2}) where {T<:Real} = mx[:,i]
 set_zero!(mx::AbstractMatrix{T}, i::Integer, ::Val{1}) where {T<:Real} = mx[i,:] .= zero(T)
 set_zero!(vx::AbstractVector{T}, i::Integer, ::Val{1}) where {T<:Real} = vx[i] = zero(T)
 
-set_tol_zero!(vals::AbstractArray{<:Real}, atol::Float64 = 1e-12) = @. vals[abs(vals) < atol && vals != 0.0] = 0.0
+set_tol_zero!(vals::AbstractArray{T}, atol::Float64 = 1e-12) where {T<:Real} = 
+    @. vals[abs(vals) < atol && vals != zero(T)] = zero(T)
 
 " Split a Vector{Pair} into a Pair{Vector}"
 split_pair(val::AbstractVector) = map(first, val), map(last, val)

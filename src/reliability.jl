@@ -12,10 +12,10 @@ SystemRunData(runs::Integer, datasize::Integer) = SystemRunData([zeros(runs, 3, 
 get_objective(val::SystemRunData, run::Integer, i::Integer) = sum(val.objective[run, :, i])
 
 function gather_run_data!(vals::SystemRunData, run::Integer, i::Integer, model::Model, opfs::OPFsystem, 
-    Pc::Dict{<:Integer,ExprC}, Pcc::Dict{<:Integer,ExprCC}, ramp_mult::Real
+    Pc::Dict{<:Integer,ExprC}, Pcc::Dict{<:Integer,ExprCC}, ramp_mult::Real, atol::Real=1e-6
 )
     MOI.get(model, MOI.ResultCount()) < 1 && return
-    
+
     vals.objective[run, 1, i] = calc_objective(model, opfs)
     vals.objective[run, 2, i] = calc_objective(model, opfs, Pc, ramp_mult)
     vals.objective[run, 3, i] = calc_objective(model, opfs, Pcc, ramp_mult)
@@ -23,13 +23,13 @@ function gather_run_data!(vals::SystemRunData, run::Integer, i::Integer, model::
 
     ens = sum_value_property(model, :ls0)
     vals.ENS[run, 1, i] = ens
-    vals.LOL[run, 1, i] = abs(ens)>1e-6 ? 1 : 0
+    vals.LOL[run, 1, i] = abs(ens)>atol ? 1 : 0
     ens = sum_value_property(model, Pc, :lsc)
     vals.ENS[run, 2, i] = sum(ens)
-    vals.LOL[run, 2, i] = count(x->abs(x)>1e-6, ens)
+    vals.LOL[run, 2, i] = count(x->abs(x)>atol, ens)
     ens = sum_value_property(model, Pcc, :lscc)
     vals.ENS[run, 3, i] = sum(ens)
-    vals.LOL[run, 3, i] = count(x->abs(x)>1e-6, ens)
+    vals.LOL[run, 3, i] = count(x->abs(x)>atol, ens)
 
     vals.curtailment[run, 1, i] = sum(sum_value_property(model, :pr0))
     vals.curtailment[run, 2, i] = sum(sum_value_property(model, Pc, :prc))
@@ -58,9 +58,9 @@ end
 sum_value_property(model::Model, symb::Symbol) = sum(get_value(model, symb))
 sum_value_property(model::Model, P::Dict, symb::Symbol) = [sum(get_value(model, getproperty(c, symb))) for (_,c) in P]
 
-function run_case!(result, i, c, case, goal, optimizer, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long)
+function run_case!(result, i, c, case, goal, optimizer, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long; p_failure=0.00, time_limit_sec=600)
     model, opf, pf, oplim, Pc, Pcc, Pccx = opf_base(case, sys, optimizer, voll=voll, contingencies=cont, prob=prob, max_shed=max_shed,
-        ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long);
+        ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, time_limit_sec=time_limit_sec);
     solve_model!(model);
     MOI.get(model, MOI.ResultCount()) < 1 && return
     if case != goal
@@ -76,16 +76,16 @@ function run_case!(result, i, c, case, goal, optimizer, sys, voll, prob, cont, m
     return
 end
 
-function run_cases!(result, i, cases, optimizer, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long)
+function run_cases!(result, i, cases, optimizer, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long; p_failure=0.00, time_limit_sec=600)
     for (c, case) in enumerate(cases)
-        run_case!(result, i, c, case, cases[end], optimizer, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long)
+        run_case!(result, i, c, case, cases[end], optimizer, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long, p_failure=p_failure, time_limit_sec=time_limit_sec)
     end
     return
 end
 
-function run_contingency_select_case!(result, i, c, case, goal, optimizer, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long, p_failure=0.00)
+function run_contingency_select_case!(result, i, c, case, goal, optimizer, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long; p_failure=0.00, time_limit_sec=600)
     model, opf, pf, oplim, Pc, Pcc, Pccx = opf_base(case, sys, optimizer, voll=voll, contingencies=cont, prob=prob, max_shed=max_shed,
-        ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long);
+        ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, time_limit_sec=time_limit_sec);
     solve_model!(model);
     MOI.get(model, MOI.ResultCount()) < 1 && return
     if case != goal
@@ -99,16 +99,16 @@ function run_contingency_select_case!(result, i, c, case, goal, optimizer, sys, 
     return
 end
 
-function run_contingency_select_cases!(result, i, cases, optimizer, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long, p_failure=0.00)
+function run_contingency_select_cases!(result, i, cases, optimizer, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long; p_failure=0.00, time_limit_sec=600)
     for (c, case) in enumerate(cases)
-        run_contingency_select_case!(result, i, c, case, cases[end], optimizer, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long)
+        run_contingency_select_case!(result, i, c, case, cases[end], optimizer, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long, p_failure=p_failure, time_limit_sec=time_limit_sec)
     end
     return
 end
 
-function run_benders_case!(result, i, c, case, goal, optimizer, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long, p_failure=0.00)
+function run_benders_case!(result, i, c, case, goal, optimizer, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long; p_failure=0.00, time_limit_sec=600)
     model, opf, pf, oplim, Pc, Pcc, Pccx = opf_base(case, sys, optimizer, voll=voll, contingencies=cont, prob=prob, max_shed=max_shed,
-        ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long);
+        ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, time_limit_sec=time_limit_sec);
     solve_model!(model);
     MOI.get(model, MOI.ResultCount()) < 1 && return
     if case != goal
@@ -122,14 +122,14 @@ function run_benders_case!(result, i, c, case, goal, optimizer, sys, voll, prob,
     return
 end
 
-function run_benders_cases!(result, i, cases, optimizer, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long, p_failure=0.00)
+function run_benders_cases!(result, i, cases, optimizer, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long; p_failure=0.00, time_limit_sec=600)
     for (c, case) in enumerate(cases)
-        run_benders_case!(result, i, c, case, cases[end], optimizer, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long)
+        run_benders_case!(result, i, c, case, cases[end], optimizer, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long, p_failure=p_failure, time_limit_sec=time_limit_sec)
     end
     return
 end
 
-function run_reliability_calculation_benders(cases, optimizer, system, voll, prob, contingencies, max_shed, ramp_mult, ramp_minutes, short, long, p_failure=0.00)
+function run_reliability_calculation_benders(cases, optimizer, system, voll, prob, contingencies, max_shed, ramp_mult, ramp_minutes, short, long; p_failure=0.00, time_limit_sec=600)
     # demands = sort_components!(get_demands(system))
     # pd = demands .|> get_active_power
     hours = read_x_data("data\\ieee_std_load_profile.txt")
@@ -146,7 +146,7 @@ function run_reliability_calculation_benders(cases, optimizer, system, voll, pro
         set_active_power!.(get_components(StaticLoad, sys), (get_components(StaticLoad, sys) .|> get_max_active_power) * h)
         cont = sort_components!(get_branches(sys))
 
-        run_benders_cases!(result, i, cases, optimizer, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long, p_failure)
+        run_benders_cases!(result, i, cases, optimizer, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long, p_failure=p_failure, time_limit_sec=time_limit_sec)
 
         print(i, " ")
     end
@@ -162,5 +162,5 @@ get_objective(mod::Model) = termination_status(mod) != MOI.OPTIMAL ? -1.0 : obje
 get_ens(mod::Model, cont::Dict, symb::Symbol) = 
     sum(sum(get_value(mod, getfield(c, symb))) for (i,c) in cont)
     
-get_lol(mod::Model, cont::Dict, symb::Symbol) = 
-    sum(count(x->(abs(x)>1e-5), get_value(mod, getfield(c, symb))) for (i,c) in cont)
+get_lol(mod::Model, cont::Dict, symb::Symbol, atol::Real=1e-6) = 
+    sum(count(x->(abs(x)>atol), get_value(mod, getfield(c, symb))) for (i,c) in cont)
