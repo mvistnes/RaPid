@@ -70,40 +70,40 @@ function run_contingency_select!(
     corr2f = 0
 
     pg = get_value(mod, :pg0)
-    for c_obj in opf.contingencies
-        (typelist, c, cont) = typesort_component(c_obj, opf, bd.idx)
-        if is_islanded(pf, cont, c)
-            islands, island, island_b = handle_islands(pf.B, pf.DA, cont, c, pf.slack)
-            ptdf = get_isf(pf, cont, c, islands, island, island_b)
+    for (i, c_obj) in enumerate(opf.contingencies)
+        cont = typesort_component(c_obj, opf, bd.idx)
+        if is_islanded(pf, cont[2], cont[1])
+            islands, island, island_b = handle_islands(pf.B, pf.DA, cont[2], cont[1], pf.slack)
+            ptdf = get_isf(pf, cont[2], cont[1], islands, island, island_b)
             set_tol_zero!(ptdf)
             if type.P 
-                add_contingencies!(opf, oplim, mod, ptdf, bd.list, c)
+                add_contingencies!(opf, oplim, mod, ptdf, bd.list, i)
                 pre += 1
             end
             if type.C1 
-                add_contingencies!(Pc, opf, oplim, mod, bd.obj, islands, island, ptdf, bd.list, c)
+                add_contingencies!(Pc, opf, oplim, mod, bd.obj, islands, island, ptdf, bd.list, i)
                 corr1 += 1
             end
             if type.C2  
-                add_contingencies!(Pcc, opf, oplim, mod, bd.obj, islands, island, ptdf, bd.list, c)
+                add_contingencies!(Pcc, opf, oplim, mod, bd.obj, islands, island, ptdf, bd.list, i)
                 corr2 += 1
             end
             if type.C2F 
-                add_contingencies!(Pccx, opf, oplim, mod, bd.obj, islands, island, ptdf, bd.list, c)
+                add_contingencies!(Pccx, opf, oplim, mod, bd.obj, islands, island, ptdf, bd.list, i)
                 corr2f += 1
             end
             @debug "Island: Contingency $(string(typeof(c_obj))) $(get_name(c_obj))"
-            overloads[c] = -1.0
+            overloads[i] = -1.0
         else
             if typeof(c_obj) <: ACBranch
-                flow = calculate_contingency_line_flows(mod, pf, bd.Pᵢ, cont, c, c_obj, Int[], Int[])
+                flow = calculate_contingency_line_flows(mod, pf, bd.Pᵢ, cont, i, c_obj, Int[], Int[])
             else
-                flow = calculate_contingency_line_flows(mod, pf, bd.Pᵢ, cont, c, c_obj, Int[], Int[], pg[c])
+                flow = calculate_contingency_line_flows(mod, pf, bd.Pᵢ, cont, i, c_obj, Int[], Int[], pg[i])
             end
             # Calculate the power flow with the new outage and find if there are any overloads
             overload = filter_overload(flow, oplim.branch_rating * oplim.short_term_multi)
             if !isempty(overload)
-                overloads[c] = maximum(x -> abs(x[2]), overload)
+                overloads[i] = maximum(x -> abs(x[2]), overload)
             end
         end
     end
@@ -126,21 +126,22 @@ function run_contingency_select!(
     brlt = oplim.branch_rating * oplim.long_term_multi
 
     permutation = sortperm(overloads, rev=true)
-    (typelist, c, cont) = typesort_component(opf.contingencies[permutation[end]], opf, bd.idx)
+    cont = typesort_component(opf.contingencies[permutation[end]], opf, bd.idx)
     i = length(permutation)
-    while is_islanded(pf, cont, c)
+    while is_islanded(pf, cont[2], cont[1])
         pop!(permutation)
-        (typelist, c, cont) = typesort_component(opf.contingencies[permutation[end]], opf, bd.idx)
+        cont = typesort_component(opf.contingencies[permutation[end]], opf, bd.idx)
     end
 
     i = 1
     iterations = 1
     cut_added = 0
     while !isempty(permutation)
-        c_obj = opf.contingencies[permutation[i]]
-        (typelist, c, cont) = typesort_component(c_obj, opf, bd.idx)
-        if is_islanded(pf, cont, c)
-            islands, island, island_b = handle_islands(pf.B, pf.DA, cont, c, pf.slack)
+        i_c = permutation[i]
+        c_obj = opf.contingencies[i_c]
+        cont = typesort_component(c_obj, opf, bd.idx)
+        if is_islanded(pf, cont[2], cont[1])
+            islands, island, island_b = handle_islands(pf.B, pf.DA, cont[2], cont[1], pf.slack)
             inodes = islands[island]
         else
             empty!(islands)
@@ -150,22 +151,22 @@ function run_contingency_select!(
         end
 
         if type.P
-            olc = calculate_contingency_overload(brst, mod, pf, bd, cont, c, c_obj, inodes, island_b)
+            olc = calculate_contingency_overload(brst, mod, pf, bd, cont, i_c, c_obj, inodes, island_b)
         end
         if type.C1
-            olc = calculate_contingency_overload!(ΔPc, brst, Pc, opf, mod, pf, bd, cont, c, c_obj, inodes, island_b)
+            olc = calculate_contingency_overload!(ΔPc, brst, Pc, opf, mod, pf, bd, cont, i_c, c_obj, inodes, island_b)
         end
         if type.C2
-            olcc = calculate_contingency_overload!(ΔPcc, brlt, Pcc, opf, mod, pf, bd, cont, c, c_obj, inodes, island_b)
+            olcc = calculate_contingency_overload!(ΔPcc, brlt, Pcc, opf, mod, pf, bd, cont, i_c, c_obj, inodes, island_b)
         end
         if type.C2F
-            olccx = calculate_contingency_overload!(ΔPccx, brlt, Pccx, opf, mod, pf, bd, cont, c, c_obj, inodes, island_b)
+            olccx = calculate_contingency_overload!(ΔPccx, brlt, Pccx, opf, mod, pf, bd, cont, i_c, c_obj, inodes, island_b)
         end
         if !isempty(olc) || !isempty(olcc) || !isempty(olccx) # ptdf calculation is more computational expensive than line flow
-            if is_islanded(pf, cont, c)
-                ptdf = get_isf(pf, cont, c, islands, island, island_b)
+            if is_islanded(pf, cont[2], cont[1])
+                ptdf = get_isf(pf, cont[2], cont[1], islands, island, island_b)
             else
-                ptdf = get_isf(pf, cont, c)
+                ptdf = get_isf(pf, cont[2], cont[1])
             end
             set_tol_zero!(ptdf)
         end
@@ -173,24 +174,24 @@ function run_contingency_select!(
         # Cannot change the model before all data is exctracted!
         if !isempty(olc)
             if type.P
-                add_contingencies!(opf, oplim, mod, ptdf, bd.list, c)
+                add_contingencies!(opf, oplim, mod, ptdf, bd.list, i_c)
                 pre += 1
                 @info @sprintf "Pre %d: Contingency %s %s" pre string(typeof(c_obj)) get_name(c_obj)
             else
-                add_contingencies!(Pc, opf, oplim, mod, bd.obj, islands, island, ptdf, bd.list, c)
+                add_contingencies!(Pc, opf, oplim, mod, bd.obj, islands, island, ptdf, bd.list, i_c)
                 corr1 += 1
                 @info @sprintf "Corr1 %d: Contingency %s %s" corr1 string(typeof(c_obj)) get_name(c_obj)
             end
             cut_added = 2
         end
         if !isempty(olcc)
-            add_contingencies!(Pcc, opf, oplim, mod, bd.obj, islands, island, ptdf, bd.list, c)
+            add_contingencies!(Pcc, opf, oplim, mod, bd.obj, islands, island, ptdf, bd.list, i_c)
             corr2 += 1
             @info @sprintf "Corr2 %d: Contingency %s %s" corr2 string(typeof(c_obj)) get_name(c_obj)
             cut_added = 2
         end
         if !isempty(olccx)
-            add_contingencies!(Pccx, opf, oplim, mod, bd.obj, islands, island, ptdf, bd.list, c)
+            add_contingencies!(Pccx, opf, oplim, mod, bd.obj, islands, island, ptdf, bd.list, i_c)
             corr2f += 1
             @info @sprintf "Corr2 %d: Contingency %s %s" corr2f string(typeof(c_obj)) get_name(c_obj)
             cut_added = 2

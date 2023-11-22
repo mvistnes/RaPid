@@ -132,13 +132,13 @@ function add_all_contingencies!(type::OPF, opf::OPFsystem, oplim::Oplimits, mod:
 )
     obj = objective_function(mod)
     for (i, c_obj) in enumerate(opf.contingencies)
-        (typelist, c, cont) = typesort_component(c_obj, opf, idx)
-        if is_islanded(pf, cont, c)
-            islands, island, island_b = handle_islands(pf.B, pf.DA, cont, c, pf.slack)
-            ptdf = get_isf(pf, cont, c, islands, island, island_b)
+        cont = typesort_component(c_obj, opf, idx)
+        if is_islanded(pf, cont[2], cont[1])
+            islands, island, island_b = handle_islands(pf.B, pf.DA, cont[2], cont[1], pf.slack)
+            ptdf = get_isf(pf, cont[2], cont[1], islands, island, island_b)
             set_tol_zero!(ptdf)
         else
-            ptdf = get_isf(pf, cont, c)
+            ptdf = get_isf(pf, cont[2], cont[1])
             islands = Vector{Vector{Int}}[]
             island = 0
         end

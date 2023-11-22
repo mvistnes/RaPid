@@ -322,16 +322,16 @@ function find_component(val::Component, list::AbstractVector{<:Component})
 end
 
 typesort_component(val::Generator, opf::OPFsystem, idx::Dict{<:Int,<:Int}) =
-    (:ctrl_generation, find_component(val, get_ctrl_generation(opf)), get_bus_idx(val, idx))
+    (find_component(val, get_ctrl_generation(opf)), get_bus_idx(val, idx))
 
 typesort_component(val::StaticLoad, opf::OPFsystem, idx::Dict{<:Int,<:Int}) =
-    (:demands, find_component(val, get_demands(opf)), get_bus_idx(val, idx))
+    (find_component(val, get_demands(opf)), get_bus_idx(val, idx))
 
 typesort_component(val::ACBus, opf::OPFsystem, idx::Dict{<:Int,<:Int}) =
-    (:nodes, find_component(val, get_nodes(opf)), get_bus_idx(val, idx))
+    (find_component(val, get_nodes(opf)), get_bus_idx(val, idx))
 
 typesort_component(val::ACBranch, opf::OPFsystem, idx::Dict{<:Int,<:Int}) =
-    (:branches, find_component(val, get_branches(opf)), get_bus_idx(val, idx))
+    (find_component(val, get_branches(opf)), get_bus_idx(val, idx))
 
 """ Make a DenseAxisArray using the list and function for the value of each element """
 make_named_array(value_func, list) = JuMP.Containers.DenseAxisArray(

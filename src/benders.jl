@@ -94,26 +94,26 @@ function run_benders!(
     overloads = zeros(length(opf.contingencies))
 
     pg = get_value(mod, :pg0)
-    for c_obj in opf.contingencies
-        (typelist, c, cont) = typesort_component(c_obj, opf, bd.idx)
+    for (i, c_obj) in enumerate(opf.contingencies)
+        cont = typesort_component(c_obj, opf, bd.idx)
         # cont  = get_bus_idx(opf.contingencies[c], bd.idx)
-        if is_islanded(pf, cont, c)
-            islands, island, island_b = handle_islands(pf.B, pf.DA, cont, c, pf.slack)
-            type.C1 && init_P!(Pc, opf, oplim, mod, bd.obj, bd.list, islands, island, c)
-            type.C2 && init_P!(Pcc, opf, oplim, mod, bd.obj, bd.list, islands, island, c)
-            type.C2F && init_P!(Pccx, opf, oplim, mod, bd.obj, bd.list, islands, island, c)
+        if is_islanded(pf, cont[2], cont[1])
+            islands, island, island_b = handle_islands(pf.B, pf.DA, cont[2], cont[1], pf.slack)
+            type.C1 && init_P!(Pc, opf, oplim, mod, bd.obj, bd.list, islands, island, i)
+            type.C2 && init_P!(Pcc, opf, oplim, mod, bd.obj, bd.list, islands, island, i)
+            type.C2F && init_P!(Pccx, opf, oplim, mod, bd.obj, bd.list, islands, island, i)
             @debug "Island: Contingency $(string(typeof(c_obj))) $(get_name(c_obj))"
             if isempty(islands)
                 fill!(flow, 0.0)
             else
-                calculate_line_flows!(pf.vb_tmp, pf, cont, c, nodes=islands[island], branches=island_b)
+                calculate_line_flows!(pf.vb_tmp, pf, cont[2], cont[1], nodes=islands[island], branches=island_b)
                 flow = pf.vb_tmp
             end
         else
             if typeof(c_obj) <: ACBranch
-                flow = calculate_contingency_line_flows(mod, pf, bd.Pᵢ, cont, c, c_obj, Int[], Int[])
+                flow = calculate_contingency_line_flows(mod, pf, bd.Pᵢ, cont, i, c_obj, Int[], Int[])
             else
-                flow = calculate_contingency_line_flows(mod, pf, bd.Pᵢ, cont, c, c_obj, Int[], Int[], pg[c])
+                flow = calculate_contingency_line_flows(mod, pf, bd.Pᵢ, cont, i, c_obj, Int[], Int[], pg[c])
             end
         end
 
@@ -121,7 +121,7 @@ function run_benders!(
         overload = filter_overload(flow, oplim.branch_rating * oplim.short_term_multi)
 
         if !isempty(overload)
-            overloads[c] = maximum(x -> abs(x[2]), overload)
+            overloads[i] = maximum(x -> abs(x[2]), overload)
         end
     end
 
@@ -157,10 +157,11 @@ function run_benders!(
         cut_added = 0
         @info "Iteration $iterations"
 
-        for c_obj in opf.contingencies[permutation]
-            (typelist, c, cont) = typesort_component(c_obj, opf, bd.idx)
-            if is_islanded(pf, cont, c)
-                islands, island, island_b = handle_islands(pf.B, pf.DA, cont, c, pf.slack)
+        for i in permutation
+            c_obj = opf.contingencies[i]
+            cont = typesort_component(c_obj, opf, bd.idx)
+            if is_islanded(pf, cont[2], cont[1])
+                islands, island, island_b = handle_islands(pf.B, pf.DA, cont[2], cont[1], pf.slack)
                 inodes = islands[island]
             else
                 empty!(islands)
@@ -170,28 +171,28 @@ function run_benders!(
             end
 
             if type.P
-                olc = calculate_contingency_overload(brst, mod, pf, bd, cont, c, c_obj, inodes, island_b)
+                olc = calculate_contingency_overload(brst, mod, pf, bd, cont, i, c_obj, inodes, island_b)
             end
             if type.C1
-                olc = calculate_contingency_overload!(ΔPc, brst, Pc, opf, mod, pf, bd, cont, c, c_obj, inodes, island_b)
+                olc = calculate_contingency_overload!(ΔPc, brst, Pc, opf, mod, pf, bd, cont, i, c_obj, inodes, island_b)
             end
             if type.C2
-                olcc = calculate_contingency_overload!(ΔPcc, brlt, Pcc, opf, mod, pf, bd, cont, c, c_obj, inodes, island_b)
+                olcc = calculate_contingency_overload!(ΔPcc, brlt, Pcc, opf, mod, pf, bd, cont, i, c_obj, inodes, island_b)
             end
             if type.C2F
-                olccx = calculate_contingency_overload!(ΔPccx, brlt, Pccx, opf, mod, pf, bd, cont, c, c_obj, inodes, island_b)
+                olccx = calculate_contingency_overload!(ΔPccx, brlt, Pccx, opf, mod, pf, bd, cont, i, c_obj, inodes, island_b)
             end
             if !isempty(olc) || !isempty(olcc) || !isempty(olccx) # ptdf calculation is more computational expensive than line flow
-                if is_islanded(pf, cont, c)
-                    ptdf = get_isf(pf, cont, c, islands, island, island_b)
+                if is_islanded(pf, cont[2], cont[1])
+                    ptdf = get_isf(pf, cont[2], cont[1], islands, island, island_b)
                 else
-                    ptdf = get_isf(pf, cont, c)
+                    ptdf = get_isf(pf, cont[2], cont[1])
                 end
                 set_tol_zero!(ptdf)
 
-                type.C1 && get(Pc, c, 0) == 0 && fill!(ΔPc, 0.0)
-                type.C2 && get(Pcc, c, 0) == 0 && fill!(ΔPcc, 0.0)
-                type.C2F && get(Pccx, c, 0) == 0 && fill!(ΔPccx, 0.0)
+                type.C1 && get(Pc, i, 0) == 0 && fill!(ΔPc, 0.0)
+                type.C2 && get(Pcc, i, 0) == 0 && fill!(ΔPcc, 0.0)
+                type.C2F && get(Pccx, i, 0) == 0 && fill!(ΔPccx, 0.0)
 
                 # # Calculate the power flow with the new outage and find if there are any overloads
                 # overloads_c, overloads_cc, overloads_ccx = find_overloads(Val(type), flow, ptdf, bd.Pᵢ, oplim, ΔPc, ΔPcc, ΔPccx)
@@ -222,14 +223,14 @@ function run_benders!(
                 if type.P
                     cut_added, pre = add_cut(opf, mod, bd, ptdf, olc, c_obj, cut_added, lim, pre)
                 elseif type.C1
-                    cut_added, corr1 = add_cut(Pc, opf, oplim, mod, bd, ΔPc, ptdf, olc, islands, island, c_obj, c, cut_added, lim, corr1)
+                    cut_added, corr1 = add_cut(Pc, opf, oplim, mod, bd, ΔPc, ptdf, olc, islands, island, c_obj, i, cut_added, lim, corr1)
                 end
             end
             if !isempty(olcc)
-                cut_added, corr2 = add_cut(Pcc, opf, oplim, mod, bd, ΔPcc, ptdf, olcc, islands, island, c_obj, c, cut_added, lim, corr2)
+                cut_added, corr2 = add_cut(Pcc, opf, oplim, mod, bd, ΔPcc, ptdf, olcc, islands, island, c_obj, i, cut_added, lim, corr2)
             end
             if !isempty(olccx)
-                cut_added, corr2f = add_cut(Pccx, opf, oplim, mod, bd, ΔPccx, ptdf, olccx, islands, island, c_obj, c, cut_added, lim, corr2f)
+                cut_added, corr2f = add_cut(Pccx, opf, oplim, mod, bd, ΔPccx, ptdf, olccx, islands, island, c_obj, i, cut_added, lim, corr2f)
             end
             if cut_added > 1
                 total_solve_time = update_model!(mod, pf, bd, total_solve_time)
@@ -262,7 +263,7 @@ end
     Assummes that island-contingencies have active variables from the pre-procedure.
 """
 function calculate_contingency_line_flows!(ΔP::Vector{<:Real}, P::Dict{<:Integer, T}, opf::OPFsystem, 
-    mod::Model, pf::DCPowerFlow, Pᵢ::AbstractVector{<:Real}, list::Vector{<:CTypes{Int}}, cont::Tuple{Real,Real}, 
+    mod::Model, pf::DCPowerFlow, Pᵢ::AbstractVector{<:Real}, list::Vector{<:CTypes{Int}}, cont::Tuple{Real, Tuple{Real,Real}}, 
     c::Integer, c_obj::Component, island::Vector, island_b::Vector{<:Integer}
 ) where {T}
     if get(P, c, 0) == 0
@@ -270,14 +271,14 @@ function calculate_contingency_line_flows!(ΔP::Vector{<:Real}, P::Dict{<:Intege
     end
     ΔP = get_ΔP!(ΔP, mod, opf, list, P, c)
     if iszero(ΔP)
-        calculate_line_flows!(pf.vb_tmp, pf, cont, c, nodes=island, branches=island_b)
+        calculate_line_flows!(pf.vb_tmp, pf, cont[2], cont[1], nodes=island, branches=island_b)
     else
-        calculate_line_flows!(pf.vb_tmp, pf, cont, c, Pᵢ=(Pᵢ .+ ΔP), nodes=island, branches=island_b)
+        calculate_line_flows!(pf.vb_tmp, pf, cont[2], cont[1], Pᵢ=(Pᵢ .+ ΔP), nodes=island, branches=island_b)
     end
     return pf.vb_tmp
 end
 function calculate_contingency_line_flows!(ΔP::Vector{<:Real}, P::Dict{<:Integer, T}, opf::OPFsystem, 
-    mod::Model, pf::DCPowerFlow, Pᵢ::AbstractVector{<:Real}, list::Vector{<:CTypes{Int}}, cont::Real,
+    mod::Model, pf::DCPowerFlow, Pᵢ::AbstractVector{<:Real}, list::Vector{<:CTypes{Int}}, cont::Tuple{Real,Real},
     c::Integer, c_obj::Component, island::Vector, island_b::Vector{<:Integer}
 ) where {T}
     if get(P, c, 0) == 0
@@ -293,14 +294,14 @@ end
     Calculate the contingency power flow without corrective actions.
 """
 function calculate_contingency_line_flows(
-    mod::Model, pf::DCPowerFlow, P::Vector{<:Real}, cont::Tuple{Real,Real}, c::Integer, c_obj::Component,
+    mod::Model, pf::DCPowerFlow, P::Vector{<:Real}, cont::Tuple{Real, Tuple{Real,Real}}, c::Integer, c_obj::Component,
     island::Vector, island_b::Vector{<:Integer}, val=0.0
 )
-    calculate_line_flows!(pf.vb_tmp, pf, cont, c, nodes=island, branches=island_b)
+    calculate_line_flows!(pf.vb_tmp, pf, cont[2], cont[1], nodes=island, branches=island_b)
     return pf.vb_tmp
 end
 function calculate_contingency_line_flows(
-    mod::Model, pf::DCPowerFlow, P::Vector{<:Real}, cont::Real, c::Integer, c_obj::StaticInjection,
+    mod::Model, pf::DCPowerFlow, P::Vector{<:Real}, cont::Tuple{Real,Real}, c::Integer, c_obj::StaticInjection,
     island::Vector, island_b::Vector{<:Integer}, val=get_ΔP(mod, c, c_obj)
 )
     P[cont] -= val
@@ -314,7 +315,7 @@ end
 """
 function calculate_contingency_overload!(ΔP::Vector{<:Real}, branch_rating::Vector{<:Real},
     Pc::Dict, opf::OPFsystem, mod::Model, pf::DCPowerFlow, bd::Benders, 
-    cont::Union{Real, Tuple{Real,Real}}, c::Integer, c_obj::Component, 
+    cont::Union{Tuple{Real, Tuple{Real,Real}}, Tuple{Real,Real}}, c::Integer, c_obj::Component, 
     island::Vector, island_b::Vector{<:Integer}
 )
     flow = calculate_contingency_line_flows!(ΔP, Pc, opf, mod, pf, bd.Pᵢ, bd.list, cont, c, c_obj, island, island_b)
@@ -325,7 +326,7 @@ end
     Calculate the contingency overflow without corrective actions.
 """
 function calculate_contingency_overload(branch_rating::Vector{<:Real}, mod::Model, 
-    pf::DCPowerFlow, bd::Benders, cont::Union{Real, Tuple{Real,Real}}, c::Integer, c_obj::Component,
+    pf::DCPowerFlow, bd::Benders, cont::Union{Tuple{Real, Tuple{Real,Real}}, Tuple{Real,Real}}, c::Integer, c_obj::Component,
     island::Vector, island_b::Vector{<:Integer}
 )
     flow = calculate_contingency_line_flows(mod, pf, bd.Pᵢ, cont, c, c_obj, island, island_b)
