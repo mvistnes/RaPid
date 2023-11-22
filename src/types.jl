@@ -55,10 +55,12 @@ end
 """ Holds the short term variables for contingencies """
 mutable struct ExprC{T<:Vector{JuMP.VariableRef}}
     pc::T
-    pgc::T
+    pgu::T
+    pgd::T
     prc::T
     lsc::T
 end
+ExprC() = ExprC(JuMP.VariableRef[], JuMP.VariableRef[], JuMP.VariableRef[], JuMP.VariableRef[], JuMP.VariableRef[])
 
 """ Holds the long term variables for contingencies """
 mutable struct ExprCC{T<:Vector{JuMP.VariableRef}}
@@ -69,6 +71,7 @@ mutable struct ExprCC{T<:Vector{JuMP.VariableRef}}
     prcc::T
     lscc::T
 end
+ExprCC() = ExprCC(JuMP.VariableRef[], JuMP.VariableRef[], JuMP.VariableRef[], JuMP.VariableRef[], JuMP.VariableRef[], JuMP.VariableRef[])
 
 """ Holds the long term variables for contingencies, no ramp up allowed """
 mutable struct ExprCCX{T<:Vector{JuMP.VariableRef}}
@@ -77,3 +80,4 @@ mutable struct ExprCCX{T<:Vector{JuMP.VariableRef}}
     prccx::T
     lsccx::T
 end
+ExprCCX() = ExprCCX(JuMP.VariableRef[], JuMP.VariableRef[], JuMP.VariableRef[], JuMP.VariableRef[])

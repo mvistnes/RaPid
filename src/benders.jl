@@ -335,7 +335,7 @@ end
 get_ΔP(mod::Model, c::Integer, ::Generator) = 
     value(mod[:pg0][c])
 get_ΔP(mod::Model, c::Integer, ::Generator, Pc::Dict{<:Integer, ExprC}) = 
-    value(mod[:pg0][c]) - value(Pc[c].pgc[c])
+    value(mod[:pg0][c]) + value(Pc[c].pgu[c]) - value(Pc[c].pgd[c])
 get_ΔP(mod::Model, c::Integer, ::Generator, Pcc::Dict{<:Integer, ExprCC}) = 
     value(mod[:pg0][c]) + value(Pcc[c].pgu[c]) - value(Pcc[c].pgd[c])
 get_ΔP(mod::Model, c::Integer, ::Generator, Pccx::Dict{<:Integer, ExprCCX}) = 
@@ -357,12 +357,13 @@ function get_ΔP!(ΔP::Vector{T}, mod::Model, opf::OPFsystem, list::Vector{<:CTy
     fill!(ΔP, zero(T))
     x = get(Pc, c, 0)
     if x != 0
-        pgc = get_value(mod, x.pgc)
+        pgu = get_value(mod, x.pgu)
+        pgd = get_value(mod, x.pgd)
         prc = get_value(mod, x.prc)
         lsc = get_value(mod, x.lsc)
         for (i, n) in enumerate(list)
             for g in n.ctrl_generation
-                ΔP[i] -= pgc[g]
+                ΔP[i] += (pgu[g] - pgd[g])
             end
             for g in n.renewables
                 ΔP[i] -= prc[g]
@@ -475,7 +476,7 @@ function add_cut(Pc::Dict{<:Integer, ExprC}, opf::OPFsystem, oplim::Oplimits, mo
     for (i, ol) in overloads
         expr = JuMP.@expression(mod, sum((ptdf[i, inode] * (
                 bd.Pg[inode] + ΔPc[inode] -
-                sum((mod[:pg0][ctrl] - pc.pgc[ctrl] for ctrl in sublist.ctrl_generation), init=0.0) -
+                sum((mod[:pg0][ctrl] + pc.pgu[ctrl] - pc.pgd[ctrl] for ctrl in sublist.ctrl_generation), init=0.0) -
                 sum((beta(sublist.node, opf.dc_branches[d]) * mod[:pfdc0][d] for d in sublist.dc_branches), init=0.0) +
                 sum((pc.prc[r] for r in sublist.renewables), init=0.0) -
                 sum((pc.lsc[d] for d in sublist.demands), init=0.0)
@@ -553,7 +554,8 @@ function print_benders_results(opf::OPFsystem, mod::Model, Pc::Dict=Dict(), Pcc:
     end
     for (i_g, g) in enumerate(opf.ctrl_generation)
         @printf("%12s: %5.3f (%.3f)\n", g.name, JuMP.value(mod[:pg0][i_g]), get_active_power_limits(g).max)
-        print_c(Pc, "pgc", i_g, lim)
+        print_c(Pc, "pgu", i_g, lim)
+        print_c(Pc, "pgd", i_g, lim)
         print_c(Pcc, "pgu", i_g, lim)
         print_c(Pcc, "pgd", i_g, lim)
         print_c(Pccx, "pgdx", i_g, lim)

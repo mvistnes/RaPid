@@ -58,7 +58,7 @@ short = 1.2
 long = 1.0
 ramp_minutes = 10.
 max_shed = 0.1
-ramp_mult = 10.
+ramp_mult = 2.
 
 function test_benders(system, optimizer, voll, contingencies, prob, max_shed,ramp_mult, ramp_minutes, short, long)
     for case in [SCOPF.Base_SCOPF, SCOPF.P_SCOPF, SCOPF.OPF(true, false, true, false, false), SCOPF.PC_SCOPF, SCOPF.PCF_SCOPF, SCOPF.PC2_SCOPF, SCOPF.PC2F_SCOPF]

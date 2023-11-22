@@ -1,5 +1,6 @@
 # CC BY 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2023
 
+using BenchmarkTools
 using Printf
 using PowerSystems
 import JuMP
@@ -10,11 +11,12 @@ Random.seed!(42)
 
 # SETUP
 LinearAlgebra.BLAS.set_num_threads(Threads.nthreads())
-# system = System("data\\ELK14\\A5.m"); c1 = 1; c2 = 5
-# system = SCOPF.System("data\\matpower\\IEEE_RTS.m"); c1 = 1; c2 = 11
-# system = SCOPF.System("data\\matpower\\RTS_GMLC.m"); c1 = 1; c2 = 52
-system = SCOPF.System("data\\matpower\\ACTIVSg500.m"); c1 = 2; c2 = 1
-# system = SCOPF.System("data\\matpower\\ACTIVSg2000.m"); c1 = 1; c2 = 9
+# system = System(joinpath("data","ELK14","A5.m")); c1 = 1; c2 = 5
+# system = SCOPF.System(joinpath("data","matpower","IEEE_RTS.m")); c1 = 1; c2 = 11
+# system = SCOPF.System(joinpath("data","matpower","RTS_GMLC.m")); c1 = 1; c2 = 52
+system = SCOPF.System(joinpath("data","matpower","ACTIVSg500.m")); c1 = 2; c2 = 1
+# system = SCOPF.System(joinpath("data","matpower","ACTIVSg2000.m")); c1 = 1; c2 = 9
+# system = SCOPF.System(joinpath("data","matpower","case_ACTIVSg10k.m")); c1 = 1; c2 = 4
 SCOPF.fix_generation_cost!(system);
 voll = SCOPF.make_voll(system)
 model, opf, pf, oplim, _, _, _ = SCOPF.opf_base(SCOPF.Base_SCOPF, system, HiGHS.Optimizer, voll=voll);

@@ -96,7 +96,7 @@ function setup_ieee_rts(fname::String)
     long = 1.0
     ramp_minutes = 10.
     max_shed = 0.1
-    ramp_mult = 10.
+    ramp_mult = 2.
     time_limit_sec = 100
     return system, voll, contingencies, prob, short, long, ramp_minutes, ramp_mult, max_shed, time_limit_sec
 end
@@ -104,14 +104,14 @@ end
 function setup_system(fname::String)
     system = SCOPF.System(fname)
     voll, prob, contingencies = SCOPF.setup(system, 100., 400.);
-    SCOPF.set_ramp_limits!(system, 0.01);
+    SCOPF.set_ramp_limits!(system);
     SCOPF.set_renewable_prod!(system, 0.5)
     prob = fill(0.01, length(contingencies))
     short = 1.5
     long = 1.25
     ramp_minutes = 10.
     max_shed = 0.5
-    ramp_mult = 10.
+    ramp_mult = 2.
     time_limit_sec = length(contingencies)^2 + 10
     return system, voll, contingencies, prob, short, long, ramp_minutes, ramp_mult, max_shed, time_limit_sec
 end
@@ -125,7 +125,7 @@ function run_test_benders()
     # push!(systems, setup_system(joinpath("data","matpower","RTS_GMLC.m")))
     # push!(systems, setup_system(joinpath("data","matpower","ACTIVSg500.m")))
     # push!(systems, setup_system(joinpath("data","matpower","ACTIVSg2000.m")))
-    # push!(systems, setup_system(joinpath("data","matpower","caseACTIVSg10k.m")))
+    # push!(systems, setup_system(joinpath("data","matpower","case_ACTIVSg10k.m")))
     
     cases = [SCOPF.Base_SCOPF, SCOPF.P_SCOPF, SCOPF.OPF(true, false, true, false, false), SCOPF.PC2_SCOPF]
     results1 = run_all_benders(systems, optimizer, cases);

@@ -175,7 +175,7 @@ function add_contingencies!(Pc::Dict{<:Integer,ExprC}, opf::OPFsystem, oplim::Op
     island::Integer, ptdf::AbstractMatrix{<:Real}, list::Vector{<:CTypes{Int}}, c::Integer
 )
     pc = JuMP.@variable(mod, [n in 1:length(opf.nodes)], base_name = @sprintf("pc%s", c))
-    pgc, prc, lsc = init_P!(Pc, opf, oplim, mod, obj, list, islands, island, c)
+    pgu, pgd, prc, lsc = init_P!(Pc, opf, oplim, mod, obj, list, islands, island, c)
     Pc[c].pc = pc
 
     inj_pc = @expression(mod, -pc)
@@ -184,7 +184,7 @@ function add_contingencies!(Pc::Dict{<:Integer,ExprC}, opf::OPFsystem, oplim::Op
         add_to_expression!(inj_pc[n], sum((beta(opf.nodes[n], opf.dc_branches[l]) * mod[:pfdc0][l] for l in list[n].dc_branches), init=0.0))
         add_to_expression!(inj_pc[n], sum((mod[:pr][d] for d in list[n].renewables), init=0.0))
         add_to_expression!(inj_pc[n], -1, sum((mod[:pd][d] for d in list[n].demands), init=0.0))
-        add_to_expression!(inj_pc[n], -1, sum((pgc[g] for g in list[n].ctrl_generation), init=0.0))
+        add_to_expression!(inj_pc[n], sum((pgu[g] - pgd[g] for g in list[n].ctrl_generation), init=0.0))
         add_to_expression!(inj_pc[n], -1, sum((prc[d] for d in list[n].renewables), init=0.0))
         add_to_expression!(inj_pc[n], sum((lsc[d] for d in list[n].demands), init=0.0))
     end
@@ -242,44 +242,56 @@ end
 function init_P!(Pc::Dict{<:Integer,ExprC}, opf::OPFsystem, oplim::Oplimits, mod::Model, obj::JuMP.AbstractJuMPScalar, list::Vector{<:CTypes{Int}},
     islands::Vector, island::Integer, c::Integer
 )
-    pgc = JuMP.@variable(mod, [g in 1:length(opf.ctrl_generation)], base_name = @sprintf("pgc%s", c),
-        lower_bound = 0.0)
+    pgu = JuMP.@variable(mod, [g in 1:length(opf.ctrl_generation)], base_name = @sprintf("pgu%s", c),
+        lower_bound = 0.0, upper_bound = oplim.rampup[g] * 0.0)
+    # active power variables for the generators in contingencies ramp up 
+    pgd = JuMP.@variable(mod, [g in 1:length(opf.ctrl_generation)], base_name = @sprintf("pgd%s", c),
+        lower_bound = 0.0) #, upper_bound = rampdown[g] * 0.0)
+    # and ramp down
     prc = JuMP.@variable(mod, [d in 1:length(opf.renewables)], base_name = @sprintf("prc%s", c),
         lower_bound = 0.0, upper_bound = oplim.pr_lim[d] * oplim.max_curtail)
     lsc = JuMP.@variable(mod, [d in 1:length(opf.demands)], base_name = @sprintf("lsc%s", c),
         lower_bound = 0.0, upper_bound = oplim.pd_lim[d] * oplim.max_shed)
-    Pc[c] = ExprC(JuMP.VariableRef[], pgc, prc, lsc)
+    Pc[c] = ExprC(JuMP.VariableRef[], pgu, pgd, prc, lsc)
 
     p_survive = 1.0 - oplim.p_failure
     add_to_expression!(obj, opf.prob[c], sum(opf.voll' * lsc))
     add_to_expression!(obj, opf.prob[c], sum(oplim.ramp_mult * 1 * prc))
-    for (cost, g) in zip(opf.cost_ctrl_gen, pgc)
-        add_to_expression!.(obj, opf.prob[c], p_survive * oplim.ramp_mult * (cost.var * g))
+    for (cost, gu, gd) in zip(opf.cost_ctrl_gen, pgu, pgd)
+        add_to_expression!.(obj, opf.prob[c], p_survive * (cost.ramp * gu))
+        add_to_expression!.(obj, opf.prob[c], p_survive * (cost.ramp * gd))
         # add_to_expression!.(obj, opf.prob[c], p_survive * oplim.ramp_mult * (cost[1] * g^2 + cost[2] * g))
     end
 
     # Add new constraints that limit the corrective variables within operating limits
     balance_pc = JuMP.@expression(mod, sum(lsc))
     add_to_expression!.(balance_pc, -prc)
-    add_to_expression!.(balance_pc, -pgc)
+    add_to_expression!.(balance_pc, pgu)
+    add_to_expression!.(balance_pc, -pgd)
     JuMP.@constraint(mod, balance_pc == 0.0)
     if isempty(islands)
-        JuMP.@constraint(mod, mod[:pg0] .- pgc .>= 0)
+        JuMP.@constraint(mod, mod[:pg0] .+ pgu .- pgd .>= oplim.pg_lim_min)
     else
         itr = length(islands[island]) < 2 ? Int[] : islands[island]
         for n in itr
-            JuMP.@constraint(mod, [g = list[n].ctrl_generation], mod[:pg0][g] - pgc[g] >= 0.0)
+            JuMP.@constraints(mod, begin
+                [g = list[n].ctrl_generation], mod[:pg0][g] + pgu[g] - pgd[g] >= oplim.pg_lim_min[g]
+                [g = list[n].ctrl_generation], mod[:pg0][g] + pgu[g] - pgd[g] <= oplim.pg_lim_max[g]
+            end)
         end
         itr = isempty(itr) ? (1:length(opf.nodes)) : islands[1:end.!=island]
         for in_vec in itr
             for n in in_vec
-                JuMP.@constraint(mod, [g = list[n].ctrl_generation], mod[:pg0][g] - pgc[g] == 0.0)
+                for g in list[n].ctrl_generation
+                    JuMP.set_upper_bound(pgu[g], oplim.pg_lim_max[g] - oplim.pg_lim_min[g])
+                    JuMP.@constraint(mod, mod[:pg0][g] + pgu[g] - pgd[g] == 0.0)
+                end
                 fix!(prc, oplim.pr_lim, list[n].renewables)
                 fix!(lsc, oplim.pd_lim, list[n].demands)
             end
         end
     end
-    return pgc, prc, lsc
+    return pgu, pgd, prc, lsc
 end
 
 function init_P!(Pcc::Dict{<:Integer,ExprCC}, opf::OPFsystem, oplim::Oplimits, mod::Model, obj::JuMP.AbstractJuMPScalar, list::Vector{<:CTypes{Int}},
@@ -327,22 +339,24 @@ function init_P!(Pcc::Dict{<:Integer,ExprCC}, opf::OPFsystem, oplim::Oplimits, m
     JuMP.@constraint(mod, balance_pcc == 0.0)
     if isempty(islands)
         JuMP.@constraints(mod, begin
-            mod[:pg0] .+ pgu .- pgd .>= 0.0
+            mod[:pg0] .+ pgu .- pgd .>= oplim.pg_lim_min
             mod[:pg0] .+ pgu .- pgd .<= oplim.pg_lim_max
         end)
     else
         itr = length(islands[island]) < 2 ? Int[] : islands[island]
         for n in itr
             JuMP.@constraints(mod, begin
-                [g = list[n].ctrl_generation], mod[:pg0][g] + pgu[g] - pgd[g] >= 0.0
+                [g = list[n].ctrl_generation], mod[:pg0][g] + pgu[g] - pgd[g] >= oplim.pg_lim_min[g]
                 [g = list[n].ctrl_generation], mod[:pg0][g] + pgu[g] - pgd[g] <= oplim.pg_lim_max[g]
             end)
         end
         itr = isempty(itr) ? (1:length(opf.nodes)) : islands[1:end.!=island]
         for in_vec in itr
             for n in in_vec
-                JuMP.@constraint(mod, [g = list[n].ctrl_generation], mod[:pg0][g] - pgd[g] == 0.0)
-                fix!(pgu, list[n].ctrl_generation)
+                for g in list[n].ctrl_generation
+                    JuMP.set_upper_bound(pgu[g], oplim.pg_lim_max[g] - oplim.pg_lim_min[g])
+                    JuMP.@constraint(mod, mod[:pg0][g] + pgu[g] - pgd[g] == 0.0)
+                end
                 fix!(pfdccc, list[n].dc_branches)
                 fix!(prcc, oplim.pr_lim, list[n].renewables)
                 fix!(lscc, oplim.pd_lim, list[n].demands)
@@ -411,7 +425,8 @@ end
 
 function fix_short_term!(mod::Model, Pc::Dict{<:Integer,ExprC})
     for (_, c) in Pc
-        fix_values!(mod, c.pgc)
+        fix_values!(mod, c.pgu)
+        fix_values!(mod, c.pgd)
         fix_values!(mod, c.prc)
         fix_values!(mod, c.lsc)
     end
@@ -435,7 +450,7 @@ calc_ctrl_cost(mod::Model, opf::OPFsystem, var::AbstractVector{JuMP.VariableRef}
 calc_objective(mod::Model, opf::OPFsystem) =
     calc_ctrl_cost(mod, opf, mod[:pg0]) + calc_cens(mod, opf, mod[:ls0])
 calc_objective(mod::Model, opf::OPFsystem, expr::ExprC, ramp_mult=1.0) =
-    ramp_mult * calc_ctrl_cost(mod, opf, expr.pgc) + calc_cens(mod, opf, expr.lsc)
+    ramp_mult * (calc_ctrl_cost(mod, opf, expr.pgu) + calc_ctrl_cost(mod, opf, expr.pgd)) + calc_cens(mod, opf, expr.lsc)
 calc_objective(mod::Model, opf::OPFsystem, expr::ExprCC, ramp_mult=1.0) =
     ramp_mult * (calc_ctrl_cost(mod, opf, expr.pgu) + calc_ctrl_cost(mod, opf, expr.pgd)) + calc_cens(mod, opf, expr.lscc)
 calc_objective(mod::Model, opf::OPFsystem, expr::ExprCCX, ramp_mult=1.0) =

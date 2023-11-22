@@ -1,6 +1,6 @@
 import Plots
 
-system = System("data\\4-area\\4_area.raw")
+system = System(joinpath("data","4-area","4_area.raw"))
 set_active_power!.(SCOPF.sort_components!(get_components(StaticLoad, system)), 
     [258.81*0.425, 0*0.425, 323.52*0.425, 95.819*0.17, 336.15*0.17, 208.64*0.17, 0*1.19, 257.34*1.19, 331.03*1.19, 68.269*1.7] ./100)
 # SCOPF.fix_generation_cost!(system);

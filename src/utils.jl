@@ -68,12 +68,22 @@ PowerSystems.set_active_power!(dem::StandardLoad, val::Real) =
 function set_ramp_limits!(system::System, ramp_mult::Real=0.01)
     set_ramp_limit!.(get_ctrl_generation(system), ramp_mult)
 end
-function set_ramp_limit!(gen::Generator, ramp_mult::Real=0.01, min_ramp=1e-6)
-    ramp_lim = PowerSystems.get_ramp_limits(gen)
-    if ramp_lim < (up=min_ramp, down=min_ramp)
-        p_lim = get_active_power_limits(gen)
-        PowerSystems.set_ramp_limits!(gen, (up=(p_lim.max * ramp_mult), down=(p_lim.max * ramp_mult)))
+function set_ramp_limit!(gen::Generator, ramp_mult::Real=0.01)
+    p_lim = get_active_power_limits(gen)
+    PowerSystems.set_ramp_limits!(gen, (up=(p_lim.max * ramp_mult), down=(p_lim.max * ramp_mult)))
+end
+const fueldict = Dict(ThermalFuels.COAL => 0.02, ThermalFuels.DISTILLATE_FUEL_OIL => 0.03, ThermalFuels.NATURAL_GAS => 0.04, ThermalFuels.NUCLEAR => 0.005, ThermalFuels.OTHER => 0.01)
+function set_ramp_limit!(gen::ThermalStandard, ramp_mult::Real=0.0)
+    p_lim = get_active_power_limits(gen)
+    if iszero(ramp_mult)
+        type = get_fuel(gen)
+        ramp_mult = fueldict[type]
     end
+    PowerSystems.set_ramp_limits!(gen, (up=(p_lim.max * ramp_mult), down=(p_lim.max * ramp_mult)))
+end
+function set_ramp_limit!(gen::HydroDispatch, ramp_mult::Real=0.2)
+    p_lim = get_active_power_limits(gen)
+    PowerSystems.set_ramp_limits!(gen, (up=(p_lim.max * ramp_mult), down=(p_lim.max * ramp_mult)))
 end
 
 get_generator_cost(gen::Generator) = get_operation_cost(gen) |> get_variable |> get_cost |> _get_g_value
