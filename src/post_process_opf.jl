@@ -123,10 +123,10 @@ function print_contingency_power_flow(opf::OPFsystem, mod::Model, pf::DCPowerFlo
     island_b = Int[]
     ΔP = similar(Pᵢ)
     !all && println("         Branch     Flow  Rating")
-    for c_obj in opf.contingencies
-        (typelist, c, cont) = typesort_component(c_obj, opf, idx)
-        if is_islanded(pf, cont, c)
-            islands, island, island_b = handle_islands(pf.B, pf.DA, cont, c, pf.slack)
+    for (i, c_obj) in enumerate(opf.contingencies)
+        cont = typesort_component(c_obj, opf, idx)
+        if is_islanded(pf, cont[2], cont[1])
+            islands, island, island_b = handle_islands(pf.B, pf.DA, cont[2], cont[1], pf.slack)
             inodes = islands[island]
         else
             empty!(islands)
@@ -134,7 +134,7 @@ function print_contingency_power_flow(opf::OPFsystem, mod::Model, pf::DCPowerFlo
             empty!(island_b)
             inodes = Int[]
         end
-        flow = calculate_contingency_line_flows!(ΔP, Pc, opf, mod, pf, Pᵢ, list, cont, c, c_obj, inodes, island_b)
+        flow = calculate_contingency_line_flows!(ΔP, Pc, opf, mod, pf, Pᵢ, list, cont, i, c_obj, inodes, island_b)
         if all || any(abs.(flow) .> linerates * risky_flow)
             println("Contingency ", c_obj.name)
             print_power_flow(b_names, flow, linerates; all=all, sep=sep, risky_flow=risky_flow, atol=atol)
