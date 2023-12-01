@@ -86,15 +86,19 @@ function print_active_power(opf::OPFsystem, mod::Model)
     @printf("\n       Sum %10.6f\n", tot)
 end
 
-function print_power_flow(opf::OPFsystem, mod::Model; all=true, sep::String=" ", risky_flow=0.9, atol=1e-8)
+function print_power_flow(opf::OPFsystem, mod::Model; subset::AbstractVector{<:Integer}=Int64[],
+    all=true, sep::String=" ", risky_flow=0.9, atol=1e-8
+)
+    br_names = get_name.(opf.branches)
+    flow = calculate_line_flows(get_isf(opf.branches, opf.nodes), get_net_Pᵢ(opf, mod))
+    rate = get_rate.(opf.branches)
+    if !isempty(subset)
+        br_names = br_names[subset]
+        flow = flow[subset]
+        rate = rate[subset]
+    end
     print_power_flow(
-        get_name.(opf.branches), 
-        calculate_line_flows(get_isf(opf.branches, opf.nodes), get_net_Pᵢ(opf, mod)),
-        get_rate.(opf.branches);
-        all=all,
-        sep=sep,
-        risky_flow=risky_flow,
-        atol=atol
+        br_names, flow, rate; all=all, sep=sep, risky_flow=risky_flow, atol=atol
     )
 end
 
@@ -116,7 +120,7 @@ end
 
 function print_contingency_power_flow(opf::OPFsystem, mod::Model, pf::DCPowerFlow, list::Vector{<:CTypes{Int}},
     idx::Dict, Pᵢ::AbstractVector{<:Real}, b_names::Vector{String}, linerates::Vector{<:Float64}, Pc::Dict; 
-    all=true, sep::String=" ", risky_flow=0.9, atol=1e-8
+    subset::AbstractVector{<:Integer}=Int64[], all=true, sep::String=" ", risky_flow=0.9, atol=1e-8
 )
     islands = Vector{Vector{Int}}()
     island = 0
@@ -137,7 +141,11 @@ function print_contingency_power_flow(opf::OPFsystem, mod::Model, pf::DCPowerFlo
         flow = calculate_contingency_line_flows!(ΔP, Pc, opf, mod, pf, Pᵢ, list, cont, i, c_obj, inodes, island_b)
         if all || any(abs.(flow) .> linerates * risky_flow)
             println("Contingency ", c_obj.name)
-            print_power_flow(b_names, flow, linerates; all=all, sep=sep, risky_flow=risky_flow, atol=atol)
+            if isempty(subset)
+                print_power_flow(b_names, flow, linerates; all=all, sep=sep, risky_flow=risky_flow, atol=atol)
+            else
+                print_power_flow(b_names[subset], flow[subset], linerates[subset]; all=all, sep=sep, risky_flow=risky_flow, atol=atol)
+            end
         end
     end
 end
@@ -145,7 +153,7 @@ end
 function print_contingency_power_flow(opf::OPFsystem, mod::Model, pf::DCPowerFlow, 
     Pc::Dict=Dict(), Pcc::Dict=Dict(), Pccx::Dict=Dict(), 
     short_term_multi::Float64=1.5, long_term_multi::Float64=1.0; 
-    all=true, sep::String=" ", risky_flow=0.9, atol=1e-8
+    subset::AbstractVector{<:Integer}=Int64[], all=true, sep::String=" ", risky_flow=0.9, atol=1e-8
 )
     b_names = get_name.(opf.branches)
     linerates = get_rate.(opf.branches)
@@ -158,19 +166,19 @@ function print_contingency_power_flow(opf::OPFsystem, mod::Model, pf::DCPowerFlo
     if !isempty(Pc) 
         println("Short-term post-contingency")
         print_contingency_power_flow(opf, mod, pf, list, idx, Pᵢ, b_names, brst, Pc; 
-                                     all=all, sep=sep, risky_flow=risky_flow, atol=atol)
+                                     subset=subset, all=all, sep=sep, risky_flow=risky_flow, atol=atol)
     end
 
     if !isempty(Pcc)
         println("Long-term post-contingency")
         print_contingency_power_flow(opf, mod, pf, list, idx, Pᵢ, b_names, brlt, Pcc; 
-                                     all=all, sep=sep, risky_flow=risky_flow, atol=atol)
+                                     subset=subset, all=all, sep=sep, risky_flow=risky_flow, atol=atol)
     end
 
     if !isempty(Pccx)
         println("Long-term post-contingency corrective failed")
         print_contingency_power_flow(opf, mod, pf, list, idx, Pᵢ, b_names, brlt, Pccx; 
-                                     all=all, sep=sep, risky_flow=risky_flow, atol=atol)
+                                     subset=subset, all=all, sep=sep, risky_flow=risky_flow, atol=atol)
     end
     return
 end
@@ -196,34 +204,65 @@ function print_results(opf::OPFsystem, mod::Model)
     print_variabels(opf.demands, mod[:ls0])
 end
 
-function print_contingency_results(opf::OPFsystem, Pc, Pcc, Pccx=Dict())
+function print_contingency_results(opf::OPFsystem, Pc::Dict{<:Integer, ExprC}, 
+    contingencies::AbstractVector{<:Component}, c::Integer
+)
+    x = get(Pc, c, 0)
+    if x != 0
+        println("Contingency ", contingencies[c].name)
+        print_corrective_values(opf.ctrl_generation, x.pgu, :pguc)
+        print_corrective_values(opf.ctrl_generation, x.pgd, :pgdc)
+        print_corrective_values(opf.renewables, x.prc, :prc)
+        print_corrective_values(opf.demands, x.lsc, :lsc)
+    end
+end
+
+function print_contingency_results(opf::OPFsystem, Pcc::Dict{<:Integer, ExprCC}, 
+    contingencies::AbstractVector{<:Component}, c::Integer
+)
+    x = get(Pcc, c, 0)
+    if x != 0
+        println("Contingency ", contingencies[c].name)
+        print_corrective_values(opf.ctrl_generation, x.pgu, :pgucc)
+        print_corrective_values(opf.ctrl_generation, x.pgd, :pgdcc)
+        print_corrective_values(opf.dc_branches, x.pfdccc, :pfdccc)
+        print_corrective_values(opf.renewables, x.prcc, :prcc)
+        print_corrective_values(opf.demands, x.lscc, :lscc)
+    end
+end
+
+function print_contingency_results(opf::OPFsystem, Pccx::Dict{<:Integer, ExprCCX}, 
+    contingencies::AbstractVector{<:Component}, c::Integer
+)
+    x = get(Pccx, c, 0)
+    if x != 0
+        println("Contingency ", contingencies[c].name)
+        print_corrective_values(opf.ctrl_generation, x.pgdx, :pgdx)
+        print_corrective_values(opf.renewables, x.prccx, :prccx)
+        print_corrective_values(opf.demands, x.lsccx, :lsccx)
+    end
+end
+
+function print_contingency_results(opf::OPFsystem, Pc::Dict{<:Integer, ExprC}, Pcc::Dict{<:Integer, ExprCC}, Pccx=Dict())
     if !isempty(Pc)
-        for (i, c) in enumerate(opf.contingencies)
-            x = get(Pc, i, 0)
-            if x != 0
-                println("Contingency ", c.name)
-                print_corrective_values(opf.ctrl_generation, x.pgu, :pguc)
-                print_corrective_values(opf.ctrl_generation, x.pgd, :pgdc)
-                print_corrective_values(opf.renewables, x.prc, :prc)
-                print_corrective_values(opf.demands, x.lsc, :lsc)
-            end
+        for i in 1:length(opf.contingencies)
+            print_contingency_results(opf, Pc, opf.contingencies, i)
         end
     end
-
+    
     if !isempty(Pcc)
-        for (i, c) in enumerate(opf.contingencies)
-            x = get(Pcc, i, 0)
-            if x != 0
-                println("Contingency ", c.name)
-                print_corrective_values(opf.ctrl_generation, x.pgu, :pgucc)
-                print_corrective_values(opf.ctrl_generation, x.pgd, :pgdcc)
-                print_corrective_values(opf.dc_branches, x.pfdccc, :pfdccc)
-                print_corrective_values(opf.renewables, x.prcc, :prcc)
-                print_corrective_values(opf.demands, x.lscc, :lscc)
-            end
+        for i in 1:length(opf.contingencies)
+            print_contingency_results(opf, Pcc, opf.contingencies, i)
+        end
+    end
+    
+    if !isempty(Pccx)
+        for i in 1:length(opf.contingencies)
+            print_contingency_results(opf, Pccx, opf.contingencies, i)
         end
     end
 end
+
 
 function print_contingency_P(opf::OPFsystem, Pc, Pcc, Pccx=Dict())
     idx = get_nodes_idx(opf.nodes)

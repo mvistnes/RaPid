@@ -110,5 +110,6 @@ function benders_pc_scopf()
     @test JuMP.objective_value(mod_ptdf) ≈ JuMP.objective_value(model)
 
     SCOPF.print_power_flow(opf, model)
-    SCOPF.print_contingency_power_flow(opf, model, pf, Pc, Pcc, Pccx, short, long; all=false)
+    bx = SCOPF.typesort_component.(SCOPF.get_interarea(opf.branches), [opf], [idx])
+    SCOPF.print_contingency_power_flow(opf, model, pf, Pc, Pcc, Pccx, short, long; subset=first.(bx))
 end
