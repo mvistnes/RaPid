@@ -89,9 +89,11 @@ function run_benders!(
 
     # Set variables
     bd = benders(opf, mod)
+    set_dist_slack!(pf, opf, bd.idx)
     calc_θ!(pf, bd.Pᵢ)
     calc_Pline!(pf)
     overloads = zeros(length(opf.contingencies))
+    # PI = zeros(length(opf.contingencies))
 
     pg = get_value(mod, :pg0)
     for (i, c_obj) in enumerate(opf.contingencies)
@@ -113,9 +115,11 @@ function run_benders!(
             if typeof(c_obj) <: ACBranch
                 flow = calculate_contingency_line_flows(mod, pf, bd.Pᵢ, cont, i, c_obj, Int[], Int[])
             else
-                flow = calculate_contingency_line_flows(mod, pf, bd.Pᵢ, cont, i, c_obj, Int[], Int[], pg[c])
+                flow = calculate_contingency_line_flows(mod, pf, bd.Pᵢ, cont, i, c_obj, Int[], Int[], pg[cont[2]])
             end
         end
+
+        # PI[i] = maximum((flow ./ (oplim.branch_rating * oplim.short_term_multi)).^2)
 
         # Calculate the power flow with the new outage and find if there are any overloads
         overload = filter_overload(flow, oplim.branch_rating * oplim.short_term_multi)
@@ -147,6 +151,7 @@ function run_benders!(
     island_b = Int[]
 
     permutation = sortperm(overloads, rev=true)
+    # permutation = sortperm(PI, rev=true)
     cut_added = 1
     for iterations in 1:max_itr
         if cut_added == 0 # loops until no new cuts are added for the contingencies
@@ -285,7 +290,7 @@ function calculate_contingency_line_flows!(ΔP::Vector{<:Real}, P::Dict{<:Intege
         return calculate_contingency_line_flows(mod, pf, Pᵢ, cont, c, c_obj, island, island_b)
     end
     ΔP = get_ΔP!(ΔP, mod, opf, list, P, c)
-    ΔP[cont] -= get_ΔP(mod, c, c_obj, P)
+    ΔP[cont[2]] -= get_ΔP(mod, c, c_obj, P)
     LinearAlgebra.mul!(pf.vb_tmp, pf.ϕ, (Pᵢ .+ ΔP))
     return pf.vb_tmp
 end
@@ -304,9 +309,9 @@ function calculate_contingency_line_flows(
     mod::Model, pf::DCPowerFlow, P::Vector{<:Real}, cont::Tuple{Real,Real}, c::Integer, c_obj::StaticInjection,
     island::Vector, island_b::Vector{<:Integer}, val=get_ΔP(mod, c, c_obj)
 )
-    P[cont] -= val
+    P[cont[2]] -= val
     LinearAlgebra.mul!(pf.vb_tmp, pf.ϕ, P)
-    P[cont] += val
+    P[cont[2]] += val
     return pf.vb_tmp
 end
 

@@ -84,6 +84,28 @@ function calc_Pᵢ_from_flow(branches::AbstractVector{<:Branch}, F::AbstractVect
     return P
 end
 
+""" Distributed slack """
+function set_dist_slack!(pf::DCPowerFlow, mgx::AbstractMatrix{<:Real}, dist_slack::AbstractVector{<:Real})
+    @assert !iszero(sum(dist_slack))
+    slack_array = dist_slack / sum(dist_slack)
+    # slack_array = reshape(slack_array, 1, size(mgx, 1))
+    pf.ϕ = pf.ϕ .- ((slack_array' * mgx) * pf.ϕ')'
+    return pf.ϕ
+end
+function set_dist_slack!(pf::DCPowerFlow, opf::OPFsystem, idx::Dict{<:Int,<:Integer}, dist_slack::AbstractVector{<:Real} = Float64[])
+    if isempty(dist_slack)
+        dist_slack = getproperty.(get_active_power_limits.(opf.ctrl_generation), [:max])
+    end
+    mgx = calc_connectivity(opf.ctrl_generation, length(opf.nodes), idx)
+    set_dist_slack!(pf, mgx, dist_slack)
+end
+
+""" Make the component connectivity matrix """
+function calc_connectivity(vals::AbstractVector{<:StaticInjection}, num_nodes::Integer, idx::Dict{<:Int,<:Integer})
+    num = length(vals)
+    return SparseArrays.sparse(1:num, get_bus_idx.(vals, [idx]), one(Int8), num, num_nodes)
+end
+
 """ Make the branch connectivity matrix """
 function calc_A(branches::AbstractVector{<:Tuple{Integer,Integer}})
     num_b = length(branches)

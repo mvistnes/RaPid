@@ -1,5 +1,5 @@
 using Test
-import .RaPidSCOPF as SCOPF
+import RaPidSCOPF as SCOPF
 
 @testset "Test dc power flow" begin
     include("test_dc_power_flow.jl")

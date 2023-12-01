@@ -161,7 +161,7 @@ function calculate_line_flows!(F::AbstractVector{T}, ϕ::AbstractMatrix{<:Real},
 ) where {T<:Real}
     ix = ones(size(ϕ,2))
     zero_not_in_array!(ix, nodes)
-    ϕ = ϕ₀ * LinearAlgebra.Diagonal(ix)
+    LinearAlgebra.mul!(ϕ, ϕ₀, LinearAlgebra.Diagonal(ix))
     LinearAlgebra.mul!(F, ϕ, Pᵢ)
     zero_not_in_array!(F, branches)
     return F

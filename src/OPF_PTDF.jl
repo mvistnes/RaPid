@@ -131,6 +131,7 @@ function add_all_contingencies!(type::OPF, opf::OPFsystem, oplim::Oplimits, mod:
     Pc::Dict{<:Integer,ExprC}, Pcc::Dict{<:Integer,ExprCC}, Pccx::Dict{<:Integer,ExprCCX}
 )
     obj = objective_function(mod)
+    set_dist_slack!(pf, opf, idx)
     for (i, c_obj) in enumerate(opf.contingencies)
         cont = typesort_component(c_obj, opf, idx)
         if is_islanded(pf, cont[2], cont[1])
