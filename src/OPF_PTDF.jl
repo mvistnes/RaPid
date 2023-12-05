@@ -45,6 +45,7 @@ function opf_base(type::OPF, system::System, optimizer;
     voll=Float64[],
     contingencies=Component[],
     prob=Float64[],
+    dist_slack=Float64[],
     time_limit_sec::Int64=600,
     unit_commit::Bool=false,
     ramp_minutes::Real=10.0,
@@ -121,17 +122,17 @@ function opf_base(type::OPF, system::System, optimizer;
     end
 
     if any([type.P, type.C1, type.C2, type.C2F])
-        return add_all_contingencies!(type, opf, oplim, mod, list, pf, idx, Pc, Pcc, Pccx)
+        return add_all_contingencies!(type, opf, oplim, mod, list, pf, idx, dist_slack, Pc, Pcc, Pccx)
     end
     return mod, opf, pf, oplim, Pc, Pcc, Pccx
 end
 
 function add_all_contingencies!(type::OPF, opf::OPFsystem, oplim::Oplimits, mod::Model, list::Vector{<:CTypes{Int}},
-    pf::DCPowerFlow, idx::Dict{<:Int,<:Int},
+    pf::DCPowerFlow, idx::Dict{<:Int,<:Int}, dist_slack::Vector{<:Real},
     Pc::Dict{<:Integer,ExprC}, Pcc::Dict{<:Integer,ExprCC}, Pccx::Dict{<:Integer,ExprCCX}
 )
     obj = objective_function(mod)
-    set_dist_slack!(pf, opf, idx)
+    set_dist_slack!(pf, opf, idx, dist_slack)
     for (i, c_obj) in enumerate(opf.contingencies)
         cont = typesort_component(c_obj, opf, idx)
         if is_islanded(pf, cont[2], cont[1])
@@ -409,14 +410,19 @@ function init_P!(Pccx::Dict{<:Integer,ExprCCX}, opf::OPFsystem, oplim::Oplimits,
     return pgd, prcc, lscc
 end
 
+""" Force a variable to equal a value"""
 fix!(var::AbstractVector{JuMP.VariableRef}, val::AbstractVector{<:Real}, vec::AbstractVector) =
     JuMP.fix.(var[vec], val[vec]; force=true)
+
+""" Force a variable to equal zero"""
 fix!(var::AbstractVector{JuMP.VariableRef}, vec::AbstractVector) =
     JuMP.fix.(var[vec], 0.0; force=true)
 
+""" Force a variable to equal its current value in the model """
 fix_values!(mod::Model, symb::Symbol) = JuMP.fix.(mod[symb], get_value(mod, symb), force=true)
 fix_values!(mod::Model, var::AbstractVector{JuMP.VariableRef}) = JuMP.fix.(var, get_value(mod, var), force=true)
 
+""" Fix all base case varibles to its current values in the model """
 function fix_base_case!(mod::Model)
     fix_values!(mod, :pg0)
     fix_values!(mod, :pfdc0)
@@ -424,6 +430,7 @@ function fix_base_case!(mod::Model)
     fix_values!(mod, :pr0)
 end
 
+""" Fix all short term varibles to its current values in the model """
 function fix_short_term!(mod::Model, Pc::Dict{<:Integer,ExprC})
     for (_, c) in Pc
         fix_values!(mod, c.pgu)
@@ -433,6 +440,7 @@ function fix_short_term!(mod::Model, Pc::Dict{<:Integer,ExprC})
     end
 end
 
+""" Fix all long term varibles to its current values in the model """
 function fix_long_term!(mod::Model, Pcc::Dict{<:Integer,ExprCC})
     for (_, c) in Pcc
         fix_values!(mod, c.pgu)
@@ -443,21 +451,60 @@ function fix_long_term!(mod::Model, Pcc::Dict{<:Integer,ExprCC})
     end
 end
 
+""" Calculate the cost of VOLL for the provided variables """
 calc_cens(mod::Model, opf::OPFsystem, var::AbstractVector{JuMP.VariableRef}) = sum(opf.voll .* get_value(mod, var))
+
+""" Calculate the cost of generation for the provided variables """
 calc_ctrl_cost(mod::Model, opf::OPFsystem, var::AbstractVector{JuMP.VariableRef}) =
     sum(c[2] * g for (c, g) in zip(opf.cost_ctrl_gen, get_value(mod, var)))
     # sum(c[1] * g^2 + c[2] * g for (c, g) in zip(opf.cost_ctrl_gen, get_value(mod, var)))
 
+""" Calculate the cost of the modelled slack for all contingencies. """
+function calc_slack_cost(mod::Model, opf::OPFsystem, pf::DCPowerFlow; dist_slack=Float64[], ramp_mult=1.0)
+    @assert isempty(dist_slack) || isapprox(sum(dist_slack), 1.0)
+    cost = 0.0 #calc_objective(mod, opf)
+    idx = get_nodes_idx(opf.nodes)
+    list = make_list(opf, idx, opf.nodes)
+    Pg = get_controllable(opf, mod, idx)
+    Pd = get_Pd(opf, idx)
+    if isempty(dist_slack) 
+        slack_cost = sum(last.(get_generator_cost.(opf.ctrl_generation[list[pf.slack].ctrl_generation]))) 
+    else
+        slack_cost = sum(getproperty.(opf.cost_ctrl_gen, :var) .* dist_slack)
+    end
+    for (i, c_obj) in enumerate(opf.contingencies)
+        cont = typesort_component(c_obj, opf, idx)
+        if is_islanded(pf, cont[2], cont[1])
+            islands, island, island_b = handle_islands(pf.B, pf.DA, cont[2], cont[1], pf.slack)
+            nodes = reduce(vcat, islands[1:end .!= island])
+            dem = reduce(vcat, getproperty.(list[nodes], :demands))
+            cost += opf.prob[i] * (sum(slack_cost * abs.(Pd[nodes] .- Pg[nodes])) * ramp_mult - sum(opf.voll[dem] .* Pd[nodes]))
+        end
+    end
+    return cost
+end
+
+""" Calculate the base case cost """
 calc_objective(mod::Model, opf::OPFsystem) =
     calc_ctrl_cost(mod, opf, mod[:pg0]) + calc_cens(mod, opf, mod[:ls0])
+
+""" Calculate the short term state cost """
 calc_objective(mod::Model, opf::OPFsystem, expr::ExprC, ramp_mult=1.0) =
     ramp_mult * (calc_ctrl_cost(mod, opf, expr.pgu) + calc_ctrl_cost(mod, opf, expr.pgd)) + calc_cens(mod, opf, expr.lsc)
+
+""" Calculate the long term state cost """
 calc_objective(mod::Model, opf::OPFsystem, expr::ExprCC, ramp_mult=1.0) =
     ramp_mult * (calc_ctrl_cost(mod, opf, expr.pgu) + calc_ctrl_cost(mod, opf, expr.pgd)) + calc_cens(mod, opf, expr.lscc)
+
+""" Calculate the long term with corrective failure state cost """
 calc_objective(mod::Model, opf::OPFsystem, expr::ExprCCX, ramp_mult=1.0) =
     ramp_mult * 60 * calc_ctrl_cost(mod, opf, expr.pgdx) + calc_cens(mod, opf, expr.lsccx)
+
+""" Calculate a state cost """
 calc_objective(mod::Model, opf::OPFsystem, P::Dict, ramp_mult=1.0) =
     sum((opf.prob[i] * calc_objective(mod, opf, c, ramp_mult) for (i, c) in P), init=0.0)
+
+""" Calculate the total cost """
 calc_objective(mod::Model, opf::OPFsystem, Pc::Dict{<:Integer,ExprC},
     Pcc::Dict{<:Integer,ExprCC}, Pccx::Dict{<:Integer,ExprCCX}, ramp_mult=1.0
 ) = calc_objective(mod, opf) + calc_objective(mod, opf, Pc, ramp_mult) +

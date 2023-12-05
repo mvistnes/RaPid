@@ -140,7 +140,7 @@ make_prob(contingencies::AbstractVector, prob_min=0.1, prob_max=0.4) =
 get_system(fname::String) = System(joinpath("data", fname))
 
 function create_model(optimizer; time_limit_sec::Integer=10000, silent::Bool=true, debug::Bool=false)
-    mod = Model(optimizer; add_bridges=false)
+    mod = direct_model(optimizer)
     set_string_names_on_creation(mod, debug)
     MOI.set(mod, MOI.Silent(), silent) # supress output from the solver
     set_time_limit_sec(mod, time_limit_sec)

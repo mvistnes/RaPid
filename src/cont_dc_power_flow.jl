@@ -5,6 +5,17 @@ function neutralize_line!(B::AbstractMatrix, i::Integer, j::Integer, val::Real)
     B[j, j] -= val
 end
 
+# TODO
+function get_dist_slack!(ϕ::AbstractMatrix{<:Real}, ϕ₀::AbstractMatrix{<:Real}, mgx::AbstractMatrix{<:Real}, dist_slack::AbstractVector{<:Real}, c::Integer)
+    @assert !iszero(sum(dist_slack))
+    slack_array = dist_slack / sum(dist_slack)
+    c_val = slack_array[c]
+    slack_array *= (c_val / (1 - c_val))
+    slack_array[c] /= (c_val / (1 - c_val))
+    ϕ = ϕ₀ .+ ((slack_array' * mgx) * ϕ₀')'
+    return ϕ
+end
+
 """ 
     Make the B-matrix after a line outage, which splits the system, using base case D*A and B. 
     cont[1] (from_bus), cont[2] (to_bus), and cont_branch are index numbers 

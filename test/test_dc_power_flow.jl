@@ -18,7 +18,7 @@ system = SCOPF.System(joinpath("data","matpower","IEEE_RTS.m")); c1 = 1; c2 = 11
 # system = SCOPF.System(joinpath("data","matpower","case_ACTIVSg10k.m")); c1 = 1; c2 = 4
 SCOPF.fix_generation_cost!(system);
 voll = SCOPF.make_voll(system)
-model, opf, pf, oplim, _, _, _ = SCOPF.opf_base(SCOPF.OPF(true, false, false, false, false), system, HiGHS.Optimizer, voll=voll);
+model, opf, pf, oplim, _, _, _ = SCOPF.opf_base(SCOPF.OPF(true, false, false, false, false), system, HiGHS.Optimizer(), voll=voll);
 SCOPF.solve_model!(model)
 idx = SCOPF.get_nodes_idx(opf.nodes)
 bx = SCOPF.get_bus_idx.(opf.branches, [idx])

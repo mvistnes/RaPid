@@ -304,7 +304,7 @@ calc_Pline!(pf::DCPowerFlow) = LinearAlgebra.mul!(pf.F, pf.DA, pf.θ)
 calculate_line_flows(isf::AbstractMatrix{<:Real}, Pᵢ::AbstractVector{<:Real}) = isf * Pᵢ
 calculate_line_flows!(pf::DCPowerFlow, Pᵢ::AbstractVector{<:Real}) = LinearAlgebra.mul!(pf.F, pf.ϕ, Pᵢ)
 
-""" DC power flow calculation using the Admittance matrix and Power Injection vector returning the bus angles """
+""" DC power flow calculation using the Admittance matrix factorization and Power Injection vector returning the bus angles """
 function run_pf!(θ::AbstractVector{<:Real}, K::KLU.KLUFactorization, P::AbstractVector{<:Real}, slack::Integer)
     copy!(θ, P)
     KLU.solve!(K, θ)

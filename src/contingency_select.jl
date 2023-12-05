@@ -98,7 +98,7 @@ function run_contingency_select!(
             if typeof(c_obj) <: ACBranch
                 flow = calculate_contingency_line_flows(mod, pf, bd.Pᵢ, cont, i, c_obj, Int[], Int[])
             else
-                flow = calculate_contingency_line_flows(mod, pf, bd.Pᵢ, cont, i, c_obj, Int[], Int[], pg[i])
+                flow = calculate_contingency_line_flows(mod, pf, bd.Pᵢ, cont, i, c_obj, Int[], Int[], pg[cont[1]])
             end
             # Calculate the power flow with the new outage and find if there are any overloads
             overload = filter_overload(flow, oplim.branch_rating * oplim.short_term_multi)

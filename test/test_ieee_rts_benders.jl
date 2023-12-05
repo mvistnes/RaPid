@@ -4,7 +4,7 @@ import JuMP
 # import Ipopt # LP, SOCP, NLP
 import Gurobi # LP, SOCP, NLP, MILP, MINLP
 # import GLPK # LP, MILP
-# import HiGHS # LP, MILP
+import HiGHS # LP, MILP
 # import Tulip
 import Random
 import Logging
@@ -21,7 +21,9 @@ import Logging
 ## SCOPF.reset_timer!(SCOPF.tmr)
 
 Random.seed!(42)
-optimizer = JuMP.optimizer_with_attributes(Gurobi.Optimizer, "Threads" => Threads.nthreads())
+const GUROBI_ENV = Gurobi.Env()
+# optimizer = Gurobi.Optimizer(GUROBI_ENV)
+# JuMP.set_optimizer_attribute(optimizer, "Threads", Threads.nthreads())
 # optimizer = JuMP.optimizer_with_attributes(GLPK.Optimizer, "msg_lev" => GLPK.GLP_MSG_ON)
 
 # open("output.txt", "w") do out
@@ -40,8 +42,8 @@ voll = [4304., 5098., 5245., 5419., 4834., 5585., 5785., 5192., 4575., 5244., 44
 branches = SCOPF.sort_components!(SCOPF.get_branches(system));
 ctrl_generation = SCOPF.sort_components!(SCOPF.get_ctrl_generation(system));
 # c = [7,12,13,21,22,23,27]
-contingencies = branches
-# contingencies = vcat(branches, ctrl_generation)
+# contingencies = branches
+contingencies = vcat(branches, ctrl_generation)
 prob =
     [ # spesified for the RTS-96
         0.24, 0.51, 0.33, 0.39, 0.48, 0.38, 0.02, 0.36, 0.34, 0.33, 0.30, 0.44, 0.44,
@@ -65,16 +67,16 @@ function test_benders(system, optimizer, voll, contingencies, prob, max_shed,ram
         p_failure = case.C2F ? 0.10 : 0.00
         println(case)
         println("Start PTDF")
-        mod_ptdf, opf_ptdf, pf_ptdf, oplim_ptdf, Pc_ptdf, Pcc_ptdf, Pccx_ptdf = SCOPF.opf_base(case, system, optimizer, voll=voll, contingencies=contingencies, prob=prob, max_shed=max_shed,
+        mod_ptdf, opf_ptdf, pf_ptdf, oplim_ptdf, Pc_ptdf, Pcc_ptdf, Pccx_ptdf = SCOPF.opf_base(case, system, HiGHS.Optimizer(), voll=voll, contingencies=contingencies, prob=prob, max_shed=max_shed,
             ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=p_failure);
         SCOPF.solve_model!(mod_ptdf);
 
         println("Start Contingency select")
-        mod_cont, opf_cont, pf_cont, oplim_cont, Pc_cont, Pcc_cont, Pccx_cont, tot_t = SCOPF.run_contingency_select(case, system, optimizer, voll, prob, contingencies, 
+        mod_cont, opf_cont, pf_cont, oplim_cont, Pc_cont, Pcc_cont, Pccx_cont, tot_t = SCOPF.run_contingency_select(case, system, HiGHS.Optimizer(), voll, prob, contingencies, 
             max_shed=max_shed, ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=p_failure);
 
         println("Start Benders")
-        model, opf, pf, oplim, Pc, Pcc, Pccx, tot_t = SCOPF.run_benders(case, system, optimizer, voll, prob, contingencies, max_shed=max_shed,
+        model, opf, pf, oplim, Pc, Pcc, Pccx, tot_t = SCOPF.run_benders(case, system, HiGHS.Optimizer(), voll, prob, contingencies, max_shed=max_shed,
             ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=p_failure);
 
         @test JuMP.objective_value(mod_ptdf) ≈ JuMP.objective_value(mod_cont)
@@ -83,25 +85,25 @@ function test_benders(system, optimizer, voll, contingencies, prob, max_shed,ram
     return
 end
 
-test_benders(system, optimizer, voll, contingencies, prob, max_shed,ramp_mult, ramp_minutes, short, long)
+test_benders(system, HiGHS.Optimizer(), voll, contingencies, prob, max_shed,ramp_mult, ramp_minutes, short, long)
 
 function benders_pc_scopf()
     println("\nPreventive-Corrective SCOPF")
     println("Start PTDF")
-    @time mod_ptdf, opf_ptdf, pf_ptdf, oplim_ptdf, Pc_ptdf, Pcc_ptdf, Pccx_ptdf = SCOPF.opf_base(SCOPF.PC2_SCOPF, system, optimizer, voll=voll, contingencies=contingencies, prob=prob, max_shed=max_shed,
+    @time mod_ptdf, opf_ptdf, pf_ptdf, oplim_ptdf, Pc_ptdf, Pcc_ptdf, Pccx_ptdf = SCOPF.opf_base(SCOPF.PC2_SCOPF, system, Gurobi.Optimizer(GUROBI_ENV), voll=voll, contingencies=contingencies, prob=prob, max_shed=max_shed,
         ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long);
     @time SCOPF.solve_model!(mod_ptdf);
     println("Objective value PTDF: ", JuMP.objective_value(mod_ptdf))
     SCOPF.print_contingency_results(opf_ptdf, Pc_ptdf, Pcc_ptdf)
 
     println("Start Contingency select")
-    @time mod_cont, opf_cont, pf_cont, oplim_cont, Pc_cont, Pcc_cont, Pccx_cont, tot_t = SCOPF.run_contingency_select(SCOPF.PC2_SCOPF, system, optimizer, voll, prob, contingencies, 
+    @time mod_cont, opf_cont, pf_cont, oplim_cont, Pc_cont, Pcc_cont, Pccx_cont, tot_t = SCOPF.run_contingency_select(SCOPF.PC2_SCOPF, system, Gurobi.Optimizer(GUROBI_ENV), voll, prob, contingencies, 
         max_shed=max_shed, ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=0.00);
     println("Solver time: ", tot_t, " Objective value Contingency select: ", JuMP.objective_value(mod_cont))
     SCOPF.print_contingency_results(opf_cont, Pc_cont, Pcc_cont, Pccx_cont)
 
     println("Start Benders")
-    @time model, opf, pf, oplim, Pc, Pcc, Pccx, tot_t = SCOPF.run_benders(SCOPF.PC2_SCOPF, system, optimizer, voll, prob, contingencies, max_shed=max_shed,
+    @time model, opf, pf, oplim, Pc, Pcc, Pccx, tot_t = SCOPF.run_benders(SCOPF.PC2_SCOPF, system, Gurobi.Optimizer(GUROBI_ENV), voll, prob, contingencies, max_shed=max_shed,
         ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=0.00);
     println("Solver time: ", tot_t, " Objective value Benders: ", JuMP.objective_value(model))
     SCOPF.print_contingency_results(opf, Pc, Pcc, Pccx)
@@ -110,6 +112,7 @@ function benders_pc_scopf()
     @test JuMP.objective_value(mod_ptdf) ≈ JuMP.objective_value(model)
 
     SCOPF.print_power_flow(opf, model)
+    idx = SCOPF.get_nodes_idx(opf.nodes)
     bx = SCOPF.typesort_component.(SCOPF.get_interarea(opf.branches), [opf], [idx])
     SCOPF.print_contingency_power_flow(opf, model, pf, Pc, Pcc, Pccx, short, long; subset=first.(bx))
 end
