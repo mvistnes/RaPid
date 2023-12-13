@@ -1,43 +1,53 @@
 """ Operational limits type """
 struct Oplimits{TR<:Real}
-    max_shed::TR
-    max_curtail::TR
     ramp_mult::TR
     ramp_minutes::TR
     p_failure::TR
-    short_term_multi::TR
-    long_term_multi::TR
 
     branch_rating::Vector{TR}
+    short_term_multi::Union{TR,Vector{TR}}
+    long_term_multi::Union{TR,Vector{TR}}
     pg_lim_min::Vector{TR}
     pg_lim_max::Vector{TR}
+    rampup::Vector{TR}
+    rampdown::Vector{TR}
     pr_lim::Vector{TR}
+    max_curtail::Union{TR,Vector{TR}}
     dc_lim_min::Vector{TR}
     dc_lim_max::Vector{TR}
     pd_lim::Vector{TR}
-    rampup::Vector{TR}
-    rampdown::Vector{TR}
+    max_shed::Union{TR,Vector{TR}}
 end
 
 """ Constructor for Oplimits """
 function oplimits(
     opf::OPFsystem,
-    max_shed::TR,
-    max_curtail::TR,
+    max_shed::Union{TR,Vector{TR}},
+    max_curtail::Union{TR,Vector{TR}},
     ramp_mult::TR,
     ramp_minutes::TR,
     p_failure::TR,
-    short_term_multi::TR,
-    long_term_multi::TR
+    short_term_multi::Union{TR,Vector{TR}},
+    long_term_multi::Union{TR,Vector{TR}}
 ) where {TR<:Real}
     branch_rating = get_rate.(opf.branches)
     (pg_lim_min, pg_lim_max) = split_pair(get_active_power_limits.(opf.ctrl_generation))
+    (rampup, rampdown) = split_pair(get_ramp_limits.(opf.ctrl_generation))
     pr_lim::Vector{TR} = get_active_power.(opf.renewables)
     (dc_lim_min::Vector{TR}, dc_lim_max::Vector{TR}) = split_pair(get_active_power_limits_from.(opf.dc_branches))
     pd_lim = get_active_power.(opf.demands)
-    (rampup, rampdown) = split_pair(get_ramp_limits.(opf.ctrl_generation))
-    return Oplimits{TR}(max_shed, max_curtail, ramp_mult, ramp_minutes, p_failure, short_term_multi, long_term_multi,
-        branch_rating, pg_lim_min, pg_lim_max, pr_lim, dc_lim_min, dc_lim_max, pd_lim, rampup, rampdown)
+    return Oplimits{TR}(ramp_mult, ramp_minutes, p_failure, branch_rating, short_term_multi, long_term_multi, 
+        pg_lim_min, pg_lim_max, rampup, rampdown, pr_lim, max_curtail, dc_lim_min, dc_lim_max, pd_lim, max_shed)
+end
+
+mutable struct SCOPF{TR<:Real,TI<:Integer}
+    model::Model
+    opf::OPFsystem{TR}
+    pf::DCPowerFlow{TR,TI}
+    oplim::Oplimits{TR}
+    Pc::Dict{Int,ExprC}
+    Pcc::Dict{Int,ExprCC}
+    Pccx::Dict{Int,ExprCCX}
 end
 
 """ Run an OPF of a power system """
@@ -50,17 +60,16 @@ function opf_base(type::OPF, system::System, optimizer;
     unit_commit::Bool=false,
     ramp_minutes::Real=10.0,
     ramp_mult::Real=10.0,
-    max_shed::Real=1.0,
-    max_curtail::Real=1.0,
-    short_term_multi::Real=1.5,
-    long_term_multi::Real=1.2,
+    max_shed=1.0,
+    max_curtail=1.0,
+    short_term_multi=1.5,
+    long_term_multi=1.2,
     p_failure=0.0,
     silent=true,
     debug=false
 )
     @assert type.Base
     assert(type)
-    @assert short_term_multi >= long_term_multi
     @assert !type.C2F | !iszero(p_failure)
     mod = create_model(optimizer, time_limit_sec=time_limit_sec, silent=silent, debug=debug)
     opf = isempty(voll) ? opfsystem(system) : opfsystem(system, voll, contingencies, prob, ramp_mult)
@@ -70,10 +79,12 @@ function opf_base(type::OPF, system::System, optimizer;
 
     list = make_list(opf, idx, opf.nodes)
     Pc = Dict{Int,ExprC}()
-    Pcc = Dict{Int,ExprCC}() 
-    Pccx = Dict{Int,ExprCCX}() 
+    Pcc = Dict{Int,ExprCC}()
+    Pccx = Dict{Int,ExprCCX}()
 
     oplim = oplimits(opf, max_shed, max_curtail, ramp_mult, ramp_minutes, p_failure, short_term_multi, long_term_multi)
+
+    scopf = SCOPF(mod, opf, pf, oplim, Pc, Pcc, Pccx)
 
     @variables(mod, begin
         p0[n in 1:length(opf.nodes)]
@@ -83,10 +94,10 @@ function opf_base(type::OPF, system::System, optimizer;
         oplim.dc_lim_min[l] <= pfdc0[l in 1:length(opf.dc_branches)] <= oplim.dc_lim_max[l]
         # power flow on DC branches
         pd[d in 1:length(opf.demands)]
-        0.0 <= ls0[d in 1:length(opf.demands)] <= oplim.pd_lim[d] * oplim.max_shed
+        0.0 <= ls0[d in 1:length(opf.demands)] <= oplim.pd_lim[d] * (typeof(oplim.max_shed) <: Real ? oplim.max_shed : 1.0)
         # demand curtailment variables
         pr[d in 1:length(opf.renewables)]
-        0.0 <= pr0[d in 1:length(opf.renewables)] <= oplim.pr_lim[d] * oplim.max_curtail
+        0.0 <= pr0[d in 1:length(opf.renewables)] <= oplim.pr_lim[d] * (typeof(oplim.max_curtail) <: Real ? oplim.max_curtail : 1.0)
         # renewable curtailment variables
     end)
 
@@ -95,6 +106,9 @@ function opf_base(type::OPF, system::System, optimizer;
 
     JuMP.fix.(pd, get_active_power.(opf.demands))
     JuMP.fix.(pr, get_active_power.(opf.renewables))
+    if typeof(oplim.max_shed) <: Real
+        @constraint(mod, sum(ls0) <= oplim.max_shed)
+    end
 
     @expression(mod, inj_p0, -p0)
     for n = 1:length(opf.nodes)
@@ -251,9 +265,9 @@ function init_P!(Pc::Dict{<:Integer,ExprC}, opf::OPFsystem, oplim::Oplimits, mod
         lower_bound = 0.0) #, upper_bound = rampdown[g] * 0.0)
     # and ramp down
     prc = JuMP.@variable(mod, [d in 1:length(opf.renewables)], base_name = @sprintf("prc%s", c),
-        lower_bound = 0.0, upper_bound = oplim.pr_lim[d] * oplim.max_curtail)
+        lower_bound = 0.0, upper_bound = oplim.pr_lim[d] * (typeof(oplim.max_curtail) <: Real ? oplim.max_curtail : 1.0))
     lsc = JuMP.@variable(mod, [d in 1:length(opf.demands)], base_name = @sprintf("lsc%s", c),
-        lower_bound = 0.0, upper_bound = oplim.pd_lim[d] * oplim.max_shed)
+        lower_bound = 0.0, upper_bound = oplim.pd_lim[d] * (typeof(oplim.max_shed) <: Real ? oplim.max_shed : 1.0))
     Pc[c] = ExprC(JuMP.VariableRef[], pgu, pgd, prc, lsc)
 
     p_survive = 1.0 - oplim.p_failure
@@ -273,6 +287,9 @@ function init_P!(Pc::Dict{<:Integer,ExprC}, opf::OPFsystem, oplim::Oplimits, mod
     JuMP.@constraint(mod, balance_pc == 0.0)
     if isempty(islands)
         JuMP.@constraint(mod, mod[:pg0] .+ pgu .- pgd .>= oplim.pg_lim_min)
+        if typeof(oplim.max_shed) <: Real
+            @constraint(mod, sum(lsc) <= oplim.max_shed)
+        end
     else
         itr = length(islands[island]) < 2 ? Int[] : islands[island]
         for n in itr
@@ -291,6 +308,9 @@ function init_P!(Pc::Dict{<:Integer,ExprC}, opf::OPFsystem, oplim::Oplimits, mod
                 fix!(prc, oplim.pr_lim, list[n].renewables)
                 fix!(lsc, oplim.pd_lim, list[n].demands)
             end
+        end
+        if typeof(oplim.max_shed) <: Real
+            @constraint(mod, sum(lsc) <= max(oplim.max_shed, sum((sum((sum((oplim.pd_lim[i] for i in list[n].demands), init=0.0) for n in in_vec), init=0.0) for in_vec in itr), init=0.0)))
         end
     end
     return pgu, pgd, prc, lsc
@@ -311,7 +331,7 @@ function init_P!(Pcc::Dict{<:Integer,ExprCC}, opf::OPFsystem, oplim::Oplimits, m
     prcc = JuMP.@variable(mod, [r in 1:length(opf.renewables)], base_name = @sprintf("prcc%s", c),
         lower_bound = 0.0, upper_bound = oplim.pr_lim[r] * oplim.max_curtail)
     lscc = JuMP.@variable(mod, [d in 1:length(opf.demands)], base_name = @sprintf("lscc%s", c),
-        lower_bound = 0.0, upper_bound = oplim.pd_lim[d] * oplim.max_shed)
+        lower_bound = 0.0, upper_bound = oplim.pd_lim[d] * (typeof(oplim.max_shed) <: Real ? oplim.max_shed : 1.0))
     # load curtailment variables in in contingencies
     Pcc[c] = ExprCC(JuMP.VariableRef[], pgu, pgd, pfdccc, prcc, lscc)
 
@@ -344,6 +364,9 @@ function init_P!(Pcc::Dict{<:Integer,ExprCC}, opf::OPFsystem, oplim::Oplimits, m
             mod[:pg0] .+ pgu .- pgd .>= oplim.pg_lim_min
             mod[:pg0] .+ pgu .- pgd .<= oplim.pg_lim_max
         end)
+        if typeof(oplim.max_shed) <: Real
+            @constraint(mod, sum(lscc) <= oplim.max_shed)
+        end
     else
         itr = length(islands[island]) < 2 ? Int[] : islands[island]
         for n in itr
@@ -364,6 +387,9 @@ function init_P!(Pcc::Dict{<:Integer,ExprCC}, opf::OPFsystem, oplim::Oplimits, m
                 fix!(lscc, oplim.pd_lim, list[n].demands)
             end
         end
+        if typeof(oplim.max_shed) <: Real
+            @constraint(mod, sum(lscc) <= max(oplim.max_shed, sum((sum((sum((oplim.pd_lim[i] for i in list[n].demands), init=0.0) for n in in_vec), init=0.0) for in_vec in itr), init=0.0)))
+        end
     end
     return pgu, pgd, pfdccc, prcc, lscc
 end
@@ -376,9 +402,9 @@ function init_P!(Pccx::Dict{<:Integer,ExprCCX}, opf::OPFsystem, oplim::Oplimits,
         lower_bound = 0.0)#, upper_bound = oplim.rampdown[g] * oplim.ramp_minutes)
     # and ramp down
     prcc = JuMP.@variable(mod, [r in 1:length(opf.renewables)], base_name = @sprintf("prccx%s", c),
-        lower_bound = 0.0, upper_bound = oplim.pr_lim[d] * oplim.max_curtail)
+        lower_bound = 0.0, upper_bound = oplim.pr_lim[d] * (typeof(oplim.max_curtail) <: Real ? oplim.max_curtail : 1.0))
     lscc = JuMP.@variable(mod, [d in 1:length(opf.demands)], base_name = @sprintf("lsccx%s", c),
-        lower_bound = 0.0, upper_bound = oplim.pd_lim[d] * oplim.max_shed)
+        lower_bound = 0.0, upper_bound = oplim.pd_lim[d] * (typeof(oplim.max_shed) <: Real ? oplim.max_shed : 1.0))
     # load curtailment variables in in contingencies
     Pccx[c] = ExprCCX(JuMP.VariableRef[], pgd, prcc, lscc)
 
@@ -457,31 +483,31 @@ calc_cens(mod::Model, opf::OPFsystem, var::AbstractVector{JuMP.VariableRef}) = s
 """ Calculate the cost of generation for the provided variables """
 calc_ctrl_cost(mod::Model, opf::OPFsystem, var::AbstractVector{JuMP.VariableRef}) =
     sum(c[2] * g for (c, g) in zip(opf.cost_ctrl_gen, get_value(mod, var)))
-    # sum(c[1] * g^2 + c[2] * g for (c, g) in zip(opf.cost_ctrl_gen, get_value(mod, var)))
+# sum(c[1] * g^2 + c[2] * g for (c, g) in zip(opf.cost_ctrl_gen, get_value(mod, var)))
 
 """ Calculate the cost of the modelled slack for all contingencies. """
 function calc_slack_cost(mod::Model, opf::OPFsystem, pf::DCPowerFlow; dist_slack=Float64[], ramp_mult=1.0)
-    @assert isempty(dist_slack) || isapprox(sum(dist_slack), 1.0)
-    cost = 0.0 #calc_objective(mod, opf)
+    costs = zeros(length(opf.contingencies))
     idx = get_nodes_idx(opf.nodes)
     list = make_list(opf, idx, opf.nodes)
     Pg = get_controllable(opf, mod, idx)
     Pd = get_Pd(opf, idx)
-    if isempty(dist_slack) 
-        slack_cost = sum(last.(get_generator_cost.(opf.ctrl_generation[list[pf.slack].ctrl_generation]))) 
+    if isempty(dist_slack)
+        slack_cost = sum(last.(get_generator_cost.(opf.ctrl_generation[list[pf.slack].ctrl_generation])))
     else
+        dist_slack = dist_slack / sum(dist_slack)
         slack_cost = sum(getproperty.(opf.cost_ctrl_gen, :var) .* dist_slack)
     end
     for (i, c_obj) in enumerate(opf.contingencies)
         cont = typesort_component(c_obj, opf, idx)
         if is_islanded(pf, cont[2], cont[1])
             islands, island, island_b = handle_islands(pf.B, pf.DA, cont[2], cont[1], pf.slack)
-            nodes = reduce(vcat, islands[1:end .!= island])
-            dem = reduce(vcat, getproperty.(list[nodes], :demands))
-            cost += opf.prob[i] * (sum(slack_cost * abs.(Pd[nodes] .- Pg[nodes])) * ramp_mult - sum(opf.voll[dem] .* Pd[nodes]))
+            nodes = reduce(vcat, islands[1:end.!=island], init=[])
+            dem = reduce(vcat, getproperty.(list[nodes], :demands), init=[])
+            costs[i] = sum(slack_cost * abs.(Pd[nodes] .- Pg[nodes])) * ramp_mult - sum(opf.voll[dem] .* Pd[nodes])
         end
     end
-    return cost
+    return costs
 end
 
 """ Calculate the base case cost """
@@ -509,3 +535,31 @@ calc_objective(mod::Model, opf::OPFsystem, Pc::Dict{<:Integer,ExprC},
     Pcc::Dict{<:Integer,ExprCC}, Pccx::Dict{<:Integer,ExprCCX}, ramp_mult=1.0
 ) = calc_objective(mod, opf) + calc_objective(mod, opf, Pc, ramp_mult) +
     calc_objective(mod, opf, Pcc, ramp_mult) + calc_objective(mod, opf, Pccx, ramp_mult)
+
+function print_costs(mod::Model, opf::OPFsystem, pf::DCPowerFlow; dist_slack=Float64[], ramp_mult=1.0
+)
+    base_cost = calc_objective(mod, opf)
+    slack_cost = sum(opf.prob .* calc_slack_cost(mod, opf, pf, dist_slack=dist_slack, ramp_mult=ramp_mult))
+    @printf "Base cost %.2f; " base_cost
+    @printf "Slack cost %.2f; " slack_cost
+    @printf "Total cost %.2f \n" base_cost + slack_cost
+    return base_cost, slack_cost
+end
+
+function get_costs(mod::Model, opf::OPFsystem, pf::DCPowerFlow, Pc::Dict{<:Integer,ExprC},
+    Pcc::Dict{<:Integer,ExprCC}, Pccx::Dict{<:Integer,ExprCCX}, dist_slack=Float64[], ramp_mult=1.0
+)
+    costs = SparseArrays.spzeros(length(opf.contingencies), 5)
+    costs[:,1] .= calc_objective(mod, opf)
+    for c in keys(Pc)
+        costs[c,2] = calc_objective(mod, opf, Pc[c], ramp_mult)
+    end
+    for c in keys(Pcc)
+        costs[c,3] = calc_objective(mod, opf, Pcc[c], ramp_mult)
+    end
+    for c in keys(Pccx)
+        costs[c,4] = calc_objective(mod, opf, Pccx[c], ramp_mult)
+    end
+    costs[:,5] = calc_slack_cost(mod, opf, pf, dist_slack=dist_slack, ramp_mult=ramp_mult)
+    return costs, [:Base, :Pc, :Pcc, :Pccx, :distslack]
+end

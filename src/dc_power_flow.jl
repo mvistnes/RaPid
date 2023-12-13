@@ -85,19 +85,17 @@ function calc_Pᵢ_from_flow(branches::AbstractVector{<:Branch}, F::AbstractVect
 end
 
 """ Distributed slack """
-function set_dist_slack!(pf::DCPowerFlow, mgx::AbstractMatrix{<:Real}, dist_slack::AbstractVector{<:Real})
+function set_dist_slack!(ϕ::AbstractMatrix{<:Real}, mgx::AbstractMatrix{<:Real}, dist_slack::AbstractVector{<:Real})
     @assert !iszero(sum(dist_slack))
     slack_array = dist_slack / sum(dist_slack)
-    # slack_array = reshape(slack_array, 1, size(mgx, 1))
-    pf.ϕ = pf.ϕ .- ((slack_array' * mgx) * pf.ϕ')'
-    return pf.ϕ
+    ϕ = ϕ .- ((slack_array' * mgx) * ϕ')'
 end
 function set_dist_slack!(pf::DCPowerFlow, opf::OPFsystem, idx::Dict{<:Int,<:Integer}, dist_slack::AbstractVector{<:Real} = Float64[])
     if isempty(dist_slack)
         dist_slack = getproperty.(get_active_power_limits.(opf.ctrl_generation), [:max])
     end
     mgx = calc_connectivity(opf.ctrl_generation, length(opf.nodes), idx)
-    set_dist_slack!(pf, mgx, dist_slack)
+    set_dist_slack!(pf.ϕ, mgx, dist_slack)
 end
 
 """ Make the component connectivity matrix """

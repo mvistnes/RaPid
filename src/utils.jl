@@ -293,6 +293,18 @@ function get_interarea(branches::AbstractVector{T}) where {T<:Branch}
     return vals
 end
 
+function get_area_branches(branches::AbstractVector{T}, area::Area) where {T<:Branch}
+    vals = Vector{T}()
+    for br in branches
+        from = get_area(get_from(get_arc(br)))
+        to = get_area(get_to(get_arc(br)))
+        if from == area || to == area
+            push!(vals, br)
+        end
+    end
+    return vals
+end
+
 function typesort_components(list::AbstractVector{<:Component})
     gen = Generator[]
     demand = StaticLoad[]

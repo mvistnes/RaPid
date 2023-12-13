@@ -111,7 +111,7 @@ function setup_system(fname::String)
     short = 1.5
     long = 1.25
     ramp_minutes = 10.0
-    max_shed = 0.5
+    max_shed = 1.5
     ramp_mult = 2.0
     time_limit_sec = length(contingencies)^2 + 10
     return system, voll, contingencies, prob, short, long, ramp_minutes, ramp_mult, max_shed, time_limit_sec
