@@ -30,12 +30,12 @@ function oplimits(
     short_term_multi::Union{TR,Vector{TR}},
     long_term_multi::Union{TR,Vector{TR}}
 ) where {TR<:Real}
-    branch_rating = get_rate.(opf.branches)
-    (pg_lim_min, pg_lim_max) = split_pair(get_active_power_limits.(opf.ctrl_generation))
-    (rampup, rampdown) = split_pair(get_ramp_limits.(opf.ctrl_generation))
+    branch_rating::Vector{TR} = get_rate.(opf.branches)
+    (pg_lim_min::Vector{TR}, pg_lim_max::Vector{TR}) = split_pair(get_active_power_limits.(opf.ctrl_generation))
+    (rampup::Vector{TR}, rampdown::Vector{TR}) = split_pair(get_ramp_limits.(opf.ctrl_generation))
     pr_lim::Vector{TR} = get_active_power.(opf.renewables)
     (dc_lim_min::Vector{TR}, dc_lim_max::Vector{TR}) = split_pair(get_active_power_limits_from.(opf.dc_branches))
-    pd_lim = get_active_power.(opf.demands)
+    pd_lim::Vector{TR} = get_active_power.(opf.demands)
     return Oplimits{TR}(ramp_mult, ramp_minutes, p_failure, branch_rating, short_term_multi, long_term_multi, 
         pg_lim_min, pg_lim_max, rampup, rampdown, pr_lim, max_curtail, dc_lim_min, dc_lim_max, pd_lim, max_shed)
 end
@@ -309,10 +309,6 @@ function init_P!(Pc::Dict{<:Integer,ExprC}, opf::OPFsystem, oplim::Oplimits, mod
                 fix!(lsc, oplim.pd_lim, list[n].demands)
             end
         end
-        if typeof(oplim.max_shed) <: Real
-            ls = sum((sum((sum((oplim.pd_lim[i] for i in list[n].demands), init=0.0) for n in in_vec), init=0.0) for in_vec in itr), init=0.0)
-            @constraint(mod, sum(lsc) <= oplim.max_shed + ls)
-        end
     end
     return pgu, pgd, prc, lsc
 end
@@ -387,10 +383,6 @@ function init_P!(Pcc::Dict{<:Integer,ExprCC}, opf::OPFsystem, oplim::Oplimits, m
                 fix!(prcc, oplim.pr_lim, list[n].renewables)
                 fix!(lscc, oplim.pd_lim, list[n].demands)
             end
-        end
-        if typeof(oplim.max_shed) <: Real
-            ls = sum((sum((sum((oplim.pd_lim[i] for i in list[n].demands), init=0.0) for n in in_vec), init=0.0) for in_vec in itr), init=0.0)
-            @constraint(mod, sum(lscc) <= oplim.max_shed + ls)
         end
     end
     return pgu, pgd, pfdccc, prcc, lscc
