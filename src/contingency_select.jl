@@ -16,7 +16,7 @@ function run_contingency_select(
     lim=1e-6,
     short_term_multi::Real=1.5, 
     long_term_multi::Real=1.2, 
-    max_itr=length(contingencies),
+    max_itr=max(length(contingencies), 5),
     p_failure=0.0, 
     branch_c=nothing, 
     rate_c=0.0, 
@@ -44,7 +44,7 @@ function run_contingency_select!(
     Pcc::Dict{<:Integer, ExprCC}, 
     Pccx::Dict{<:Integer, ExprCCX},
     lim=1e-6,
-    max_itr=length(opf.contingencies),
+    max_itr=max(length(contingencies), 5),
     branch_c=nothing, 
     rate_c=0.0, 
     debug=false

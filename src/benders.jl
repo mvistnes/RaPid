@@ -48,7 +48,7 @@ function run_benders(
     lim=1e-6,
     short_term_multi::Real=1.5, 
     long_term_multi::Real=1.2, 
-    max_itr=length(contingencies),
+    max_itr=max(length(contingencies), 5),
     p_failure=0.0,
     silent=true,
     debug=false
@@ -78,7 +78,7 @@ function run_benders!(
     Pccx::Dict{<:Integer, ExprCCX},
     dist_slack=Float64[],
     lim=1e-6,
-    max_itr=length(opf.contingencies)
+    max_itr=max(length(contingencies), 5)
 )
     assert(type)
     @assert !type.C1 || isempty(Pc)

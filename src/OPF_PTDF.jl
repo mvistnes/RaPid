@@ -94,10 +94,10 @@ function opf_base(type::OPF, system::System, optimizer;
         oplim.dc_lim_min[l] <= pfdc0[l in 1:length(opf.dc_branches)] <= oplim.dc_lim_max[l]
         # power flow on DC branches
         pd[d in 1:length(opf.demands)]
-        0.0 <= ls0[d in 1:length(opf.demands)] <= oplim.pd_lim[d] * (typeof(oplim.max_shed) <: Real ? oplim.max_shed : 1.0)
+        0.0 <= ls0[d in 1:length(opf.demands)] <= oplim.pd_lim[d] * (typeof(oplim.max_shed) <: Real ? 1.0 : oplim.max_shed[d])
         # demand curtailment variables
         pr[d in 1:length(opf.renewables)]
-        0.0 <= pr0[d in 1:length(opf.renewables)] <= oplim.pr_lim[d] * (typeof(oplim.max_curtail) <: Real ? oplim.max_curtail : 1.0)
+        0.0 <= pr0[d in 1:length(opf.renewables)] <= oplim.pr_lim[d] * (typeof(oplim.max_curtail) <: Real ? 1.0 : oplim.max_curtail)
         # renewable curtailment variables
     end)
 
@@ -265,9 +265,9 @@ function init_P!(Pc::Dict{<:Integer,ExprC}, opf::OPFsystem, oplim::Oplimits, mod
         lower_bound = 0.0) #, upper_bound = rampdown[g] * 0.0)
     # and ramp down
     prc = JuMP.@variable(mod, [d in 1:length(opf.renewables)], base_name = @sprintf("prc%s", c),
-        lower_bound = 0.0, upper_bound = oplim.pr_lim[d] * (typeof(oplim.max_curtail) <: Real ? oplim.max_curtail : 1.0))
+        lower_bound = 0.0, upper_bound = oplim.pr_lim[d] * (typeof(oplim.max_curtail) <: Real ? 1.0 : oplim.max_curtail[d]))
     lsc = JuMP.@variable(mod, [d in 1:length(opf.demands)], base_name = @sprintf("lsc%s", c),
-        lower_bound = 0.0, upper_bound = oplim.pd_lim[d] * (typeof(oplim.max_shed) <: Real ? oplim.max_shed : 1.0))
+        lower_bound = 0.0, upper_bound = oplim.pd_lim[d] * (typeof(oplim.max_shed) <: Real ? 1.0 : oplim.max_shed[d]))
     Pc[c] = ExprC(JuMP.VariableRef[], pgu, pgd, prc, lsc)
 
     p_survive = 1.0 - oplim.p_failure
@@ -310,7 +310,8 @@ function init_P!(Pc::Dict{<:Integer,ExprC}, opf::OPFsystem, oplim::Oplimits, mod
             end
         end
         if typeof(oplim.max_shed) <: Real
-            @constraint(mod, sum(lsc) <= max(oplim.max_shed, sum((sum((sum((oplim.pd_lim[i] for i in list[n].demands), init=0.0) for n in in_vec), init=0.0) for in_vec in itr), init=0.0)))
+            ls = sum((sum((sum((oplim.pd_lim[i] for i in list[n].demands), init=0.0) for n in in_vec), init=0.0) for in_vec in itr), init=0.0)
+            @constraint(mod, sum(lsc) <= oplim.max_shed + ls)
         end
     end
     return pgu, pgd, prc, lsc
@@ -329,9 +330,9 @@ function init_P!(Pcc::Dict{<:Integer,ExprCC}, opf::OPFsystem, oplim::Oplimits, m
     pfdccc = JuMP.@variable(mod, [d in 1:length(opf.dc_branches)], base_name = @sprintf("pfdccc%s", c),
         lower_bound = oplim.dc_lim_min[d], upper_bound = oplim.dc_lim_max[d])
     prcc = JuMP.@variable(mod, [r in 1:length(opf.renewables)], base_name = @sprintf("prcc%s", c),
-        lower_bound = 0.0, upper_bound = oplim.pr_lim[r] * oplim.max_curtail)
+        lower_bound = 0.0, upper_bound = oplim.pr_lim[r] * (typeof(oplim.max_curtail) <: Real ? 1.0 : oplim.max_curtail[d]))
     lscc = JuMP.@variable(mod, [d in 1:length(opf.demands)], base_name = @sprintf("lscc%s", c),
-        lower_bound = 0.0, upper_bound = oplim.pd_lim[d] * (typeof(oplim.max_shed) <: Real ? oplim.max_shed : 1.0))
+        lower_bound = 0.0, upper_bound = oplim.pd_lim[d] * (typeof(oplim.max_shed) <: Real ? 1.0 : oplim.max_shed[d]))
     # load curtailment variables in in contingencies
     Pcc[c] = ExprCC(JuMP.VariableRef[], pgu, pgd, pfdccc, prcc, lscc)
 
@@ -388,7 +389,8 @@ function init_P!(Pcc::Dict{<:Integer,ExprCC}, opf::OPFsystem, oplim::Oplimits, m
             end
         end
         if typeof(oplim.max_shed) <: Real
-            @constraint(mod, sum(lscc) <= max(oplim.max_shed, sum((sum((sum((oplim.pd_lim[i] for i in list[n].demands), init=0.0) for n in in_vec), init=0.0) for in_vec in itr), init=0.0)))
+            ls = sum((sum((sum((oplim.pd_lim[i] for i in list[n].demands), init=0.0) for n in in_vec), init=0.0) for in_vec in itr), init=0.0)
+            @constraint(mod, sum(lscc) <= oplim.max_shed + ls)
         end
     end
     return pgu, pgd, pfdccc, prcc, lscc
@@ -402,9 +404,9 @@ function init_P!(Pccx::Dict{<:Integer,ExprCCX}, opf::OPFsystem, oplim::Oplimits,
         lower_bound = 0.0)#, upper_bound = oplim.rampdown[g] * oplim.ramp_minutes)
     # and ramp down
     prcc = JuMP.@variable(mod, [r in 1:length(opf.renewables)], base_name = @sprintf("prccx%s", c),
-        lower_bound = 0.0, upper_bound = oplim.pr_lim[d] * (typeof(oplim.max_curtail) <: Real ? oplim.max_curtail : 1.0))
+        lower_bound = 0.0, upper_bound = oplim.pr_lim[d] * (typeof(oplim.max_curtail) <: Real ? 1.0 : oplim.max_curtail[d]))
     lscc = JuMP.@variable(mod, [d in 1:length(opf.demands)], base_name = @sprintf("lsccx%s", c),
-        lower_bound = 0.0, upper_bound = oplim.pd_lim[d] * (typeof(oplim.max_shed) <: Real ? oplim.max_shed : 1.0))
+        lower_bound = 0.0, upper_bound = oplim.pd_lim[d] * (typeof(oplim.max_shed) <: Real ? 1.0 : oplim.max_shed[d]))
     # load curtailment variables in in contingencies
     Pccx[c] = ExprCCX(JuMP.VariableRef[], pgd, prcc, lscc)
 
