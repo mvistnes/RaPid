@@ -8,6 +8,7 @@ function run_contingency_select(
     voll=nothing, 
     prob=nothing, 
     contingencies=nothing;
+    dist_slack=Float64[],
     time_limit_sec::Int64=600, 
     ramp_minutes=10, 
     ramp_mult=10, 
@@ -24,7 +25,7 @@ function run_contingency_select(
     debug=false
 )
     mod, opf, pf, oplim, Pc, Pcc, Pccx = opf_base(OPF(true, false, false, false, false), system, optimizer, voll=voll, contingencies=contingencies, prob=prob,
-        time_limit_sec=time_limit_sec, ramp_minutes=ramp_minutes, ramp_mult=ramp_mult, max_shed=max_shed, max_curtail=max_curtail,
+        dist_slack = dist_slack, time_limit_sec=time_limit_sec, ramp_minutes=ramp_minutes, ramp_mult=ramp_mult, max_shed=max_shed, max_curtail=max_curtail,
         short_term_multi=short_term_multi, long_term_multi=long_term_multi, p_failure=p_failure, silent=silent, debug=debug)
     
     solve_model!(mod)
@@ -60,6 +61,7 @@ function run_contingency_select!(
 
     # Set variables
     bd = benders(opf, mod)
+    set_dist_slack!(pf, opf, bd.idx, oplim.dist_slack)
     calc_θ!(pf, bd.Pᵢ)
     calc_Pline!(pf)
     overloads = zeros(length(opf.contingencies))

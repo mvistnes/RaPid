@@ -54,14 +54,14 @@ function run_benders(
     debug=false
 )
     mod, opf, pf, oplim, Pc, Pcc, Pccx = opf_base(OPF(true, false, false, false, false), system, optimizer, voll=voll, contingencies=contingencies, prob=prob,
-        time_limit_sec=time_limit_sec, ramp_minutes=ramp_minutes, ramp_mult=ramp_mult, max_shed=max_shed, max_curtail=max_curtail,
+        dist_slack=dist_slack, time_limit_sec=time_limit_sec, ramp_minutes=ramp_minutes, ramp_mult=ramp_mult, max_shed=max_shed, max_curtail=max_curtail,
         short_term_multi=short_term_multi, long_term_multi=long_term_multi, p_failure=p_failure, silent=silent, debug=debug)
 
     solve_model!(mod)
     if !type.P & !type.C1 & !type.C2 & !type.C2F
         return mod, opf, pf, oplim, Pc, Pcc, Pccx, solve_time(mod)
     end
-    return run_benders!(type, mod, opf, pf, oplim, Pc, Pcc, Pccx, dist_slack, lim, max_itr)
+    return run_benders!(type, mod, opf, pf, oplim, Pc, Pcc, Pccx, lim, max_itr)
 end
 
 """
@@ -76,7 +76,6 @@ function run_benders!(
     Pc::Dict{<:Integer, ExprC}, 
     Pcc::Dict{<:Integer, ExprCC}, 
     Pccx::Dict{<:Integer, ExprCCX},
-    dist_slack=Float64[],
     lim=1e-6,
     max_itr=max(length(contingencies), 5)
 )
@@ -91,7 +90,7 @@ function run_benders!(
 
     # Set variables
     bd = benders(opf, mod)
-    set_dist_slack!(pf, opf, bd.idx, dist_slack)
+    set_dist_slack!(pf, opf, bd.idx, oplim.dist_slack)
     calc_θ!(pf, bd.Pᵢ)
     calc_Pline!(pf)
     overloads = zeros(length(opf.contingencies))

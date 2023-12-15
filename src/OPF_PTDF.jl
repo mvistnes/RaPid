@@ -11,6 +11,7 @@ struct Oplimits{TR<:Real}
     pg_lim_max::Vector{TR}
     rampup::Vector{TR}
     rampdown::Vector{TR}
+    dist_slack::Vector{TR}
     pr_lim::Vector{TR}
     max_curtail::Union{TR,Vector{TR}}
     dc_lim_min::Vector{TR}
@@ -24,6 +25,7 @@ function oplimits(
     opf::OPFsystem,
     max_shed::Union{TR,Vector{TR}},
     max_curtail::Union{TR,Vector{TR}},
+    dist_slack::Vector{TR},
     ramp_mult::TR,
     ramp_minutes::TR,
     p_failure::TR,
@@ -36,11 +38,14 @@ function oplimits(
     pr_lim::Vector{TR} = get_active_power.(opf.renewables)
     (dc_lim_min::Vector{TR}, dc_lim_max::Vector{TR}) = split_pair(get_active_power_limits_from.(opf.dc_branches))
     pd_lim::Vector{TR} = get_active_power.(opf.demands)
+    if !isempty(dist_slack)
+        dist_slack = dist_slack / sum(dist_slack)
+    end
     return Oplimits{TR}(ramp_mult, ramp_minutes, p_failure, branch_rating, short_term_multi, long_term_multi, 
-        pg_lim_min, pg_lim_max, rampup, rampdown, pr_lim, max_curtail, dc_lim_min, dc_lim_max, pd_lim, max_shed)
+        pg_lim_min, pg_lim_max, rampup, rampdown, dist_slack, pr_lim, max_curtail, dc_lim_min, dc_lim_max, pd_lim, max_shed)
 end
 
-mutable struct SCOPF{TR<:Real,TI<:Integer}
+mutable struct Case{TR<:Real,TI<:Integer}
     model::Model
     opf::OPFsystem{TR}
     pf::DCPowerFlow{TR,TI}
@@ -82,9 +87,7 @@ function opf_base(type::OPF, system::System, optimizer;
     Pcc = Dict{Int,ExprCC}()
     Pccx = Dict{Int,ExprCCX}()
 
-    oplim = oplimits(opf, max_shed, max_curtail, ramp_mult, ramp_minutes, p_failure, short_term_multi, long_term_multi)
-
-    scopf = SCOPF(mod, opf, pf, oplim, Pc, Pcc, Pccx)
+    oplim = oplimits(opf, max_shed, max_curtail, dist_slack, ramp_mult, ramp_minutes, p_failure, short_term_multi, long_term_multi)
 
     @variables(mod, begin
         p0[n in 1:length(opf.nodes)]
@@ -97,15 +100,15 @@ function opf_base(type::OPF, system::System, optimizer;
         0.0 <= ls0[d in 1:length(opf.demands)] <= oplim.pd_lim[d] * (typeof(oplim.max_shed) <: Real ? 1.0 : oplim.max_shed[d])
         # demand curtailment variables
         pr[d in 1:length(opf.renewables)]
-        0.0 <= pr0[d in 1:length(opf.renewables)] <= oplim.pr_lim[d] * (typeof(oplim.max_curtail) <: Real ? 1.0 : oplim.max_curtail)
+        0.0 <= pr0[d in 1:length(opf.renewables)] <= oplim.pr_lim[d] * (typeof(oplim.max_curtail) <: Real ? 1.0 : oplim.max_curtail[d])
         # renewable curtailment variables
     end)
 
     @objective(mod, Min, sum(c.var * g for (c, g) in zip(opf.cost_ctrl_gen, pg0)) + sum(opf.voll' * ls0) + sum(pr0 * 1))
     # @objective(mod, Min, sum(c[1] * g^2 + c[2] * g for (c, g) in zip(opf.cost_ctrl_gen, pg0)) + sum(opf.voll' * ls0) + sum(pr0 * 1))
 
-    JuMP.fix.(pd, get_active_power.(opf.demands))
-    JuMP.fix.(pr, get_active_power.(opf.renewables))
+    JuMP.fix.(pd, oplim.pd_lim)
+    JuMP.fix.(pr, oplim.pr_lim)
     if typeof(oplim.max_shed) <: Real
         @constraint(mod, sum(ls0) <= oplim.max_shed)
     end
@@ -135,18 +138,19 @@ function opf_base(type::OPF, system::System, optimizer;
         add_unit_commit!(opf)
     end
 
+    case = Case(mod, opf, pf, oplim, Pc, Pcc, Pccx)
     if any([type.P, type.C1, type.C2, type.C2F])
-        return add_all_contingencies!(type, opf, oplim, mod, list, pf, idx, dist_slack, Pc, Pcc, Pccx)
+        return add_all_contingencies!(type, opf, oplim, mod, list, pf, idx, Pc, Pcc, Pccx)
     end
     return mod, opf, pf, oplim, Pc, Pcc, Pccx
 end
 
 function add_all_contingencies!(type::OPF, opf::OPFsystem, oplim::Oplimits, mod::Model, list::Vector{<:CTypes{Int}},
-    pf::DCPowerFlow, idx::Dict{<:Int,<:Int}, dist_slack::Vector{<:Real},
+    pf::DCPowerFlow, idx::Dict{<:Int,<:Int}, 
     Pc::Dict{<:Integer,ExprC}, Pcc::Dict{<:Integer,ExprCC}, Pccx::Dict{<:Integer,ExprCCX}
 )
     obj = objective_function(mod)
-    set_dist_slack!(pf, opf, idx, dist_slack)
+    set_dist_slack!(pf, opf, idx, oplim.dist_slack)
     for (i, c_obj) in enumerate(opf.contingencies)
         cont = typesort_component(c_obj, opf, idx)
         if is_islanded(pf, cont[2], cont[1])
