@@ -20,12 +20,11 @@ SCOPF.fix_generation_cost!(system);
 voll = SCOPF.make_voll(system)
 model, opf, pf, oplim, _, _, _ = SCOPF.opf_base(SCOPF.Base_SCOPF, system, HiGHS.Optimizer(), voll=voll);
 SCOPF.solve_model!(model)
-idx = SCOPF.get_nodes_idx(opf.nodes)
-bx = SCOPF.get_bus_idx.(opf.branches, [idx])
+bx = SCOPF.get_bus_idx.(opf.branches, [opf.idx])
 slack = SCOPF.find_slack(opf.nodes)[1]
 
 Pᵢ = SCOPF.get_value(model, :p0)
-pf = SCOPF.DCPowerFlow(opf.nodes, opf.branches, idx, Pᵢ)
+pf = SCOPF.DCPowerFlow(opf.nodes, opf.branches, opf.idx, Pᵢ)
 B = copy(pf.B)
 X = copy(pf.X)
 ϕ = copy(pf.ϕ)

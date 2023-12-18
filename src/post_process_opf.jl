@@ -119,16 +119,15 @@ function print_contingency_results(opf::OPFsystem, Pc::Dict{<:Integer, ExprC}, P
 end
 
 function print_contingency_P(opf::OPFsystem, Pc, Pcc, Pccx=Dict())
-    idx = get_nodes_idx(opf.nodes)
     println("Pc; cont, node, val")
     for (c, cont) in enumerate(opf.contingencies)
         P = zeros(length(opf.nodes))
         x = get(Pc, c, 0)
         if x != 0
-            add_to!(P, x.pgu, idx, opf.ctrl_generation, +)
-            add_to!(P, x.pgd, idx, opf.ctrl_generation, -)
-            add_to!(P, x.prc, idx, opf.renewables, -)
-            add_to!(P, x.lsc, idx, opf.demands, +)
+            add_to!(P, x.pgu, opf.idx, opf.ctrl_generation, +)
+            add_to!(P, x.pgd, opf.idx, opf.ctrl_generation, -)
+            add_to!(P, x.prc, opf.idx, opf.renewables, -)
+            add_to!(P, x.lsc, opf.idx, opf.demands, +)
             for (i, val) in enumerate(P)
                 if abs(val) > 0.00001
                     Printf.@printf "%s,%2d,%7.4f\n" cont.name i val
@@ -142,13 +141,13 @@ function print_contingency_P(opf::OPFsystem, Pc, Pcc, Pccx=Dict())
         P = zeros(length(opf.nodes))
         x = get(Pcc, c, 0)
         if x != 0
-            add_to!(P, x.pgu, idx, opf.ctrl_generation, +)
-            add_to!(P, x.pgd, idx, opf.ctrl_generation, -)
-            add_to!(P, x.prcc, idx, opf.renewables, -)
-            add_to!(P, x.lscc, idx, opf.demands, +)
+            add_to!(P, x.pgu, opf.idx, opf.ctrl_generation, +)
+            add_to!(P, x.pgd, opf.idx, opf.ctrl_generation, -)
+            add_to!(P, x.prcc, opf.idx, opf.renewables, -)
+            add_to!(P, x.lscc, opf.idx, opf.demands, +)
             for (i_g, g) in enumerate(opf.dc_branches)
-                P[idx[g.arc.from.number]] += JuMP.value(x.pfdccc[i_g])
-                P[idx[g.arc.to.number]] -= JuMP.value(x.pfdccc[i_g])
+                P[opf.idx[g.arc.from.number]] += JuMP.value(x.pfdccc[i_g])
+                P[opf.idx[g.arc.to.number]] -= JuMP.value(x.pfdccc[i_g])
             end
             for (i, val) in enumerate(P)
                 if abs(val) > 0.00001
@@ -160,8 +159,7 @@ function print_contingency_P(opf::OPFsystem, Pc, Pcc, Pccx=Dict())
 end
 
 function print_active_power(opf::OPFsystem, mod::Model)
-    idx = get_nodes_idx(opf.nodes)
-    list = make_list(opf, idx, opf.nodes)
+    list = make_list(opf, opf.nodes)
     xprint(x, val) = @printf("%6.3f:%s,\t", val, x.name)
     sort_x!(list) = sort!(list, by=x -> x.name)
     print("       Bus   Total  Injections...")
@@ -220,8 +218,8 @@ function print_power_flow(names::AbstractVector{String}, flow::AbstractVector,
     end
 end
 
-function get_contingency_power_flow(opf::OPFsystem, mod::Model, pf::DCPowerFlow, list::Vector{<:CTypes{Int}},
-    idx::Dict, Pᵢ::AbstractVector{<:Real}, Pc::Dict, name::String; subset::AbstractVector{<:Integer}=Int64[]
+function get_contingency_power_flow(opf::OPFsystem, mod::Model, pf::DCPowerFlow, 
+    Pᵢ::AbstractVector{<:Real}, Pc::Dict, name::String; subset::AbstractVector{<:Integer}=Int64[]
 )
     islands = Vector{Vector{Int}}()
     island = 0
@@ -229,7 +227,7 @@ function get_contingency_power_flow(opf::OPFsystem, mod::Model, pf::DCPowerFlow,
     ΔP = similar(Pᵢ)
     vals = Dict{String, Vector}()
     for (i, c_obj) in enumerate(opf.contingencies)
-        cont = typesort_component(c_obj, opf, idx)
+        cont = typesort_component(c_obj, opf)
         if is_islanded(pf, cont[2], cont[1])
             islands, island, island_b = handle_islands(pf.B, pf.DA, cont[2], cont[1], pf.slack)
             inodes = islands[island]
@@ -237,14 +235,14 @@ function get_contingency_power_flow(opf::OPFsystem, mod::Model, pf::DCPowerFlow,
             empty!(island_b)
             inodes = Int[]
         end
-        flow = calculate_contingency_line_flows!(ΔP, Pc, opf, mod, pf, Pᵢ, list, cont, i, c_obj, inodes, island_b)
+        flow = calculate_contingency_line_flows!(ΔP, Pc, opf, mod, pf, Pᵢ, cont, i, c_obj, inodes, island_b)
         vals[name * c_obj.name] = isempty(subset) ? flow : flow[subset] 
     end
     return vals
 end
 
-function print_contingency_power_flow(opf::OPFsystem, mod::Model, pf::DCPowerFlow, list::Vector{<:CTypes{Int}},
-    idx::Dict, Pᵢ::AbstractVector{<:Real}, b_names::Vector{String}, linerates::Vector{<:Float64}, Pc::Dict; 
+function print_contingency_power_flow(opf::OPFsystem, mod::Model, pf::DCPowerFlow,
+    Pᵢ::AbstractVector{<:Real}, b_names::Vector{String}, linerates::Vector{<:Float64}, Pc::Dict; 
     subset::AbstractVector{<:Integer}=Int64[], all=true, sep::String=" ", risky_flow=0.9, atol=1e-8
 )
     islands = Vector{Vector{Int}}()
@@ -253,7 +251,7 @@ function print_contingency_power_flow(opf::OPFsystem, mod::Model, pf::DCPowerFlo
     ΔP = similar(Pᵢ)
     !all && println("         Branch     Flow  Rating")
     for (i, c_obj) in enumerate(opf.contingencies)
-        cont = typesort_component(c_obj, opf, idx)
+        cont = typesort_component(c_obj, opf)
         if is_islanded(pf, cont[2], cont[1])
             islands, island, island_b = handle_islands(pf.B, pf.DA, cont[2], cont[1], pf.slack)
             inodes = islands[island]
@@ -263,7 +261,7 @@ function print_contingency_power_flow(opf::OPFsystem, mod::Model, pf::DCPowerFlo
             empty!(island_b)
             inodes = Int[]
         end
-        flow = calculate_contingency_line_flows!(ΔP, Pc, opf, mod, pf, Pᵢ, list, cont, i, c_obj, inodes, island_b)
+        flow = calculate_contingency_line_flows!(ΔP, Pc, opf, mod, pf, Pᵢ, cont, i, c_obj, inodes, island_b)
         if all || any(abs.(flow) .> linerates * risky_flow)
             println("Contingency ", c_obj.name)
             if isempty(subset)
@@ -282,23 +280,21 @@ function get_contingency_power_flow(opf::OPFsystem, mod::Model, pf::DCPowerFlow,
 )
     b_names = get_name.(opf.branches)
     linerates = get_rate.(opf.branches)
-    idx = get_nodes_idx(opf.nodes)
-    list = make_list(opf, idx, opf.nodes)
     Pᵢ = get_value(mod, :p0)
     brst = linerates * short_term_multi
     brlt = linerates * long_term_multi
     vals = Dict("name" => b_names, "st_rate" => brst, "lt_rate" => brlt)
 
     if !isempty(Pc) 
-        merge!(vals, get_contingency_power_flow(opf, mod, pf, list, idx, Pᵢ, Pc, "short_"; subset=subset))
+        merge!(vals, get_contingency_power_flow(opf, mod, pf, Pᵢ, Pc, "short_"; subset=subset))
     end
 
     if !isempty(Pcc)
-        merge!(vals, get_contingency_power_flow(opf, mod, pf, list, idx, Pᵢ, Pcc, "long_"; subset=subset))
+        merge!(vals, get_contingency_power_flow(opf, mod, pf, Pᵢ, Pcc, "long_"; subset=subset))
     end
 
     if !isempty(Pccx)
-        merge!(vals, get_contingency_power_flow(opf, mod, pf, list, idx, Pᵢ, Pccx, "long_x_"; subset=subset))
+        merge!(vals, get_contingency_power_flow(opf, mod, pf, Pᵢ, Pccx, "long_x_"; subset=subset))
     end
     return vals
 end
@@ -310,27 +306,25 @@ function print_contingency_power_flow(opf::OPFsystem, mod::Model, pf::DCPowerFlo
 )
     b_names = get_name.(opf.branches)
     linerates = get_rate.(opf.branches)
-    idx = get_nodes_idx(opf.nodes)
-    list = make_list(opf, idx, opf.nodes)
     Pᵢ = get_value(mod, :p0)
     brst = linerates * short_term_multi
     brlt = linerates * long_term_multi
 
     if !isempty(Pc) 
         println("Short-term post-contingency")
-        print_contingency_power_flow(opf, mod, pf, list, idx, Pᵢ, b_names, brst, Pc; 
+        print_contingency_power_flow(opf, mod, pf, Pᵢ, b_names, brst, Pc; 
                                      subset=subset, all=all, sep=sep, risky_flow=risky_flow, atol=atol)
     end
 
     if !isempty(Pcc)
         println("Long-term post-contingency")
-        print_contingency_power_flow(opf, mod, pf, list, idx, Pᵢ, b_names, brlt, Pcc; 
+        print_contingency_power_flow(opf, mod, pf, Pᵢ, b_names, brlt, Pcc; 
                                      subset=subset, all=all, sep=sep, risky_flow=risky_flow, atol=atol)
     end
 
     if !isempty(Pccx)
         println("Long-term post-contingency corrective failed")
-        print_contingency_power_flow(opf, mod, pf, list, idx, Pᵢ, b_names, brlt, Pccx; 
+        print_contingency_power_flow(opf, mod, pf, Pᵢ, b_names, brlt, Pccx; 
                                      subset=subset, all=all, sep=sep, risky_flow=risky_flow, atol=atol)
     end
     return

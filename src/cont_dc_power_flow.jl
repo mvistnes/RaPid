@@ -185,8 +185,7 @@ function calculate_island_line_flows(pf::DCPowerFlow, cont::Tuple{Integer,Intege
 end
 
 function get_contingency_ptdf(opf::OPFsystem, pf::DCPowerFlow)
-    idx = get_nodes_idx(opf.nodes)
-    contids = [(x, get_bus_idx(opf.branches[x], idx)) for x in indexin(opf.contingencies, opf.branches)]
+    contids = [(x, get_bus_idx(opf.branches[x], opf.idx)) for x in indexin(opf.contingencies, opf.branches)]
     ptdf = Array{Float64}(undef, size(pf.ϕ, 1), size(pf.ϕ, 2), length(opf.contingencies))
     # for i in eachindex(contids)
     Threads.@threads for i in eachindex(contids)

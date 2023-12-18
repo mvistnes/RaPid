@@ -20,12 +20,11 @@ SCOPF.fix_generation_cost!(system);
 voll = SCOPF.make_voll(system)
 model, opf, pf, oplim, _, _, _ = SCOPF.opf_base(SCOPF.OPF(true, false, false, false, false), system, HiGHS.Optimizer(), voll=voll);
 SCOPF.solve_model!(model)
-idx = SCOPF.get_nodes_idx(opf.nodes)
-bx = SCOPF.get_bus_idx.(opf.branches, [idx])
+bx = SCOPF.get_bus_idx.(opf.branches, [opf.idx])
 slack = SCOPF.find_slack(opf.nodes)[1]
 
 # CALC MATRICES DIRECTLY
-A = SCOPF.calc_A(opf.branches, idx)
+A = SCOPF.calc_A(opf.branches, length(opf.nodes), opf.idx)
 D = SCOPF.calc_D(opf.branches)
 DA = D*A
 B = SCOPF.calc_B(A, DA)
@@ -38,7 +37,7 @@ F = DA*θ
 @test θ ≈ SCOPF.run_pf(pf.K, Pᵢ, pf.slack)
 
 # CHECK DCPF-STRUCT CORRECTNESS
-pf = SCOPF.DCPowerFlow(opf.nodes, opf.branches, idx, Pᵢ)
+pf = SCOPF.DCPowerFlow(opf.nodes, opf.branches, opf.idx, Pᵢ)
 @test B ≈ pf.B
 @test DA ≈ pf.DA
 @test ϕ ≈ pf.ϕ
@@ -82,7 +81,7 @@ SCOPF.get_isf!(ϕ, pf.ϕ, islands[island], island_b); LinearAlgebra.mul!(flow3, 
 SCOPF.calculate_line_flows!(flow4, ϕ, pf.ϕ, (Pᵢ .+ ΔPc), islands[island], island_b); # hack2
 @test flow3 ≈ flow4 
 
-SCOPF.set_dist_slack!(pf, opf, idx)
+SCOPF.set_dist_slack!(pf, opf)
 SCOPF.calculate_line_flows!(flow1, θ, pf.DA, pf.B, (Pᵢ .+ ΔPc), cont2, c2, pf.slack, islands[island], island_b) # inverse with theta
 SCOPF.get_isf!(ϕ, pf.DA, pf.B, cont2, c2, pf.slack, islands[island], island_b); LinearAlgebra.mul!(flow2, ϕ, (Pᵢ .+ ΔPc)); # inverse with ptdf
 @test flow1 ≈ flow2

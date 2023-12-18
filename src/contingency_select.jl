@@ -61,7 +61,7 @@ function run_contingency_select!(
 
     # Set variables
     bd = benders(opf, mod)
-    set_dist_slack!(pf, opf, bd.idx, oplim.dist_slack)
+    set_dist_slack!(pf, opf, oplim.dist_slack)
     calc_θ!(pf, bd.Pᵢ)
     calc_Pline!(pf)
     overloads = zeros(length(opf.contingencies))
@@ -73,25 +73,25 @@ function run_contingency_select!(
 
     pg = get_value(mod, :pg0)
     for (i, c_obj) in enumerate(opf.contingencies)
-        cont = typesort_component(c_obj, opf, bd.idx)
+        cont = typesort_component(c_obj, opf)
         if is_islanded(pf, cont[2], cont[1])
             islands, island, island_b = handle_islands(pf.B, pf.DA, cont[2], cont[1], pf.slack)
             ptdf = get_isf(pf, cont[2], cont[1], islands, island, island_b)
             set_tol_zero!(ptdf)
             if type.P 
-                add_contingencies!(opf, oplim, mod, ptdf, bd.list, i)
+                add_contingencies!(opf, oplim, mod, ptdf, i)
                 pre += 1
             end
             if type.C1 
-                add_contingencies!(Pc, opf, oplim, mod, bd.obj, islands, island, ptdf, bd.list, i)
+                add_contingencies!(Pc, opf, oplim, mod, bd.obj, islands, island, ptdf, i)
                 corr1 += 1
             end
             if type.C2  
-                add_contingencies!(Pcc, opf, oplim, mod, bd.obj, islands, island, ptdf, bd.list, i)
+                add_contingencies!(Pcc, opf, oplim, mod, bd.obj, islands, island, ptdf, i)
                 corr2 += 1
             end
             if type.C2F 
-                add_contingencies!(Pccx, opf, oplim, mod, bd.obj, islands, island, ptdf, bd.list, i)
+                add_contingencies!(Pccx, opf, oplim, mod, bd.obj, islands, island, ptdf, i)
                 corr2f += 1
             end
             @debug "Island: Contingency $(string(typeof(c_obj))) $(get_name(c_obj))"
@@ -128,11 +128,11 @@ function run_contingency_select!(
     brlt = oplim.branch_rating * oplim.long_term_multi
 
     permutation = sortperm(overloads, rev=true)
-    cont = typesort_component(opf.contingencies[permutation[end]], opf, bd.idx)
+    cont = typesort_component(opf.contingencies[permutation[end]], opf)
     i = length(permutation)
     while is_islanded(pf, cont[2], cont[1])
         pop!(permutation)
-        cont = typesort_component(opf.contingencies[permutation[end]], opf, bd.idx)
+        cont = typesort_component(opf.contingencies[permutation[end]], opf)
     end
 
     i = 1
@@ -141,7 +141,7 @@ function run_contingency_select!(
     while !isempty(permutation)
         i_c = permutation[i]
         c_obj = opf.contingencies[i_c]
-        cont = typesort_component(c_obj, opf, bd.idx)
+        cont = typesort_component(c_obj, opf)
         if is_islanded(pf, cont[2], cont[1])
             islands, island, island_b = handle_islands(pf.B, pf.DA, cont[2], cont[1], pf.slack)
             inodes = islands[island]
@@ -176,24 +176,24 @@ function run_contingency_select!(
         # Cannot change the model before all data is exctracted!
         if !isempty(olc)
             if type.P
-                add_contingencies!(opf, oplim, mod, ptdf, bd.list, i_c)
+                add_contingencies!(opf, oplim, mod, ptdf, i_c)
                 pre += 1
                 @info @sprintf "Pre %d: Contingency %s %s" pre string(typeof(c_obj)) get_name(c_obj)
             else
-                add_contingencies!(Pc, opf, oplim, mod, bd.obj, islands, island, ptdf, bd.list, i_c)
+                add_contingencies!(Pc, opf, oplim, mod, bd.obj, islands, island, ptdf, i_c)
                 corr1 += 1
                 @info @sprintf "Corr1 %d: Contingency %s %s" corr1 string(typeof(c_obj)) get_name(c_obj)
             end
             cut_added = 2
         end
         if !isempty(olcc)
-            add_contingencies!(Pcc, opf, oplim, mod, bd.obj, islands, island, ptdf, bd.list, i_c)
+            add_contingencies!(Pcc, opf, oplim, mod, bd.obj, islands, island, ptdf, i_c)
             corr2 += 1
             @info @sprintf "Corr2 %d: Contingency %s %s" corr2 string(typeof(c_obj)) get_name(c_obj)
             cut_added = 2
         end
         if !isempty(olccx)
-            add_contingencies!(Pccx, opf, oplim, mod, bd.obj, islands, island, ptdf, bd.list, i_c)
+            add_contingencies!(Pccx, opf, oplim, mod, bd.obj, islands, island, ptdf, i_c)
             corr2f += 1
             @info @sprintf "Corr2 %d: Contingency %s %s" corr2f string(typeof(c_obj)) get_name(c_obj)
             cut_added = 2

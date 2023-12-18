@@ -1,10 +1,6 @@
 """ Benders type """
-mutable struct Benders{TR<:Real,TI<:Integer}
-    idx::Dict{TI,TI}
-    list::Vector{CTypes{TI}}
-
-    obj::AbstractJuMPScalar
-
+mutable struct Benders{TR<:Real}
+    obj::JuMP.AffExpr
     Pᵢ::Vector{TR}
     Pg::Vector{TR}
     Pd::Vector{TR}
@@ -12,17 +8,13 @@ end
 
 """ Constructor for Benders type """
 function benders(opf::OPFsystem, mod::Model)
-    idx = get_nodes_idx(opf.nodes)
-    list = make_list(opf, idx, opf.nodes)
-    # cgen = connectivitymatrix(system, length(nodes), idx)
-
     obj = objective_function(mod)
-    # Pᵢ = get_net_Pᵢ(opf, idx)
+    # Pᵢ = get_net_Pᵢ(opf)
     Pᵢ = get_value(mod, :p0)
-    Pg = get_controllable(opf, mod, idx)
-    Pd = get_Pd(opf, idx) # Fixed injection
+    Pg = get_controllable(opf, mod)
+    Pd = get_Pd(opf, mod) # Fixed injection
     @assert isapprox(Pg, (Pᵢ - Pd); atol=1e-8) string(Pg - (Pᵢ - Pd))
-    return Benders(idx, list, obj, Pᵢ, Pg, Pd)
+    return Benders{Float64}(obj, Pᵢ, Pg, Pd)
 end
 
 """ 
@@ -90,7 +82,7 @@ function run_benders!(
 
     # Set variables
     bd = benders(opf, mod)
-    set_dist_slack!(pf, opf, bd.idx, oplim.dist_slack)
+    set_dist_slack!(pf, opf, oplim.dist_slack)
     calc_θ!(pf, bd.Pᵢ)
     calc_Pline!(pf)
     overloads = zeros(length(opf.contingencies))
@@ -98,13 +90,13 @@ function run_benders!(
 
     pg = get_value(mod, :pg0)
     for (i, c_obj) in enumerate(opf.contingencies)
-        cont = typesort_component(c_obj, opf, bd.idx)
-        # cont  = get_bus_idx(opf.contingencies[c], bd.idx)
+        cont = typesort_component(c_obj, opf)
+        # cont  = get_bus_idx(opf.contingencies[c], opf.idx)
         if is_islanded(pf, cont[2], cont[1])
             islands, island, island_b = handle_islands(pf.B, pf.DA, cont[2], cont[1], pf.slack)
-            type.C1 && init_P!(Pc, opf, oplim, mod, bd.obj, bd.list, islands, island, i)
-            type.C2 && init_P!(Pcc, opf, oplim, mod, bd.obj, bd.list, islands, island, i)
-            type.C2F && init_P!(Pccx, opf, oplim, mod, bd.obj, bd.list, islands, island, i)
+            type.C1 && init_P!(Pc, opf, oplim, mod, bd.obj, islands, island, i)
+            type.C2 && init_P!(Pcc, opf, oplim, mod, bd.obj, islands, island, i)
+            type.C2F && init_P!(Pccx, opf, oplim, mod, bd.obj, islands, island, i)
             @debug "Island: Contingency $(string(typeof(c_obj))) $(get_name(c_obj))"
             if isempty(islands)
                 fill!(flow, 0.0)
@@ -165,7 +157,7 @@ function run_benders!(
 
         for i in permutation
             c_obj = opf.contingencies[i]
-            cont = typesort_component(c_obj, opf, bd.idx)
+            cont = typesort_component(c_obj, opf)
             if is_islanded(pf, cont[2], cont[1])
                 islands, island, island_b = handle_islands(pf.B, pf.DA, cont[2], cont[1], pf.slack)
                 inodes = islands[island]
@@ -269,13 +261,13 @@ end
     Assummes that island-contingencies have active variables from the pre-procedure.
 """
 function calculate_contingency_line_flows!(ΔP::Vector{<:Real}, P::Dict{<:Integer, T}, opf::OPFsystem, 
-    mod::Model, pf::DCPowerFlow, Pᵢ::AbstractVector{<:Real}, list::Vector{<:CTypes{Int}}, cont::Tuple{Real, Tuple{Real,Real}}, 
+    mod::Model, pf::DCPowerFlow, Pᵢ::AbstractVector{<:Real}, cont::Tuple{Real, Tuple{Real,Real}}, 
     c::Integer, c_obj::Component, island::Vector, island_b::Vector{<:Integer}
 ) where {T}
     if get(P, c, 0) == 0
         return calculate_contingency_line_flows(mod, pf, Pᵢ, cont, c, c_obj, island, island_b)
     end
-    ΔP = get_ΔP!(ΔP, mod, opf, list, P, c)
+    ΔP = get_ΔP!(ΔP, mod, opf, P, c)
     if iszero(ΔP)
         calculate_line_flows!(pf.vb_tmp, pf, cont[2], cont[1], nodes=island, branches=island_b)
     else
@@ -284,13 +276,13 @@ function calculate_contingency_line_flows!(ΔP::Vector{<:Real}, P::Dict{<:Intege
     return pf.vb_tmp
 end
 function calculate_contingency_line_flows!(ΔP::Vector{<:Real}, P::Dict{<:Integer, T}, opf::OPFsystem, 
-    mod::Model, pf::DCPowerFlow, Pᵢ::AbstractVector{<:Real}, list::Vector{<:CTypes{Int}}, cont::Tuple{Real,Real},
+    mod::Model, pf::DCPowerFlow, Pᵢ::AbstractVector{<:Real}, cont::Tuple{Real,Real},
     c::Integer, c_obj::Component, island::Vector, island_b::Vector{<:Integer}
 ) where {T}
     if get(P, c, 0) == 0
         return calculate_contingency_line_flows(mod, pf, Pᵢ, cont, c, c_obj, island, island_b)
     end
-    ΔP = get_ΔP!(ΔP, mod, opf, list, P, c)
+    ΔP = get_ΔP!(ΔP, mod, opf, P, c)
     ΔP[cont[2]] -= get_ΔP(mod, cont, c_obj, P, c)
     LinearAlgebra.mul!(pf.vb_tmp, pf.ϕ, (Pᵢ .+ ΔP))
     return pf.vb_tmp
@@ -324,7 +316,7 @@ function calculate_contingency_overload!(ΔP::Vector{<:Real}, branch_rating::Vec
     cont::Union{Tuple{Real, Tuple{Real,Real}}, Tuple{Real,Real}}, c::Integer, c_obj::Component, 
     island::Vector, island_b::Vector{<:Integer}
 )
-    flow = calculate_contingency_line_flows!(ΔP, Pc, opf, mod, pf, bd.Pᵢ, bd.list, cont, c, c_obj, island, island_b)
+    flow = calculate_contingency_line_flows!(ΔP, Pc, opf, mod, pf, bd.Pᵢ, cont, c, c_obj, island, island_b)
     return filter_overload(flow, branch_rating)
 end
 
@@ -358,87 +350,52 @@ get_ΔP(mod::Model, cont::Tuple{Real,Real}, ::StaticLoad, Pccx::Dict{<:Integer, 
     value(mod[:pd0][cont[1]]) - value(Pccx[c].lsccx[cont[1]])
 
 """ Return the short term post-contingency power injection change at each node. """
-function get_ΔP!(ΔP::Vector{T}, mod::Model, opf::OPFsystem, list::Vector{<:CTypes{Int}}, 
+function get_ΔP!(ΔP::Vector{T}, mod::Model, opf::OPFsystem, 
     Pc::Dict{<:Integer, ExprC}, c::Integer
 ) where {T<:Real}
-    fill!(ΔP, zero(T))
     x = get(Pc, c, 0)
     if x != 0
-        pgu = get_value(mod, x.pgu)
-        pgd = get_value(mod, x.pgd)
-        prc = get_value(mod, x.prc)
-        lsc = get_value(mod, x.lsc)
-        for (i, n) in enumerate(list)
-            for g in n.ctrl_generation
-                ΔP[i] += (pgu[g] - pgd[g])
-            end
-            for g in n.renewables
-                ΔP[i] -= prc[g]
-            end
-            for g in n.demands
-                ΔP[i] += lsc[g]
-            end
-        end
+        copy!(ΔP, opf.mgx' * (get_value(mod, x.pgu) - get_value(mod, x.pgd)) - 
+            opf.mrx' * get_value(mod, x.prc) + opf.mdx' * get_value(mod, x.lsc))
+    else
+        fill!(ΔP, zero(T))
     end
     return ΔP
 end
 
 """ Return the long term post-contingency power injection change at each node. """
-function get_ΔP!(ΔP::Vector{T}, mod::Model, opf::OPFsystem, list::Vector{<:CTypes{Int}}, 
+function get_ΔP!(ΔP::Vector{T}, mod::Model, opf::OPFsystem, 
     Pcc::Dict{<:Integer, ExprCC}, c::Integer
 ) where {T<:Real}
-    fill!(ΔP, zero(eltype(ΔP)))
     x = get(Pcc, c, 0)
     if x != 0
-        pgu = get_value(mod, x.pgu)
-        pgd = get_value(mod, x.pgd)
-        pfdccc = get_value(mod, x.pfdccc)
-        prcc = get_value(mod, x.prcc)
-        lscc = get_value(mod, x.lscc)
-        for (i, n) in enumerate(list)
-            for g in n.ctrl_generation
-                ΔP[i] += (pgu[g] - pgd[g])
-            end
-            for g in n.dc_branches
-                ΔP[i] += beta(opf.nodes[i], opf.dc_branches[g]) * pfdccc[g]
-            end
-            for g in n.renewables
-                ΔP[i] -= prcc[g]
-            end
-            for g in n.demands
-                ΔP[i] += lscc[g]
-            end
-        end
+        copy!(ΔP, opf.mgx' * (get_value(mod, x.pgu) - get_value(mod, x.pgd)) - 
+            opf.mrx' * get_value(mod, x.prcc) + opf.mdx' * get_value(mod, x.lscc) +
+            opf.mdcx' * get_value(mod, x.pfdccc))
+    else
+        fill!(ΔP, zero(T))
     end
     return ΔP
 end
 
 """ Return the long term post-contingency with failure power injection change at each node. """
-function get_ΔP!(ΔP::Vector{T}, mod::Model, opf::OPFsystem, list::Vector{<:CTypes{Int}}, 
+function get_ΔP!(ΔP::Vector{T}, mod::Model, opf::OPFsystem, 
     Pccx::Dict{<:Integer, ExprCCX}, c::Integer
 ) where {T<:Real}
-    fill!(ΔP, zero(eltype(ΔP)))
     x = get(Pccx, c, 0)
     if x != 0
-        pgdx = get_value(mod, x.pgdx)
-        lsccx = get_value(mod, x.lsccx)
-        for (i, n) in enumerate(list)
-            for g in n.ctrl_generation
-                ΔP[i] -= pgdx[g]
-            end
-            for g in n.demands
-                ΔP[i] += lsccx[g]
-            end
-        end
+        copy!(ΔP, -opf.mgx' * get_value(mod, x.pgdx) + opf.mdx' * get_value(mod, x.lsccx))
+    else
+        fill!(ΔP, zero(T))
     end
     return ΔP
 end
 
-function get_P(P::Dict, opf::OPFsystem, oplim::Oplimits, mod::Model, obj::JuMP.AbstractJuMPScalar, list::Vector{<:CTypes{Int}},
+function get_P(P::Dict, opf::OPFsystem, oplim::Oplimits, mod::Model, obj::JuMP.AbstractJuMPScalar, 
     islands::Vector, island::Integer, c::Integer
 )
     if get(P, c, 0) == 0  # If the contingency is not run before, a set of corrective variables is added
-        init_P!(P, opf, oplim, mod, obj, list, islands, island, c)
+        init_P!(P, opf, oplim, mod, obj, islands, island, c)
     end
     return get(P, c, 0)
 end
@@ -459,14 +416,7 @@ function add_cut(opf::OPFsystem, mod::Model, bd::Benders, ptdf::AbstractMatrix{<
     c_obj::Component, cut_added::Integer, lim::Real, id::Integer
 )
     for (i, ol) in overloads
-        expr = JuMP.@expression(mod, sum((ptdf[i, inode] * (
-                bd.Pg[inode] -
-                sum((mod[:pg0][ctrl] for ctrl in sublist.ctrl_generation), init=0.0) -
-                sum((beta(sublist.node, opf.dc_branches[d]) * mod[:pfdc0][d] for d in sublist.dc_branches), init=0.0) +
-                sum((mod[:pr0][r] for r in sublist.renewables), init=0.0) -
-                sum((mod[:ls0][d] for d in sublist.demands), init=0.0)
-            ) for (inode, sublist) in enumerate(bd.list)), init=0.0
-        ))
+        expr = JuMP.@expression(mod, sum(ptdf[i, :] .* (bd.Pᵢ - mod[:inj_p0])))
 
         id += 1
         add_overload_expr!(mod, expr, ol, "Pre", id, c_obj, opf, i, lim)
@@ -479,19 +429,17 @@ function add_cut(Pc::Dict{<:Integer, ExprC}, opf::OPFsystem, oplim::Oplimits, mo
     ptdf::AbstractMatrix{<:Real}, overloads::Vector{<:Tuple{Integer,Real}}, islands::Vector, island::Integer,
     c_obj::Component, c::Integer, cut_added::Integer, lim::Real, id::Integer
 )
-    pc = get_P(Pc, opf, oplim, mod, bd.obj, bd.list, islands, island, c)
+    pc = get_P(Pc, opf, oplim, mod, bd.obj, islands, island, c)
     for (i, ol) in overloads
-        expr = JuMP.@expression(mod, sum((ptdf[i, inode] * (
-                bd.Pg[inode] + ΔPc[inode] -
-                sum((mod[:pg0][ctrl] + pc.pgu[ctrl] - pc.pgd[ctrl] for ctrl in sublist.ctrl_generation), init=0.0) -
-                sum((beta(sublist.node, opf.dc_branches[d]) * mod[:pfdc0][d] for d in sublist.dc_branches), init=0.0) +
-                sum((pc.prc[r] for r in sublist.renewables), init=0.0) -
-                sum((pc.lsc[d] for d in sublist.demands), init=0.0)
-            ) for (inode, sublist) in enumerate(bd.list)), init=0.0
-        ))
+        expr = JuMP.@expression(mod, -opf.mgx' * (mod[:pg0] + pc.pgu - pc.pgd))
+        add_to_expression!.(expr, -opf.mrx' * (mod[:pr] - pc.prc))
+        add_to_expression!.(expr, -opf.mdcx' * mod[:pfdc0])
+        add_to_expression!.(expr, -opf.mdx' * (pc.lsc - mod[:pd]))
+        add_to_expression!.(expr, bd.Pᵢ + ΔPc)
+        expr2 = JuMP.@expression(mod, sum((ptdf[i, :] .* expr)))
 
         id += 1
-        add_overload_expr!(mod, expr, ol, "Corr1", id, c_obj, opf, i, lim)
+        add_overload_expr!(mod, expr2, ol, "Corr1", id, c_obj, opf, i, lim)
         cut_added = 2
     end
     return cut_added, id
@@ -501,20 +449,18 @@ function add_cut(Pcc::Dict{<:Integer, ExprCC}, opf::OPFsystem, oplim::Oplimits, 
     ptdf::AbstractMatrix{<:Real}, overloads::Vector{<:Tuple{Integer,Real}}, islands::Vector, island::Integer,
     c_obj::Component, c::Integer, cut_added::Integer, lim::Real, id::Integer
 )
-    pcc = get_P(Pcc, opf, oplim, mod, bd.obj, bd.list, islands, island, c)
+    pcc = get_P(Pcc, opf, oplim, mod, bd.obj, islands, island, c)
     for (i, ol) in overloads
         # Finding and adding the Benders cut
-        expr = JuMP.@expression(mod, sum((ptdf[i, inode] * (
-                bd.Pg[inode] + ΔPcc[inode] -
-                sum((mod[:pg0][ctrl] + pcc.pgu[ctrl] - pcc.pgd[ctrl] for ctrl in sublist.ctrl_generation), init=0.0) -
-                sum((beta(sublist.node, opf.dc_branches[d]) * pcc.pfdccc[d] for d in sublist.dc_branches), init=0.0) +
-                sum((pcc.prcc[r] for r in sublist.renewables), init=0.0) -
-                sum((pcc.lscc[d] for d in sublist.demands), init=0.0)
-            ) for (inode, sublist) in enumerate(bd.list)), init=0.0
-        ))
+        expr = JuMP.@expression(mod, -opf.mgx' * (mod[:pg0] + pcc.pgu - pcc.pgd))
+        add_to_expression!.(expr, -opf.mrx' * (mod[:pr] - pcc.prcc))
+        add_to_expression!.(expr, -opf.mdcx' * pcc.pfdccc)
+        add_to_expression!.(expr, -opf.mdx' * (pcc.lscc - mod[:pd]))
+        add_to_expression!.(expr, bd.Pᵢ + ΔPcc)
+        expr2 = JuMP.@expression(mod, sum((ptdf[i, :] .* expr)))
 
         id += 1
-        add_overload_expr!(mod, expr, ol, "Corr2", id, c_obj, opf, i, lim)
+        add_overload_expr!(mod, expr2, ol, "Corr2", id, c_obj, opf, i, lim)
         cut_added = 3
     end
     return cut_added, id
@@ -524,20 +470,19 @@ function add_cut(Pccx::Dict{<:Integer, ExprCCX}, opf::OPFsystem, oplim::Oplimits
     ptdf::AbstractMatrix{<:Real}, overloads::Vector{<:Tuple{Integer,Real}}, islands::Vector, island::Integer,
     c_obj::Component, c::Integer, cut_added::Integer, lim::Real, id::Integer
 )
-    pccx = get_P(Pccx, opf, oplim, mod, bd.obj, bd.list, islands, island, c)
+    pccx = get_P(Pccx, opf, oplim, mod, bd.obj, islands, island, c)
     # sort!(overloads, rev = true, by = x -> abs(x[2]))
     for (i, ol) in overloads
         # Finding and adding the Benders cut
-        expr = JuMP.@expression(mod, sum((ptdf[i, inode] * (
-                bd.Pg[inode] + ΔPccx[inode] -
-                sum((mod[:pg0][ctrl] - pccx.pgdx[ctrl] for ctrl in sublist.ctrl_generation), init=0.0) +
-                sum((pccx.prccx[r] for r in sublist.renewables), init=0.0) -
-                sum((pccx.lsccx[d] for d in sublist.demands), init=0.0)
-            ) for (inode, sublist) in enumerate(bd.list)), init=0.0
-        ))
+        expr = JuMP.@expression(mod, -opf.mgx' * (mod[:pg0] - pccx.pgdx))
+        add_to_expression!.(expr, -opf.mrx' * (mod[:pr] - pccx.prccx))
+        add_to_expression!.(expr, -opf.mdcx' * mod[:pfdc0])
+        add_to_expression!.(expr, -opf.mdx' * (pccx.lsccx - mod[:pd]))
+        add_to_expression!.(expr, bd.Pᵢ + ΔPccx)
+        expr2 = JuMP.@expression(mod, sum((ptdf[i, :] .* expr)))
 
         id += 1
-        add_overload_expr!(mod, expr, ol, "Corr2x", id, c_obj, opf, i, lim)
+        add_overload_expr!(mod, expr2, ol, "Corr2x", id, c_obj, opf, i, lim)
         cut_added = 3
     end
     return cut_added, id

@@ -63,7 +63,10 @@ function set_active_power_demand!(system::System, demands=get_max_active_power.(
 end
 
 PowerSystems.set_active_power!(dem::StandardLoad, val::Real) =
-    PowerSystems.set_current_active_power!(dem, val)
+    PowerSystems.set_constant_active_power!(dem, val)
+
+" Fix for name difference in StandardLoad "
+PowerSystems.get_active_power(value::StandardLoad) = value.constant_active_power
 
 function set_ramp_limits!(system::System, ramp_mult::Real=0.01)
     set_ramp_limit!.(get_ctrl_generation(system), ramp_mult)
@@ -211,11 +214,18 @@ sort_components!(branches::Vector{<:Branch}) = sort!(branches,
 )
 
 """ OPF system type """
-mutable struct OPFsystem{T<:Real}
-    cost_ctrl_gen::Vector{NamedTuple{(:fix, :var, :ramp), Tuple{T, T, T}}}
-    cost_renewables::Vector{T}
-    voll::Vector{T}
-    prob::Vector{T}
+mutable struct OPFsystem{TR<:Real,TI<:Integer}
+    cost_ctrl_gen::Vector{NamedTuple{(:fix, :var, :ramp), Tuple{TR, TR, TR}}}
+    cost_renewables::Vector{TR}
+    voll::Vector{TR}
+    prob::Vector{TR}
+
+    idx::Dict{TI,TI}
+    mgx::SparseArrays.SparseMatrixCSC{Int8, TI}
+    mdx::SparseArrays.SparseMatrixCSC{Int8, TI}
+    mbx::SparseArrays.SparseMatrixCSC{Int8, TI}
+    mdcx::SparseArrays.SparseMatrixCSC{Int8, TI}
+    mrx::SparseArrays.SparseMatrixCSC{Int8, TI}
 
     ctrl_generation::Vector{Generator}
     branches::Vector{ACBranch}
@@ -227,9 +237,9 @@ mutable struct OPFsystem{T<:Real}
 end
 
 """ Constructor for OPFsystem """
-function opfsystem(sys::System, voll::Vector{T}, contingencies::Vector{<:Component}=Component[], prob::Vector{T}=[],
+function opfsystem(sys::System, voll::Vector{TR}, contingencies::Vector{<:Component}=Component[], prob::Vector{TR}=[],
     ramp_mult::Real=1.0; check=false
-) where {T<:Real}
+) where {TR<:Real}
 
     ctrl_generation = sort_components!(get_ctrl_generation(sys))
     branches = sort_components!(get_branches(sys))
@@ -238,8 +248,15 @@ function opfsystem(sys::System, voll::Vector{T}, contingencies::Vector{<:Compone
     demands = sort_components!(get_demands(sys))
     renewables = sort_components!(get_renewables(sys))
 
+    idx = get_nodes_idx(nodes)
+    mgx = calc_connectivity(ctrl_generation, length(nodes), idx)
+    mbx = calc_A(branches, length(nodes), idx)
+    mdcx = calc_A(dc_branches, length(nodes), idx)
+    mdx = calc_connectivity(demands, length(nodes), idx)
+    mrx = calc_connectivity(renewables, length(nodes), idx)
+
     cost_ctrl_gen = get_generator_cost(ctrl_generation, ramp_mult)
-    cost_renewables = Vector{Float64}() # Vector{Float64}([get_generator_cost(g)[2] for g in renewables])
+    cost_renewables = Vector{TR}() # Vector{Float64}([get_generator_cost(g)[2] for g in renewables])
 
     if check
         check_values(getfield.(cost_ctrl_gen, :fix), ctrl_generation, "fixedcost")
@@ -251,13 +268,13 @@ function opfsystem(sys::System, voll::Vector{T}, contingencies::Vector{<:Compone
         check_values.(dc_branches)
     end
 
-    A = calc_B(branches, nodes)
+    A = calc_B(branches, length(nodes), idx)
     islands = island_detection(A'A)
     if length(islands) > 1
         @warn "The system is separated into islands" islands
     end
 
-    return OPFsystem{T}(cost_ctrl_gen, cost_renewables, voll, prob,
+    return OPFsystem{TR, Int}(cost_ctrl_gen, cost_renewables, voll, prob, idx, mgx, mdx, mbx, mdcx, mrx,
         ctrl_generation, branches, dc_branches, nodes, demands, renewables, contingencies)
 end
 
@@ -305,6 +322,18 @@ function get_area_branches(branches::AbstractVector{T}, area::Area) where {T<:Br
     return vals
 end
 
+function get_area_nodes(nodes::AbstractVector{T}) where {T<:Bus}
+    vals = Dict{Area, Vector{T}}()
+    for n in nodes
+        area = get_area(n)
+        if get(vals, area, 0) == 0
+            vals[area] = T[]
+        end
+        push!(vals[area], n)
+    end
+    return vals
+end
+
 function typesort_components(list::AbstractVector{<:Component})
     gen = Generator[]
     demand = StaticLoad[]
@@ -333,17 +362,17 @@ function find_component(val::Component, list::AbstractVector{<:Component})
     return i
 end
 
-typesort_component(val::Generator, opf::OPFsystem, idx::Dict{<:Int,<:Int}) =
-    (find_component(val, get_ctrl_generation(opf)), get_bus_idx(val, idx))
+typesort_component(val::Generator, opf::OPFsystem) =
+    (find_component(val, get_ctrl_generation(opf)), get_bus_idx(val, opf.idx))
 
-typesort_component(val::StaticLoad, opf::OPFsystem, idx::Dict{<:Int,<:Int}) =
-    (find_component(val, get_demands(opf)), get_bus_idx(val, idx))
+typesort_component(val::StaticLoad, opf::OPFsystem) =
+    (find_component(val, get_demands(opf)), get_bus_idx(val, opf.idx))
 
-typesort_component(val::ACBus, opf::OPFsystem, idx::Dict{<:Int,<:Int}) =
-    (find_component(val, get_nodes(opf)), get_bus_idx(val, idx))
+typesort_component(val::ACBus, opf::OPFsystem) =
+    (find_component(val, get_nodes(opf)), get_bus_idx(val, opf.idx))
 
-typesort_component(val::ACBranch, opf::OPFsystem, idx::Dict{<:Int,<:Int}) =
-    (find_component(val, get_branches(opf)), get_bus_idx(val, idx))
+typesort_component(val::ACBranch, opf::OPFsystem) =
+    (find_component(val, get_branches(opf)), get_bus_idx(val, opf.idx))
 
 """ Make a DenseAxisArray using the list and function for the value of each element """
 make_named_array(value_func, list) = JuMP.Containers.DenseAxisArray(
@@ -360,24 +389,24 @@ struct CTypes{T<:Integer}
 end
 
 """ Make a list where all component numbers are distributed on their node """
-function make_list(opf::OPFsystem, idx::Dict{<:Int,<:Int}, nodes::AbstractVector{ACBus})
+function make_list(opf::OPFsystem, nodes::AbstractVector{ACBus})
     list = [CTypes(n, [Int[] for _ in 1:5]...) for n in nodes]
     for (i, r) in enumerate(opf.ctrl_generation)
-        push!(list[idx[r.bus.number]].ctrl_generation, i)
+        push!(list[opf.idx[r.bus.number]].ctrl_generation, i)
     end
     for (i, r) in enumerate(opf.renewables)
-        push!(list[idx[r.bus.number]].renewables, i)
+        push!(list[opf.idx[r.bus.number]].renewables, i)
     end
     for (i, d) in enumerate(opf.demands)
-        push!(list[idx[d.bus.number]].demands, i)
+        push!(list[opf.idx[d.bus.number]].demands, i)
     end
     for (i, d) in enumerate(opf.branches)
-        push!(list[idx[d.arc.from.number]].branches, i)
-        push!(list[idx[d.arc.to.number]].branches, i)
+        push!(list[opf.idx[d.arc.from.number]].branches, i)
+        push!(list[opf.idx[d.arc.to.number]].branches, i)
     end
     for (i, d) in enumerate(opf.dc_branches)
-        push!(list[idx[d.arc.from.number]].dc_branches, i)
-        push!(list[idx[d.arc.to.number]].dc_branches, i)
+        push!(list[opf.idx[d.arc.from.number]].dc_branches, i)
+        push!(list[opf.idx[d.arc.to.number]].dc_branches, i)
     end
     return list
 end
@@ -598,104 +627,54 @@ function get_variable_values(mod::Model, Pc::Dict{<:Int,T}) where {T<:Union{Expr
     return vals
 end
 
-" Fix for name difference in StandardLoad "
-PowerSystems.get_active_power(value::StandardLoad) = value.constant_active_power
-
 """ Return the net power injected at each node. """
-function get_net_Pᵢ(opf::OPFsystem, mod::Model, idx::Dict{<:Int,<:Int}=get_nodes_idx(opf.nodes))
-    P = zeros(length(opf.nodes))
-    vals = get_value(mod, :pr0)
-    for (i, r) in enumerate(opf.renewables)
-        P[idx[r.bus.number]] += get_active_power(r) - vals[i]
-    end
-    vals = get_value(mod, :ls0)
-    for (i, d) in enumerate(opf.demands)
-        P[idx[d.bus.number]] -= get_active_power(d) + vals[i]
-    end
-    vals = get_value(mod, :pg0)
-    for (i, r) in enumerate(opf.ctrl_generation)
-        P[idx[r.bus.number]] += vals[i]
-    end
-    vals = get_value(mod, :pfdc0)
-    for (i, d) in enumerate(opf.dc_branches)
-        P[idx[d.arc.from.number]] += vals[i]
-        P[idx[d.arc.to.number]] -= vals[i]
-    end
-    # @assert abs(sum(Pᵢ)) < 0.001
-    return P
-end
-function get_net(power_func::Function, opf::OPFsystem, idx::Dict{<:Int,<:Int})
+get_net_Pᵢ(mod::Model) = get_value(mod, :p0)
+
+function get_net(power_func::Function, opf::OPFsystem)
     vals = zeros(length(opf.nodes))
     for r in opf.renewables
-        vals[idx[r.bus.number]] += power_func(r)
+        vals[opf.idx[r.bus.number]] += power_func(r)
     end
     for d in opf.demands
-        vals[idx[d.bus.number]] -= power_func(d)
+        vals[opf.idx[d.bus.number]] -= power_func(d)
     end
     for r in opf.ctrl_generation
-        vals[idx[r.bus.number]] += power_func(r)
+        vals[opf.idx[r.bus.number]] += power_func(r)
     end
     for d in opf.dc_branches
-        vals[idx[d.arc.from.number]] += power_func(d)
-        vals[idx[d.arc.to.number]] -= power_func(d)
+        vals[opf.idx[d.arc.from.number]] += power_func(d)
+        vals[opf.idx[d.arc.to.number]] -= power_func(d)
     end
     return vals
 end
-get_net_P(opf::OPFsystem, idx::Dict{<:Int,<:Int}=get_nodes_idx(opf.nodes)) = 
-    get_net(get_active_power, opf, idx)
-get_net_Q(opf::OPFsystem, idx::Dict{<:Int,<:Int}=get_nodes_idx(opf.nodes)) = 
-    get_net(get_reactive_power, opf, idx)
+get_net_P(opf::OPFsystem) = get_net(get_active_power, opf)
+get_net_Q(opf::OPFsystem) = get_net(get_reactive_power, opf)
 
-
-function get_Pd!(P::Vector{<:Real}, opf::OPFsystem, idx::Dict{<:Int,<:Int})
-    for r in opf.renewables
-        P[idx[r.bus.number]] += get_active_power(r)
-    end
-    for d in opf.demands
-        P[idx[d.bus.number]] -= get_active_power(d)
-    end
+""" Return active power from renweables and demands at each node. """
+function get_Pd!(P::Vector{<:Real}, opf::OPFsystem, mod::Model)
+    P .+= opf.mrx' * get_value(mod, :pr) - opf.mdx' * get_value(mod, :pd)
     return P
 end
-function get_Pd(opf::OPFsystem, idx::Dict{<:Int,<:Int}=get_nodes_idx(opf.nodes))
-    get_Pd!(zeros(length(opf.nodes)), opf, idx)
-end
+get_Pd(opf::OPFsystem, mod::Model) = get_Pd!(zeros(length(opf.nodes)), opf, mod)
 
-""" Return power shed at each node. """
-function get_Pshed!(P::Vector{<:Real}, opf::OPFsystem, mod::Model, idx::Dict{<:Int,<:Int})
-    vals = get_value(mod, :pr0)
-    for (i, r) in enumerate(opf.renewables)
-        P[idx[r.bus.number]] -= vals[i]
-    end
-    vals = get_value(mod, :ls0)
-    for (i, d) in enumerate(opf.demands)
-        P[idx[d.bus.number]] += vals[i]
-    end
+""" Return power shed from renewables and demands at each node. """
+function get_Pshed!(P::Vector{<:Real}, opf::OPFsystem, mod::Model)
+    P .+= opf.mdx' * get_value(mod, :ls0) - opf.mrx' * get_value(mod, :pr0)
     return P
 end
-function get_Pshed(opf::OPFsystem, mod::Model, idx::Dict{<:Int,<:Int}=get_nodes_idx(opf.nodes))
-    get_Pshed!(zeros(length(opf.nodes)), opf, mod, idx)
-end
+get_Pshed(opf::OPFsystem, mod::Model) = get_Pshed!(zeros(length(opf.nodes)), opf, mod)
 
 """ Return the power injected by controlled generation at each node. """
-function get_Pgen!(P::Vector{<:Real}, opf::OPFsystem, mod::Model, idx::Dict{<:Int,<:Int})
-    vals = get_value(mod, :pg0)
-    for (i, r) in enumerate(opf.ctrl_generation)
-        P[idx[r.bus.number]] += vals[i]
-    end
-    vals = get_value(mod, :pfdc0)
-    for (i, d) in enumerate(opf.dc_branches)
-        P[idx[d.arc.from.number]] += vals[i]
-        P[idx[d.arc.to.number]] -= vals[i]
-    end
+function get_Pgen!(P::Vector{<:Real}, opf::OPFsystem, mod::Model)
+    P .+= opf.mgx' * get_value(mod, :pg0) + opf.mdcx' * get_value(mod, :pfdc0)
     return P
 end
-function get_Pgen(opf::OPFsystem, mod::Model, idx::Dict{<:Int,<:Int}=get_nodes_idx(opf.nodes))
-    get_Pgen!(zeros(length(opf.nodes)), opf, mod, idx)
-end
+get_Pgen(opf::OPFsystem, mod::Model) = get_Pgen!(zeros(length(opf.nodes)), opf, mod)
 
-function get_controllable(opf::OPFsystem, mod::Model, idx::Dict{<:Int,<:Int}=get_nodes_idx(opf.nodes))
-    P = get_Pgen(opf, mod, idx)
-    get_Pshed!(P, opf, mod, idx)
+" Return the controlled generation and power shedding at each node. "
+function get_controllable(opf::OPFsystem, mod::Model)
+    P = get_Pgen(opf, mod)
+    get_Pshed!(P, opf, mod)
     return P
 end
 
