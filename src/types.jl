@@ -52,8 +52,10 @@ function -(x::OPF, y::OPF)
     return OPF(x.Base > y.Base, x.P > y.P, x.C1 > y.C1, x.C2 > y.C2, x.C2F > y.C2F)
 end
 
+abstract type ContExpr end
+
 """ Holds the short term variables for contingencies """
-mutable struct ExprC{T<:Vector{JuMP.VariableRef}}
+mutable struct ExprC{T<:Vector{JuMP.VariableRef}} <: ContExpr
     pc::T
     pgu::T
     pgd::T
@@ -61,9 +63,10 @@ mutable struct ExprC{T<:Vector{JuMP.VariableRef}}
     lsc::T
 end
 ExprC() = ExprC(JuMP.VariableRef[], JuMP.VariableRef[], JuMP.VariableRef[], JuMP.VariableRef[], JuMP.VariableRef[])
+get_name(::ExprC) = "Corr1"
 
 """ Holds the long term variables for contingencies """
-mutable struct ExprCC{T<:Vector{JuMP.VariableRef}}
+mutable struct ExprCC{T<:Vector{JuMP.VariableRef}} <: ContExpr
     pcc::T
     pgu::T
     pgd::T
@@ -72,12 +75,14 @@ mutable struct ExprCC{T<:Vector{JuMP.VariableRef}}
     lscc::T
 end
 ExprCC() = ExprCC(JuMP.VariableRef[], JuMP.VariableRef[], JuMP.VariableRef[], JuMP.VariableRef[], JuMP.VariableRef[], JuMP.VariableRef[])
+get_name(::ExprCC) = "Corr2"
 
 """ Holds the long term variables for contingencies, no ramp up allowed """
-mutable struct ExprCCX{T<:Vector{JuMP.VariableRef}}
+mutable struct ExprCCX{T<:Vector{JuMP.VariableRef}} <: ContExpr
     pccx::T
     pgdx::T
     prccx::T
     lsccx::T
 end
 ExprCCX() = ExprCCX(JuMP.VariableRef[], JuMP.VariableRef[], JuMP.VariableRef[], JuMP.VariableRef[])
+get_name(::ExprCCX) = "Corr2x"

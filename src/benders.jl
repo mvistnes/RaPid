@@ -191,29 +191,6 @@ function run_benders!(
                 type.C1 && get(Pc, i, 0) == 0 && fill!(ΔPc, 0.0)
                 type.C2 && get(Pcc, i, 0) == 0 && fill!(ΔPcc, 0.0)
                 type.C2F && get(Pccx, i, 0) == 0 && fill!(ΔPccx, 0.0)
-
-                # # Calculate the power flow with the new outage and find if there are any overloads
-                # overloads_c, overloads_cc, overloads_ccx = find_overloads(Val(type), flow, ptdf, bd.Pᵢ, oplim, ΔPc, ΔPcc, ΔPccx)
-                # if !isempty(olc) || !isempty(overloads_c) 
-                #     if isempty(olc)
-                #         println([o[2] for o in overloads_c])
-                #     elseif isempty(overloads_c) 
-                #         println([o for o in olc])
-                #     else
-                #         println([(o1[2], o2[2], o1[2] - o2[2]) for (o1, o2) in zip(overloads_c, olc)])
-                #     end
-                #     # error(olc)
-                # end
-                # if !isempty(olcc) || !isempty(overloads_cc) 
-                #     if isempty(olcc)
-                #         println([o[2] for o in overloads_cc])
-                #     elseif isempty(overloads_cc) 
-                #         println([o for o in olcc])
-                #     else
-                #         println([(o1[2], o2[2], o1[2] - o2[2]) for (o1, o2) in zip(overloads_cc, olcc)])
-                #     end
-                #     # error(olcc)
-                # end
             end
 
             # Cannot change the model before all data is exctracted!
@@ -349,61 +326,41 @@ get_ΔP(mod::Model, cont::Tuple{Real,Real}, ::StaticLoad, Pcc::Dict{<:Integer, E
 get_ΔP(mod::Model, cont::Tuple{Real,Real}, ::StaticLoad, Pccx::Dict{<:Integer, ExprCCX}, c::Integer) = 
     value(mod[:pd0][cont[1]]) - value(Pccx[c].lsccx[cont[1]])
 
-""" Return the short term post-contingency power injection change at each node. """
+""" Return the contingency power injection change at each node changing ΔP. """
 function get_ΔP!(ΔP::Vector{T}, mod::Model, opf::OPFsystem, 
-    Pc::Dict{<:Integer, ExprC}, c::Integer
+    P::Dict{<:Integer, <:ContExpr}, c::Integer
 ) where {T<:Real}
-    x = get(Pc, c, 0)
+    x = get(P, c, 0)
     if x != 0
-        copy!(ΔP, opf.mgx' * (get_value(mod, x.pgu) - get_value(mod, x.pgd)) - 
-            opf.mrx' * get_value(mod, x.prc) + opf.mdx' * get_value(mod, x.lsc))
+        copy!(ΔP, get_ΔP(x, opf, mod))
     else
         fill!(ΔP, zero(T))
     end
     return ΔP
+end
+
+""" Return the short term post-contingency power injection change at each node. """
+@inline function get_ΔP(pc::ExprC, opf::OPFsystem, mod::Model)
+    return opf.mgx' * (get_value(mod, pc.pgu) - get_value(mod, pc.pgd)) - 
+        opf.mrx' * get_value(mod, pc.prc) + opf.mdx' * get_value(mod, pc.lsc)
 end
 
 """ Return the long term post-contingency power injection change at each node. """
-function get_ΔP!(ΔP::Vector{T}, mod::Model, opf::OPFsystem, 
-    Pcc::Dict{<:Integer, ExprCC}, c::Integer
-) where {T<:Real}
-    x = get(Pcc, c, 0)
-    if x != 0
-        copy!(ΔP, opf.mgx' * (get_value(mod, x.pgu) - get_value(mod, x.pgd)) - 
-            opf.mrx' * get_value(mod, x.prcc) + opf.mdx' * get_value(mod, x.lscc) +
-            opf.mdcx' * get_value(mod, x.pfdccc))
-    else
-        fill!(ΔP, zero(T))
-    end
-    return ΔP
+@inline function get_ΔP(pcc::ExprCC, opf::OPFsystem, mod::Model)
+    return opf.mgx' * (get_value(mod, pcc.pgu) - get_value(mod, pcc.pgd)) - 
+        opf.mrx' * get_value(mod, pcc.prcc) + opf.mdx' * get_value(mod, pcc.lscc) +
+        opf.mdcx' * get_value(mod, pcc.pfdccc)
 end
 
 """ Return the long term post-contingency with failure power injection change at each node. """
-function get_ΔP!(ΔP::Vector{T}, mod::Model, opf::OPFsystem, 
-    Pccx::Dict{<:Integer, ExprCCX}, c::Integer
-) where {T<:Real}
-    x = get(Pccx, c, 0)
-    if x != 0
-        copy!(ΔP, -opf.mgx' * get_value(mod, x.pgdx) + opf.mdx' * get_value(mod, x.lsccx))
-    else
-        fill!(ΔP, zero(T))
-    end
-    return ΔP
-end
-
-function get_P(P::Dict, opf::OPFsystem, oplim::Oplimits, mod::Model, obj::JuMP.AbstractJuMPScalar, 
-    islands::Vector, island::Integer, c::Integer
-)
-    if get(P, c, 0) == 0  # If the contingency is not run before, a set of corrective variables is added
-        init_P!(P, opf, oplim, mod, obj, islands, island, c)
-    end
-    return get(P, c, 0)
+@inline function get_ΔP(pccx::ExprCCX, opf::OPFsystem, mod::Model)
+    return -opf.mgx' * get_value(mod, pccx.pgdx) + opf.mdx' * get_value(mod, pccx.lsccx)
 end
 
 function add_overload_expr!(mod::Model, expr::JuMP.AbstractJuMPScalar, ol::Real, type::String, id::Integer,
     c_obj::Component, opf::OPFsystem, i::Integer, lim::Real
 )
-    @info @sprintf "%s %d: Contingency %s %s; overload on %s of %.4f" type id string(typeof(c_obj)) get_name(c_obj) opf.branches[i].name ol
+    @info @sprintf "%s %d: Contingency %s %s; overload on %s of %.4f" type id string(typeof(c_obj)) c_obj.name opf.branches[i].name ol
     @debug "Cut added: $(sprint_expr(expr,lim))\n"
     if ol < 0
         JuMP.@constraint(mod, expr <= ol)
@@ -425,67 +382,50 @@ function add_cut(opf::OPFsystem, mod::Model, bd::Benders, ptdf::AbstractMatrix{<
     return cut_added, id
 end
 
-function add_cut(Pc::Dict{<:Integer, ExprC}, opf::OPFsystem, oplim::Oplimits, mod::Model, bd::Benders, ΔPc::Vector{<:Real},
+""" Finding and adding Benders cuts to mitigate overloads from one contingency """
+function add_cut(P::Dict{<:Integer, <:ContExpr}, opf::OPFsystem, oplim::Oplimits, mod::Model, bd::Benders, ΔP::Vector{<:Real},
     ptdf::AbstractMatrix{<:Real}, overloads::Vector{<:Tuple{Integer,Real}}, islands::Vector, island::Integer,
     c_obj::Component, c::Integer, cut_added::Integer, lim::Real, id::Integer
 )
-    pc = get_P(Pc, opf, oplim, mod, bd.obj, islands, island, c)
+    p = get(P, c, 0)
+    if p == 0  # If the contingency is not run before, a set of corrective variables is added
+        init_P!(P, opf, oplim, mod, bd.obj, islands, island, c)
+        p = get(P, c, 0)
+    end
     for (i, ol) in overloads
-        expr = JuMP.@expression(mod, -opf.mgx' * (mod[:pg0] + pc.pgu - pc.pgd))
-        add_to_expression!.(expr, -opf.mrx' * (mod[:pr] - pc.prc))
-        add_to_expression!.(expr, -opf.mdcx' * mod[:pfdc0])
-        add_to_expression!.(expr, -opf.mdx' * (pc.lsc - mod[:pd]))
-        add_to_expression!.(expr, bd.Pᵢ + ΔPc)
+        expr = make_cut(p, opf, mod)
+        add_to_expression!.(expr, bd.Pᵢ + ΔP)
         expr2 = JuMP.@expression(mod, sum((ptdf[i, :] .* expr)))
 
         id += 1
-        add_overload_expr!(mod, expr2, ol, "Corr1", id, c_obj, opf, i, lim)
+        add_overload_expr!(mod, expr2, ol, get_name(p), id, c_obj, opf, i, lim)
         cut_added = 2
     end
     return cut_added, id
 end
 
-function add_cut(Pcc::Dict{<:Integer, ExprCC}, opf::OPFsystem, oplim::Oplimits, mod::Model, bd::Benders, ΔPcc::Vector{<:Real},
-    ptdf::AbstractMatrix{<:Real}, overloads::Vector{<:Tuple{Integer,Real}}, islands::Vector, island::Integer,
-    c_obj::Component, c::Integer, cut_added::Integer, lim::Real, id::Integer
-)
-    pcc = get_P(Pcc, opf, oplim, mod, bd.obj, islands, island, c)
-    for (i, ol) in overloads
-        # Finding and adding the Benders cut
-        expr = JuMP.@expression(mod, -opf.mgx' * (mod[:pg0] + pcc.pgu - pcc.pgd))
-        add_to_expression!.(expr, -opf.mrx' * (mod[:pr] - pcc.prcc))
-        add_to_expression!.(expr, -opf.mdcx' * pcc.pfdccc)
-        add_to_expression!.(expr, -opf.mdx' * (pcc.lscc - mod[:pd]))
-        add_to_expression!.(expr, bd.Pᵢ + ΔPcc)
-        expr2 = JuMP.@expression(mod, sum((ptdf[i, :] .* expr)))
-
-        id += 1
-        add_overload_expr!(mod, expr2, ol, "Corr2", id, c_obj, opf, i, lim)
-        cut_added = 3
-    end
-    return cut_added, id
+function make_cut(pc::ExprC, opf::OPFsystem, mod::Model)
+    expr = JuMP.@expression(mod, -opf.mgx' * (mod[:pg0] + pc.pgu - pc.pgd))
+    add_to_expression!.(expr, -opf.mrx' * (mod[:pr] - pc.prc))
+    add_to_expression!.(expr, -opf.mdcx' * mod[:pfdc0])
+    add_to_expression!.(expr, -opf.mdx' * (pc.lsc - mod[:pd]))
+    return expr
 end
 
-function add_cut(Pccx::Dict{<:Integer, ExprCCX}, opf::OPFsystem, oplim::Oplimits, mod::Model, bd::Benders, ΔPccx::Vector{<:Real},
-    ptdf::AbstractMatrix{<:Real}, overloads::Vector{<:Tuple{Integer,Real}}, islands::Vector, island::Integer,
-    c_obj::Component, c::Integer, cut_added::Integer, lim::Real, id::Integer
-)
-    pccx = get_P(Pccx, opf, oplim, mod, bd.obj, islands, island, c)
-    # sort!(overloads, rev = true, by = x -> abs(x[2]))
-    for (i, ol) in overloads
-        # Finding and adding the Benders cut
-        expr = JuMP.@expression(mod, -opf.mgx' * (mod[:pg0] - pccx.pgdx))
-        add_to_expression!.(expr, -opf.mrx' * (mod[:pr] - pccx.prccx))
-        add_to_expression!.(expr, -opf.mdcx' * mod[:pfdc0])
-        add_to_expression!.(expr, -opf.mdx' * (pccx.lsccx - mod[:pd]))
-        add_to_expression!.(expr, bd.Pᵢ + ΔPccx)
-        expr2 = JuMP.@expression(mod, sum((ptdf[i, :] .* expr)))
+function make_cut(pcc::ExprCC, opf::OPFsystem, mod::Model)
+    expr = JuMP.@expression(mod, -opf.mgx' * (mod[:pg0] + pcc.pgu - pcc.pgd))
+    add_to_expression!.(expr, -opf.mrx' * (mod[:pr] - pcc.prcc))
+    add_to_expression!.(expr, -opf.mdcx' * pcc.pfdccc)
+    add_to_expression!.(expr, -opf.mdx' * (pcc.lscc - mod[:pd]))
+    return expr
+end
 
-        id += 1
-        add_overload_expr!(mod, expr2, ol, "Corr2x", id, c_obj, opf, i, lim)
-        cut_added = 3
-    end
-    return cut_added, id
+function make_cut(pccx::ExprCCX, opf::OPFsystem, mod::Model)
+    expr = JuMP.@expression(mod, -opf.mgx' * (mod[:pg0] - pccx.pgdx))
+    add_to_expression!.(expr, -opf.mrx' * (mod[:pr] - pccx.prccx))
+    add_to_expression!.(expr, -opf.mdcx' * mod[:pfdc0])
+    add_to_expression!.(expr, -opf.mdx' * (pccx.lsccx - mod[:pd]))
+    return expr
 end
 
 " An AbstractJuMPScalar nicely formatted to a string "

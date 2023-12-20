@@ -259,16 +259,16 @@ function init_P!(Pc::Dict{<:Integer,ExprC}, opf::OPFsystem, oplim::Oplimits, mod
     JuMP.@constraint(mod, balance_pc == 0.0)
     if isempty(islands)
         JuMP.@constraint(mod, mod[:pg0] .+ pgu .- pgd .>= oplim.pg_lim_min)
+        # JuMP.@constraint(mod, mod[:pg0] .+ pgu .- pgd .<= oplim.pg_lim_max)
         if typeof(oplim.max_shed) <: Real
             @constraint(mod, sum(lsc) <= oplim.max_shed)
         end
     else
         itr = length(islands[island]) < 2 ? Int[] : islands[island]
-        pgc = @expression(mod, opf.mgx[:, itr]' * (mod[:pg0] + pgu - pgd))
         for n in itr
             JuMP.@constraints(mod, begin
                 [g = opf.mgx[:,n].nzind], mod[:pg0][g] + pgu[g] - pgd[g] >= oplim.pg_lim_min[g]
-                [g = opf.mgx[:,n].nzind], mod[:pg0][g] + pgu[g] - pgd[g] <= oplim.pg_lim_max[g]
+                # [g = opf.mgx[:,n].nzind], mod[:pg0][g] + pgu[g] - pgd[g] <= oplim.pg_lim_max[g]
             end)
         end
         itr = isempty(itr) ? (1:length(opf.nodes)) : islands[1:end.!=island]
@@ -423,24 +423,12 @@ function fix_base_case!(mod::Model)
     fix_values!(mod, :pr0)
 end
 
-""" Fix all short term varibles to its current values in the model """
-function fix_short_term!(mod::Model, Pc::Dict{<:Integer,ExprC})
-    for (_, c) in Pc
-        fix_values!(mod, c.pgu)
-        fix_values!(mod, c.pgd)
-        fix_values!(mod, c.prc)
-        fix_values!(mod, c.lsc)
-    end
-end
-
-""" Fix all long term varibles to its current values in the model """
-function fix_long_term!(mod::Model, Pcc::Dict{<:Integer,ExprCC})
-    for (_, c) in Pcc
-        fix_values!(mod, c.pgu)
-        fix_values!(mod, c.pgd)
-        fix_values!(mod, c.pfdccc)
-        fix_values!(mod, c.prcc)
-        fix_values!(mod, c.lscc)
+""" Fix all contingency varibles to its current values in the model """
+function fix_contingecies!(mod::Model, P::Dict{<:Integer,ContExpr})
+    for (_, c) in P
+        for symb in propertynames(P)
+            fix_values!(mod, getproperty(c, symb))
+        end
     end
 end
 

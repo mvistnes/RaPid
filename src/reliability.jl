@@ -12,13 +12,13 @@ SystemRunData(runs::Integer, datasize::Integer) = SystemRunData([zeros(runs, 3, 
 get_objective(val::SystemRunData, run::Integer, i::Integer) = sum(val.objective[run, :, i])
 
 function gather_run_data!(vals::SystemRunData, run::Integer, i::Integer, model::Model, opfs::OPFsystem, 
-    Pc::Dict{<:Integer,ExprC}, Pcc::Dict{<:Integer,ExprCC}, ramp_mult::Real, atol::Real=1e-6
+    Pc::Dict{<:Integer,ExprC}, Pcc::Dict{<:Integer,ExprCC}, atol::Real=1e-6
 )
     MOI.get(model, MOI.ResultCount()) < 1 && return
 
     vals.objective[run, 1, i] = calc_objective(model, opfs)
-    vals.objective[run, 2, i] = calc_objective(model, opfs, Pc, ramp_mult)
-    vals.objective[run, 3, i] = calc_objective(model, opfs, Pcc, ramp_mult)
+    vals.objective[run, 2, i] = calc_objective(model, opfs, Pc)
+    vals.objective[run, 3, i] = calc_objective(model, opfs, Pcc)
     # @assert sum(vals.objective[run, :, i]) ≈ JuMP.objective_value(model)
 
     ens = sum_value_property(model, :ls0)
@@ -64,15 +64,13 @@ function run_case!(result, i, c, case, goal, optimizer, sys, voll, prob, cont, m
     solve_model!(model);
     MOI.get(model, MOI.ResultCount()) < 1 && return
     if case != goal
-        idx = get_nodes_idx(opf.nodes);
-        list = make_list(opf, idx, opf.nodes);
         fix_base_case!(model)
-        case.C1 && fix_short_term!(model, Pc)
-        case.C2 && fix_long_term!(model, Pcc)
-        model, opf, pf, oplim, Pc, Pcc, Pccx = add_all_contingencies!(goal - case, opf, oplim, model, list, pf, idx, Pc, Pcc, Pccx)
+        case.C1 && fix_contingencies!(model, Pc)
+        case.C2 && fix_contingencies!(model, Pcc)
+        model, opf, pf, oplim, Pc, Pcc, Pccx = add_all_contingencies!(goal - case, opf, oplim, model, pf, Pc, Pcc, Pccx)
         solve_model!(model);
     end
-    gather_run_data!(result, c, i, model, opf, Pc, Pcc, ramp_mult)
+    gather_run_data!(result, c, i, model, opf, Pc, Pcc)
     return
 end
 
@@ -90,12 +88,12 @@ function run_contingency_select_case!(result, i, c, case, goal, optimizer, sys, 
     MOI.get(model, MOI.ResultCount()) < 1 && return
     if case != goal
         fix_base_case!(model)
-        case.C1 && fix_short_term!(model, Pc)
-        case.C2 && fix_long_term!(model, Pcc)
+        case.C1 && fix_contingencies!(model, Pc)
+        case.C2 && fix_contingencies!(model, Pcc)
         solve_model!(model);
         model, opf, pf, oplim, Pc, Pcc, Pccx, tot_t = run_contingency_select!(goal - case, model, opf, pf, oplim, Pc, Pcc, Pccx)
     end
-    gather_run_data!(result, c, i, model, opf, Pc, Pcc, ramp_mult)
+    gather_run_data!(result, c, i, model, opf, Pc, Pcc)
     return
 end
 
@@ -113,12 +111,12 @@ function run_benders_case!(result, i, c, case, goal, optimizer, sys, voll, prob,
     MOI.get(model, MOI.ResultCount()) < 1 && return
     if case != goal
         fix_base_case!(model)
-        case.C1 && fix_short_term!(model, Pc)
-        case.C2 && fix_long_term!(model, Pcc)
+        case.C1 && fix_contingencies!(model, Pc)
+        case.C2 && fix_contingencies!(model, Pcc)
         solve_model!(model);
         model, opf, pf, oplim, Pc, Pcc, Pccx, tot_t = run_benders!(goal - case, model, opf, pf, oplim, Pc, Pcc, Pccx)
     end
-    gather_run_data!(result, c, i, model, opf, Pc, Pcc, ramp_mult)
+    gather_run_data!(result, c, i, model, opf, Pc, Pcc)
     return
 end
 
