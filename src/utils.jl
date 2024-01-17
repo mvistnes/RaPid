@@ -188,6 +188,8 @@ function beta(sys::System, branch::String)
     return [beta(b, l) for b in get_nodes(sys)]
 end
 
+beta(val::Number) = ifelse(val < 0.0, -1.0, 1.0)
+
 a(line::String, contingency::String) = ifelse(line != contingency, 1, 0)
 
 """ An iterator to a type of power system component """
@@ -582,7 +584,7 @@ set_tol_zero!(vals::AbstractArray{T}, atol::Float64 = 1e-12) where {T<:Real} =
 split_pair(val::AbstractVector) = map(first, val), map(last, val)
 
 " zip a Pair{Vector, Vector} into a Vector{Pair}"
-zip_pair(val::Pair{AbstractVector,AbstractVector}) = [(a, b) for (a, b) in zip(first(val), last(val))]
+zip_pair(val::Tuple{AbstractVector,AbstractVector}) = [(a, b) for (a, b) in zip(first(val), last(val))]
 zip_pair(val1::AbstractVector, val2::AbstractVector) = zip_pair((val1, val2))
 
 """ Return the overload of a line, else return 0.0 """

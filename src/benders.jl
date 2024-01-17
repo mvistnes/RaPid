@@ -69,7 +69,7 @@ function run_benders!(
     Pcc::Dict{<:Integer, ExprCC}, 
     Pccx::Dict{<:Integer, ExprCCX},
     lim=1e-6,
-    max_itr=max(length(contingencies), 5)
+    max_itr=max(length(opf.contingencies), 5)
 )
     assert(type)
     @assert !type.C1 || isempty(Pc)
@@ -373,7 +373,10 @@ function add_cut(opf::OPFsystem, mod::Model, bd::Benders, ptdf::AbstractMatrix{<
     c_obj::Component, cut_added::Integer, lim::Real, id::Integer
 )
     for (i, ol) in overloads
-        expr = JuMP.@expression(mod, sum(ptdf[i, :] .* (bd.Pᵢ - mod[:inj_p0])))
+        expr = AffExpr() + sum(ptdf[i, :] .* bd.Pᵢ)
+        for j in axes(ptdf,2)
+            add_to_expression!(expr, -ptdf[i, j], mod[:inj_p0][j])
+        end
 
         id += 1
         add_overload_expr!(mod, expr, ol, "Pre", id, c_obj, opf, i, lim)

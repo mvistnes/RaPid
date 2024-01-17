@@ -130,21 +130,21 @@ end
 function run_reliability_calculation_benders(cases, optimizer, system, voll, prob, contingencies, max_shed, ramp_mult, ramp_minutes, short, long; p_failure=0.00, time_limit_sec=600)
     # demands = sort_components!(get_demands(system))
     # pd = demands .|> get_active_power
-    hours = read_x_data("data\\ieee_std_load_profile.txt")
+    # hours = read_x_data("data\\ieee_std_load_profile.txt")
     # hours = 0.5:0.1:1.3
     hours = 0.8:0.1:1.1
 
     result = SystemRunData(4, length(hours))
     Logging.disable_logging(Logging.Info)
-    buffer_sys = [deepcopy(system) for _ in 1:Threads.nthreads()]
+    # buffer_sys = [deepcopy(system) for _ in 1:Threads.nthreads()]
     # Threads.@threads for i in eachindex(hours)
     for i in eachindex(hours)
         h = hours[i]
-        sys = buffer_sys[Threads.threadid()]
-        set_active_power!.(get_components(StaticLoad, sys), (get_components(StaticLoad, sys) .|> get_max_active_power) * h)
-        cont = sort_components!(get_branches(sys))
+        # sys = buffer_sys[Threads.threadid()]
+        set_active_power!.(get_components(StaticLoad, system), (get_components(StaticLoad, system) .|> get_max_active_power) * h)
+        # cont = sort_components!(get_branches(sys))
 
-        run_benders_cases!(result, i, cases, optimizer, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long, p_failure=p_failure, time_limit_sec=time_limit_sec)
+        run_benders_cases!(result, i, cases, optimizer, system, voll, prob, contingencies, max_shed, ramp_mult, ramp_minutes, short, long, p_failure=p_failure, time_limit_sec=time_limit_sec)
 
         print(i, " ")
     end
@@ -153,7 +153,7 @@ function run_reliability_calculation_benders(cases, optimizer, system, voll, pro
     return result
 end
 
-read_x_data(fname) = vec(readdlm(fname,Float64))
+read_x_data(fname) = vec(DelimitedFiles.readdlm(fname,Float64))
 
 get_objective(mod::Model) = termination_status(mod) != MOI.OPTIMAL ? -1.0 : objective_value(mod)
 
