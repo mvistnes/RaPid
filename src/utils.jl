@@ -198,6 +198,7 @@ get_gens_h(sys::System) = get_components(HydroGen, sys) |> collect
 get_lines(sys::System) = get_components(Line, sys) |> collect 
 get_transformers2w(sys::System) = get_components(Transformer2W, sys) |> collect
 get_taptransformers(sys::System) = get_components(TapTransformer, sys) |> collect
+get_arcs(sys::System) = get_components(Arc, sys) |> collect
 get_phaseshiftingtransformers(sys::System) = get_components(PhaseShiftingTransformer, sys) |> collect
 get_branches(sys::System) = vcat(get_lines(sys), get_transformers2w(sys), get_taptransformers(sys), get_phaseshiftingtransformers(sys))
 get_dc_branches(sys::System) = get_components(TwoTerminalHVDCLine, sys) |> collect
@@ -212,8 +213,11 @@ sort_components!(list::PowerSystems.FlattenIteratorWrapper{T}) where {T} = sort_
 sort_components!(nodes::Vector{ACBus}) = sort!(nodes, by=x -> x.number)
 sort_components!(components::Vector{<:Component}) = sort!(components, by=x -> x.bus.number)
 sort_components!(branches::Vector{<:Branch}) = sort!(branches,
-    by=x -> (get_number(get_arc(x).from), get_number(get_arc(x).to))
+    by=x -> (x.arc.from.number, x.arc.to.number)
 )
+sort_components!(arcs::Vector{<:Arc}) = sort!(arcs, by=x -> (x.from.number, x.to.number))
+
+filter_active!(list::AbstractVector{<:Component}) = filter(comp -> comp.available, list)
 
 """ OPF system type """
 mutable struct OPFsystem{TR<:Real,TI<:Integer}
@@ -231,6 +235,7 @@ mutable struct OPFsystem{TR<:Real,TI<:Integer}
 
     ctrl_generation::Vector{Generator}
     branches::Vector{ACBranch}
+    arcs::Vector{Arc}
     dc_branches::Vector{TwoTerminalHVDCLine}
     nodes::Vector{ACBus}
     demands::Vector{StaticLoad}
@@ -245,6 +250,7 @@ function opfsystem(sys::System, voll::Vector{TR}, contingencies::Vector{<:Compon
 
     ctrl_generation = sort_components!(get_ctrl_generation(sys))
     branches = sort_components!(get_branches(sys))
+    arcs = sort_components!(get_arcs(sys))
     dc_branches = sort_components!(get_dc_branches(sys))
     nodes = sort_components!(get_nodes(sys))
     demands = sort_components!(get_demands(sys))
@@ -277,7 +283,7 @@ function opfsystem(sys::System, voll::Vector{TR}, contingencies::Vector{<:Compon
     end
 
     return OPFsystem{TR, Int}(cost_ctrl_gen, cost_renewables, voll, prob, idx, mgx, mdx, mbx, mdcx, mrx,
-        ctrl_generation, branches, dc_branches, nodes, demands, renewables, contingencies)
+        ctrl_generation, branches, arcs, dc_branches, nodes, demands, renewables, contingencies)
 end
 
 """ Automatic constructor for OPFsystem where voll, prob, and contingencies are automatically computed. """
@@ -483,14 +489,18 @@ function _make_ax_ref(ax::AbstractVector{T}) where {T}
     return ref
 end
 
+uniqueidx(v::AbstractVector{<:Branch}) = unique(i -> v[i].arc, eachindex(v))
+uniqueidx(v) = unique(i -> v[i], eachindex(v))
+
 # TODO: remove the need for idx in most functions, use array
 
 " Get the bus number of the from-bus and to-bus from a branch "
 get_bus_id(branch::Branch) = (branch.arc.from.number, branch.arc.to.number)
 
 " Get the bus number index of the from-bus and to-bus from a branch "
-get_bus_idx(branch::Branch, idx::Dict{<:Int,T}) where {T<:Int} =
-    (idx[branch.arc.from.number]::T, idx[branch.arc.to.number]::T)
+get_bus_idx(branch::Branch, idx::Dict{<:Int,<:Int}) = get_bus_idx(branch.arc, idx)
+get_bus_idx(arc::Arc, idx::Dict{<:Int,T}) where {T<:Int} =
+    (idx[arc.from.number]::T, idx[arc.to.number]::T)
 
 get_bus_idx(val::StaticInjection, idx::Dict{<:Int,T}) where {T<:Int} =
     idx[val.bus.number]::T

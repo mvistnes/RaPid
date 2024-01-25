@@ -117,6 +117,7 @@ function opf_base(type::OPF, system::System, optimizer;
     add_to_expression!.(inj_p0, opf.mdx' * (ls0 - pd))
     @constraint(mod, inj_p0 .== p0)
 
+    # add_branch_constraints!(mod, opf, pf, p0, oplim.branch_rating)
     add_branch_constraints!(mod, pf.ϕ, p0, oplim.branch_rating)
     @expression(mod, balance, sum(pg0, init=0.0))
     add_to_expression!.(balance, pr)
@@ -145,16 +146,44 @@ function add_branch_constraints!(mod::Model, ptdf::AbstractMatrix{<:Real}, p::Ab
     return mod
 end
 
-function add_branch_constraints!(mod::Model, opf::OPFsystem, x::AbstractVector{<:Real},
-    branch_rating::AbstractVector{<:Real}
-)
+function add_branch_constraints!(mod::Model, opf::OPFsystem, pf::DCPowerFlow, p::AbstractVector{VariableRef}, branch_rating::AbstractVector{<:Real})
     @variable(mod, -branch_rating[l] <= pf0[l in 1:length(opf.branches)] <= branch_rating[l])
     @variable(mod, -π/2.0 <= va0[n in 1:length(opf.nodes)] <= π/2.0)
     JuMP.fix(va0[pf.slack], 0.0; force=true)
-    @constraint(mod, pb0[l=1:length(branches)],
-        pf0[l] - (va0[first(pf.DA[l,:].nzind)] - va0[last(pf.DA[l,:].nzind)]) / x[l] == 0
+    
+    @expression(mod, pb0[i in 1:length(opf.nodes)], AffExpr())
+    for l in 1:length(opf.branches)
+        nodes = pf.DA[l,:].nzind
+        @constraint(mod, pf0[l] - (va0[first(nodes)] - va0[last(nodes)]) * pf.DA[l,first(nodes)] == 0.0)
+        add_to_expression!(pb0[first(nodes)], pf0[l])
+        add_to_expression!(pb0[last(nodes)], -1.0, pf0[l])
+    end
+    @constraint(mod, pb0 .- p .== 0.0)
+    return nothing
+end
+
+function add_branch_constraints!(mod::Model, opf::OPFsystem, pf::DCPowerFlow, p::AbstractVector{VariableRef}, branch_rating::AbstractVector{<:Real}, 
+    contingency::Integer
+)
+    pfc = @variable(mod, [l in 1:length(opf.branches)], 
+        lower_bound = -branch_rating[l], upper_bound = branch_rating[l]
     )
-    @constraint(mod, [i in 1:length(nodes)], mod[:p0][i] == sum(beta(val) * pf0[ind] for (ind, val) in zip(findnz(pf.DA[:,i])...)))
+    vac = @variable(mod, [n in 1:length(opf.nodes)], lower_bound = -π/2.0, upper_bound = π/2.0)
+    JuMP.fix(vac[pf.slack], 0.0; force=true)
+    
+    pbc = @expression(mod, [i in 1:length(opf.nodes)], AffExpr())
+    for l in 1:length(opf.branches)
+        nodes = pf.DA[l,:].nzind
+        if contingency == l
+            JuMP.fix(pfc[l], 0.0; force=true)
+        else
+            @constraint(mod, pfc[l] - (vac[first(nodes)] - vac[last(nodes)]) * pf.DA[l,first(nodes)] == 0.0)
+        end
+        add_to_expression!(pbc[first(nodes)], pfc[l])
+        add_to_expression!(pbc[last(nodes)], -1.0, pfc[l])
+    end
+    @constraint(mod, pbc .- p .== 0.0)
+    return nothing
 end
 
 function add_all_contingencies!(type::OPF, opf::OPFsystem, oplim::Oplimits, mod::Model,
@@ -173,10 +202,10 @@ function add_all_contingencies!(type::OPF, opf::OPFsystem, oplim::Oplimits, mod:
             islands = Vector{Vector{Int}}[]
             island = 0
         end
-        type.P && add_contingencies!(opf, oplim, mod, ptdf, i)
-        type.C1 && add_contingencies!(Pc, opf, oplim, mod, obj, islands, island, ptdf, i)
-        type.C2 && add_contingencies!(Pcc, opf, oplim, mod, obj, islands, island, ptdf, i)
-        type.C2F && add_contingencies!(Pccx, opf, oplim, mod, obj, islands, island, ptdf, i)
+        type.P && add_contingencies!(opf, pf, oplim, mod, ptdf, i)
+        type.C1 && add_contingencies!(Pc, opf, pf, oplim, mod, obj, islands, island, ptdf, i)
+        type.C2 && add_contingencies!(Pcc, opf, pf, oplim, mod, obj, islands, island, ptdf, i)
+        type.C2F && add_contingencies!(Pccx, opf, pf, oplim, mod, obj, islands, island, ptdf, i)
 
         @debug "Contingency $(get_name(c_obj)) is added"
     end
@@ -184,15 +213,14 @@ function add_all_contingencies!(type::OPF, opf::OPFsystem, oplim::Oplimits, mod:
     return mod, opf, pf, oplim, Pc, Pcc, Pccx
 end
 
-function add_contingencies!(opf::OPFsystem, oplim::Oplimits, mod::Model, ptdf::AbstractMatrix{<:Real}, c::Integer)
+function add_contingencies!(opf::OPFsystem, pf::DCPowerFlow, oplim::Oplimits, mod::Model, ptdf::AbstractMatrix{<:Real}, c::Integer)
     p = JuMP.@variable(mod, [n in 1:length(opf.nodes)], base_name = @sprintf("p%s", c))
     @constraint(mod, mod[:inj_p0] .== p)
-    ptdf_p = @expression(mod, ptdf * p)
-    @constraint(mod, ptdf_p .>= -oplim.branch_rating * oplim.short_term_multi)
-    @constraint(mod, ptdf_p .<= oplim.branch_rating * oplim.short_term_multi)
+    add_branch_constraints!(mod, ptdf, p, oplim.branch_rating * oplim.short_term_multi)
+    # add_branch_constraints!(mod, opf, pf, p, oplim.branch_rating * oplim.short_term_multi, c)
 end
 
-function add_contingencies!(Pc::Dict{<:Integer,ExprC}, opf::OPFsystem, oplim::Oplimits, mod::Model, obj::AbstractJuMPScalar, islands::Vector,
+function add_contingencies!(Pc::Dict{<:Integer,ExprC}, opf::OPFsystem, pf::DCPowerFlow, oplim::Oplimits, mod::Model, obj::AbstractJuMPScalar, islands::Vector,
     island::Integer, ptdf::AbstractMatrix{<:Real}, c::Integer
 )
     pc = JuMP.@variable(mod, [n in 1:length(opf.nodes)], base_name = @sprintf("pc%s", c))
@@ -205,12 +233,11 @@ function add_contingencies!(Pc::Dict{<:Integer,ExprC}, opf::OPFsystem, oplim::Op
     add_to_expression!.(inj_pc, opf.mdx' * (lsc - mod[:pd]))
     @constraint(mod, inj_pc .== pc)
 
-    ptdf_pc = @expression(mod, ptdf * pc)
-    @constraint(mod, ptdf_pc .>= -oplim.branch_rating * oplim.short_term_multi)
-    @constraint(mod, ptdf_pc .<= oplim.branch_rating * oplim.short_term_multi)
+    add_branch_constraints!(mod, ptdf, pc, oplim.branch_rating * oplim.short_term_multi)
+    # add_branch_constraints!(mod, opf, pf, pc, oplim.branch_rating * oplim.short_term_multi, c)
 end
 
-function add_contingencies!(Pcc::Dict{<:Integer,ExprCC}, opf::OPFsystem, oplim::Oplimits, mod::Model, obj::AbstractJuMPScalar, islands::Vector,
+function add_contingencies!(Pcc::Dict{<:Integer,ExprCC}, opf::OPFsystem, pf::DCPowerFlow, oplim::Oplimits, mod::Model, obj::AbstractJuMPScalar, islands::Vector,
     island::Integer, ptdf::AbstractMatrix{<:Real}, c::Integer
 )
     pcc = JuMP.@variable(mod, [n in 1:length(opf.nodes)], base_name = @sprintf("pcc%s", c))
@@ -223,12 +250,11 @@ function add_contingencies!(Pcc::Dict{<:Integer,ExprCC}, opf::OPFsystem, oplim::
     add_to_expression!.(inj_pcc, opf.mdx' * (lscc - mod[:pd]))
     @constraint(mod, inj_pcc .== pcc)
 
-    ptdf_pcc = @expression(mod, ptdf * pcc)
-    @constraint(mod, ptdf_pcc .>= -oplim.branch_rating * oplim.long_term_multi)
-    @constraint(mod, ptdf_pcc .<= oplim.branch_rating * oplim.long_term_multi)
+    add_branch_constraints!(mod, ptdf, pcc, oplim.branch_rating * oplim.long_term_multi)
+    # add_branch_constraints!(mod, opf, pf, pcc, oplim.branch_rating * oplim.long_term_multi, c)
 end
 
-function add_contingencies!(Pccx::Dict{<:Integer,ExprCCX}, opf::OPFsystem, oplim::Oplimits, mod::Model, obj::AbstractJuMPScalar, islands::Vector,
+function add_contingencies!(Pccx::Dict{<:Integer,ExprCCX}, opf::OPFsystem, pf::DCPowerFlow, oplim::Oplimits, mod::Model, obj::AbstractJuMPScalar, islands::Vector,
     island::Integer, ptdf::AbstractMatrix{<:Real}, c::Integer
 )
     pccx = JuMP.@variable(mod, [n in 1:length(opf.nodes)], base_name = @sprintf("pccx%s", c))
@@ -241,8 +267,8 @@ function add_contingencies!(Pccx::Dict{<:Integer,ExprCCX}, opf::OPFsystem, oplim
     add_to_expression!.(inj_pccx, opf.mdx' * (lscc - mod[:pd]))
     @constraint(mod, inj_pccx .== pccx)
 
-    @constraint(mod, ptdf * pccx .>= -oplim.branch_rating)
-    @constraint(mod, ptdf * pccx .<= oplim.branch_rating)
+    add_branch_constraints!(mod, ptdf, pccx, oplim.branch_rating * oplim.long_term_multi)
+    # add_branch_constraints!(mod, opf, pf, pccx, oplim.branch_rating * oplim.long_term_multi, c)
 end
 
 

@@ -174,6 +174,13 @@ function find_connected(A::SparseArrays.SparseMatrixCSC{<:Integer,<:Integer}, br
     return new_branches, union!(get_to.(get_arc.(new_branches)), get_from.(get_arc.(new_branches)))
 end
 
+function island_detection(system::System)
+    branches = sort_components!(get_branches(system))
+    nodes = sort_components!(get_nodes(system))
+    A = calc_A(branches, length(nodes), get_nodes_idx(nodes))
+    return island_detection(create_connectivity_matrix(A'A))
+end
+
 """
     Find islands after a contingency.
     Removes all connection between the two nodes i and j.
