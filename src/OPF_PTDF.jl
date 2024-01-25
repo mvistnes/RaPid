@@ -139,7 +139,11 @@ end
 
 function add_branch_constraints!(mod::Model, ptdf::AbstractMatrix{<:Real}, p::AbstractVector{VariableRef}, rating::AbstractVector{<:Real})
     for i = axes(ptdf,1)
-        ptdf0 = @expression(mod, sum(ptdf[i,j] * p[j] for j in axes(ptdf,2)))#JuMP.GenericAffExpr(1.0, Pair.(p, ptdf[i,:])) 
+        # ptdf0 = JuMP.GenericAffExpr(0.0, Pair.(p, ptdf[i,:])) 
+        ptdf0 = @expression(mod, AffExpr())
+        for j in axes(ptdf,2)
+            add_to_expression!(ptdf0, ptdf[i,j], p[j])
+        end
         @constraint(mod, ptdf0 + rating[i] >= 0.0)
         @constraint(mod, ptdf0 - rating[i] <= 0.0)
     end
