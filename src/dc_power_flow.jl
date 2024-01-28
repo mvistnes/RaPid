@@ -264,6 +264,14 @@ function get_isf(branches::AbstractVector{<:Branch}, nodes::AbstractVector{<:Bus
     return get_isf!(B, DA, slack)
 end
 
+function calc_isf_vec!(ϕ_vec::Vector{T}, K::KLU.KLUFactorization{T,<:Integer}, DA::AbstractMatrix{T}, branch::Integer
+) where {T<:Real}
+    copyto!(ϕ_vec, Vector(DA[branch,:]))
+    KLU.solve!(K, ϕ_vec)
+    return ϕ_vec
+end
+calc_isf_vec(pf::DCPowerFlow, branch::Integer) = calc_isf_vec!(pf.vn_tmp, pf.K, pf.DA, branch)
+
 """ Find voltage angles from the factorization of the B-matrix and injected power. Change both θ and K """
 function _calc_θ!(θ::AbstractVector{T}, K::KLU.KLUFactorization{T,<:Integer}, P::AbstractVector{T}, slack::Integer
 ) where {T<:Real}

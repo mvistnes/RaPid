@@ -1,6 +1,10 @@
 using Test
 import RaPidSCOPF as SCOPF
 
+@testset "Test dc opf" begin
+    include("test_dc_opf.jl")
+end
+
 @testset "Test dc power flow" begin
     include("test_dc_power_flow.jl")
 end

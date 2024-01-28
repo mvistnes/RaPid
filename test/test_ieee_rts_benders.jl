@@ -42,8 +42,8 @@ voll = [4304., 5098., 5245., 5419., 4834., 5585., 5785., 5192., 4575., 5244., 44
 branches = SCOPF.sort_components!(SCOPF.get_branches(system));
 ctrl_generation = SCOPF.sort_components!(SCOPF.get_ctrl_generation(system));
 # c = [7,12,13,21,22,23,27]
-# contingencies = branches
-contingencies = vcat(branches, ctrl_generation)
+contingencies = branches
+# contingencies = vcat(branches, ctrl_generation)
 prob =
     [ # spesified for the RTS-96
         0.24, 0.51, 0.33, 0.39, 0.48, 0.38, 0.02, 0.36, 0.34, 0.33, 0.30, 0.44, 0.44,
@@ -64,11 +64,12 @@ ramp_mult = 2.
 
 function test_benders(system, optimizer, voll, contingencies, prob, max_shed,ramp_mult, ramp_minutes, short, long)
     for case in [SCOPF.Base_SCOPF, SCOPF.P_SCOPF, SCOPF.OPF(true, false, true, false, false), SCOPF.PC_SCOPF, SCOPF.PCF_SCOPF, SCOPF.PC2_SCOPF, SCOPF.PC2F_SCOPF]
-        p_failure = case.C2F ? 0.10 : 0.00
+        p_failure = ifelse(case.C2F, 0.10, 0.00)
         println(case)
         println("Start PTDF")
         mod_ptdf, opf_ptdf, pf_ptdf, oplim_ptdf, Pc_ptdf, Pcc_ptdf, Pccx_ptdf = SCOPF.opf_base(case, system, HiGHS.Optimizer(), voll=voll, contingencies=contingencies, prob=prob, max_shed=max_shed,
             ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=p_failure);
+        SCOPF.add_branch_constraints!(mod_ptdf, pf_ptdf.ϕ, mod_ptdf[:p0], oplim_ptdf.branch_rating)
         SCOPF.solve_model!(mod_ptdf);
 
         println("Start Contingency select")
@@ -92,6 +93,7 @@ function benders_pc_scopf()
     println("Start PTDF")
     @time mod_ptdf, opf_ptdf, pf_ptdf, oplim_ptdf, Pc_ptdf, Pcc_ptdf, Pccx_ptdf = SCOPF.opf_base(SCOPF.PC2_SCOPF, system, Gurobi.Optimizer(GUROBI_ENV), voll=voll, contingencies=contingencies, prob=prob, max_shed=max_shed,
         ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long);
+    SCOPF.add_branch_constraints!(mod_ptdf, pf_ptdf.ϕ, mod_ptdf[:p0], oplim_ptdf.branch_rating)
     @time SCOPF.solve_model!(mod_ptdf);
     println("Objective value PTDF: ", JuMP.objective_value(mod_ptdf))
     SCOPF.print_contingency_results(opf_ptdf, Pc_ptdf, Pcc_ptdf)
@@ -112,6 +114,6 @@ function benders_pc_scopf()
     @test JuMP.objective_value(mod_ptdf) ≈ JuMP.objective_value(model)
 
     SCOPF.print_power_flow(opf, model)
-    bx = SCOPF.typesort_component.(SCOPF.get_interarea(opf.branches), [opf], [opf.idx])
+    bx = SCOPF.typesort_component.(SCOPF.get_interarea(opf.branches), [opf])
     SCOPF.print_contingency_power_flow(opf, model, pf, Pc, Pcc, Pccx, short, long; subset=first.(bx))
 end

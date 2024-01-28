@@ -10,6 +10,23 @@ function get_change(ϕ::AbstractMatrix{<:Real}, A::AbstractMatrix{<:Integer}, br
     return ϕ * A[branch, :] * inv(x)
 end
 
+""" Multi contingency Woodbury """
+@views function get_changed_X!(
+    X::AbstractMatrix{T},
+    X₀::AbstractMatrix{T},
+    B::AbstractMatrix{T},
+    DA::AbstractMatrix{T},
+    bx::AbstractVector{<:Tuple{Integer, Integer}},
+    branches::AbstractVector{<:Integer};
+    atol::Real=1e-10
+) where {T<:Real}
+    iE = X₀
+    F = X₀[:, last.(bx)]
+    iG = inv(B[first.(bx), last.(bx)])
+    H = F'
+    X = iE - iE*F*inv(iG + H*iE*F)*H*iE
+end
+
 """
 Calculation of voltage angles in a contingency case using IMML
 

@@ -19,7 +19,7 @@ system = SCOPF.System(joinpath("data","matpower","IEEE_RTS.m")); c1 = 1; c2 = 11
 SCOPF.fix_generation_cost!(system);
 voll = SCOPF.make_voll(system)
 model, opf, pf, oplim, _, _, _ = SCOPF.opf_base(SCOPF.Base_SCOPF, system, HiGHS.Optimizer(), voll=voll);
-SCOPF.solve_model!(model)
+SCOPF.constrain_branches!(model, pf, oplim, 0.0)
 bx = SCOPF.get_bus_idx.(opf.branches, [opf.idx])
 slack = SCOPF.find_slack(opf.nodes)[1]
 

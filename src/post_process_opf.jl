@@ -179,8 +179,8 @@ function print_active_power(opf::OPFsystem, mod::Model)
 end
 
 function get_power_flow(opf::OPFsystem, mod::Model; subset::AbstractVector{<:Integer}=Int64[])
-    br_names = get_name.(opf.branches)
-    flow = calculate_line_flows(get_isf(opf.branches, opf.nodes), get_net_Pᵢ(opf, mod))
+    br_names = PowerSystems.get_name.(opf.branches)
+    flow = calculate_line_flows(get_isf(opf.branches, opf.nodes), get_net_Pᵢ(mod))
     rate = get_rate.(opf.branches)
     if !isempty(subset)
         br_names = br_names[subset]
@@ -304,7 +304,7 @@ function print_contingency_power_flow(opf::OPFsystem, mod::Model, pf::DCPowerFlo
     short_term_multi::Float64=1.5, long_term_multi::Float64=1.0; 
     subset::AbstractVector{<:Integer}=Int64[], all=true, sep::String=" ", risky_flow=0.9, atol=1e-8
 )
-    b_names = get_name.(opf.branches)
+    b_names = PowerSystems.get_name.(opf.branches)
     linerates = get_rate.(opf.branches)
     Pᵢ = get_value(mod, :p0)
     brst = linerates * short_term_multi

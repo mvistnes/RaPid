@@ -60,12 +60,13 @@ function run_contingency_select!(
     @debug "lower_bound = $(objective_value(mod))"
 
     # Set variables
-    bd = benders(opf, mod)
     set_dist_slack!(pf, opf, oplim.dist_slack)
-    calc_θ!(pf, bd.Pᵢ)
+    calc_θ!(pf, get_value(mod, :p0))
     calc_Pline!(pf)
-    overloads = zeros(length(opf.contingencies))
+    total_solve_time = constrain_branches!(mod, pf, oplim, total_solve_time)
+    bd = benders(opf, mod)
     
+    overloads = zeros(length(opf.contingencies))
     pre = 0
     corr1 = 0
     corr2 = 0
@@ -79,19 +80,19 @@ function run_contingency_select!(
             ptdf = get_isf(pf, cont[2], cont[1], islands, island, island_b)
             set_tol_zero!(ptdf)
             if type.P 
-                add_contingencies!(opf, oplim, mod, ptdf, i)
+                add_contingencies!(opf, pf, oplim, mod, ptdf, i)
                 pre += 1
             end
             if type.C1 
-                add_contingencies!(Pc, opf, oplim, mod, bd.obj, islands, island, ptdf, i)
+                add_contingencies!(Pc, opf, pf, oplim, mod, bd.obj, islands, island, ptdf, i)
                 corr1 += 1
             end
             if type.C2  
-                add_contingencies!(Pcc, opf, oplim, mod, bd.obj, islands, island, ptdf, i)
+                add_contingencies!(Pcc, opf, pf, oplim, mod, bd.obj, islands, island, ptdf, i)
                 corr2 += 1
             end
             if type.C2F 
-                add_contingencies!(Pccx, opf, oplim, mod, bd.obj, islands, island, ptdf, i)
+                add_contingencies!(Pccx, opf, pf, oplim, mod, bd.obj, islands, island, ptdf, i)
                 corr2f += 1
             end
             @debug "Island: Contingency $(string(typeof(c_obj))) $(get_name(c_obj))"
@@ -110,7 +111,7 @@ function run_contingency_select!(
         end
     end
     
-    total_solve_time = update_model!(mod, pf, bd, total_solve_time)
+    total_solve_time = update_model!(mod, pf, oplim, bd, total_solve_time)
     termination_status(mod) != MOI.OPTIMAL && return mod, opf, pf, oplim, Pc, Pcc, Pccx, total_solve_time
 
     ΔPc = zeros(length(bd.Pg))
@@ -176,31 +177,30 @@ function run_contingency_select!(
         # Cannot change the model before all data is exctracted!
         if !isempty(olc)
             if type.P
-                add_contingencies!(opf, oplim, mod, ptdf, i_c)
+                add_contingencies!(opf, pf, oplim, mod, ptdf, i_c)
                 pre += 1
-                @info @sprintf "Pre %d: Contingency %s %s" pre string(typeof(c_obj)) get_name(c_obj)
+                @info @sprintf "Pre %d: Contingency %s %s" pre string(typeof(c_obj)) PowerSystems.get_name(c_obj)
             else
-                add_contingencies!(Pc, opf, oplim, mod, bd.obj, islands, island, ptdf, i_c)
+                add_contingencies!(Pc, opf, pf, oplim, mod, bd.obj, islands, island, ptdf, i_c)
                 corr1 += 1
-                @info @sprintf "Corr1 %d: Contingency %s %s" corr1 string(typeof(c_obj)) get_name(c_obj)
+                @info @sprintf "Corr1 %d: Contingency %s %s" corr1 string(typeof(c_obj)) PowerSystems.get_name(c_obj)
             end
             cut_added = 2
         end
         if !isempty(olcc)
-            add_contingencies!(Pcc, opf, oplim, mod, bd.obj, islands, island, ptdf, i_c)
+            add_contingencies!(Pcc, opf, pf, oplim, mod, bd.obj, islands, island, ptdf, i_c)
             corr2 += 1
-            @info @sprintf "Corr2 %d: Contingency %s %s" corr2 string(typeof(c_obj)) get_name(c_obj)
+            @info @sprintf "Corr2 %d: Contingency %s %s" corr2 string(typeof(c_obj)) PowerSystems.get_name(c_obj)
             cut_added = 2
         end
         if !isempty(olccx)
-            add_contingencies!(Pccx, opf, oplim, mod, bd.obj, islands, island, ptdf, i_c)
+            add_contingencies!(Pccx, opf, pf, oplim, mod, bd.obj, islands, island, ptdf, i_c)
             corr2f += 1
-            @info @sprintf "Corr2 %d: Contingency %s %s" corr2f string(typeof(c_obj)) get_name(c_obj)
+            @info @sprintf "Corr2 %d: Contingency %s %s" corr2f string(typeof(c_obj)) PowerSystems.get_name(c_obj)
             cut_added = 2
         end
         if cut_added > 1
-            set_objective_function(mod, bd.obj)
-            total_solve_time = update_model!(mod, pf, bd, total_solve_time)
+            total_solve_time = update_model!(mod, pf, oplim, bd, total_solve_time)
             deleteat!(permutation, i)
             cut_added = 1
         else

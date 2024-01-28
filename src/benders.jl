@@ -81,13 +81,14 @@ function run_benders!(
     @debug "lower_bound = $(objective_value(mod))"
 
     # Set variables
-    bd = benders(opf, mod)
     set_dist_slack!(pf, opf, oplim.dist_slack)
-    calc_θ!(pf, bd.Pᵢ)
+    calc_θ!(pf, get_value(mod, :p0))
     calc_Pline!(pf)
+    total_solve_time = constrain_branches!(mod, pf, oplim, total_solve_time)
+    bd = benders(opf, mod)
+
     overloads = zeros(length(opf.contingencies))
     # PI = zeros(length(opf.contingencies))
-
     pg = get_value(mod, :pg0)
     for (i, c_obj) in enumerate(opf.contingencies)
         cont = typesort_component(c_obj, opf)
@@ -122,7 +123,7 @@ function run_benders!(
         end
     end
 
-    total_solve_time = update_model!(mod, pf, bd, total_solve_time)
+    total_solve_time = update_model!(mod, pf, oplim, bd, total_solve_time)
     !has_values(mod) && return mod, opf, pf, oplim, Pc, Pcc, Pccx, total_solve_time
 
     ΔPc = zeros(length(bd.Pg))
@@ -208,7 +209,7 @@ function run_benders!(
                 cut_added, corr2f = add_cut(Pccx, opf, oplim, mod, bd, ΔPccx, ptdf, olccx, islands, island, c_obj, i, cut_added, lim, corr2f)
             end
             if cut_added > 1
-                total_solve_time = update_model!(mod, pf, bd, total_solve_time)
+                total_solve_time = update_model!(mod, pf, oplim, bd, total_solve_time)
                 cut_added = 1
             end
             !has_values(mod) && return mod, opf, pf, oplim, Pc, Pcc, Pccx, total_solve_time
@@ -220,16 +221,12 @@ function run_benders!(
 end
 
 """ Solve model and update the power flow object """
-function update_model!(mod::Model, pf::DCPowerFlow, bd::Benders, total_solve_time::Real)
+function update_model!(mod::Model, pf::DCPowerFlow, oplim::Oplimits, bd::Benders, total_solve_time::Real)
     # set_warm_start!(mod, :pg0) # query of information then edit of model, else OptimizeNotCalled errors
     set_objective_function(mod, bd.obj)
-    solve_model!(mod)
-    total_solve_time += solve_time(mod)
-
+    total_solve_time = constrain_branches!(mod, pf, oplim, total_solve_time)
     bd.Pᵢ = get_value(mod, :p0)
     @. bd.Pg = bd.Pᵢ - bd.Pd
-    calc_θ!(pf, bd.Pᵢ)
-    calc_Pline!(pf)
     return total_solve_time
 end
 

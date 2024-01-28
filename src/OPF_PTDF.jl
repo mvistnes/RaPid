@@ -117,8 +117,7 @@ function opf_base(type::OPF, system::System, optimizer;
     add_to_expression!.(inj_p0, opf.mdx' * (ls0 - pd))
     @constraint(mod, inj_p0 .== p0)
 
-    # add_branch_constraints!(mod, opf, pf, p0, oplim.branch_rating)
-    add_branch_constraints!(mod, pf.ϕ, p0, oplim.branch_rating)
+    # add_branch_constraints!(mod, pf.ϕ, p0, oplim.branch_rating)
     @expression(mod, balance, sum(pg0, init=0.0))
     add_to_expression!.(balance, pr)
     add_to_expression!.(balance, -pr0)
@@ -150,44 +149,45 @@ function add_branch_constraints!(mod::Model, ptdf::AbstractMatrix{<:Real}, p::Ab
     return mod
 end
 
-function add_branch_constraints!(mod::Model, opf::OPFsystem, pf::DCPowerFlow, p::AbstractVector{VariableRef}, branch_rating::AbstractVector{<:Real})
-    @variable(mod, -branch_rating[l] <= pf0[l in 1:length(opf.branches)] <= branch_rating[l])
-    @variable(mod, -π/2.0 <= va0[n in 1:length(opf.nodes)] <= π/2.0)
-    JuMP.fix(va0[pf.slack], 0.0; force=true)
-    
-    @expression(mod, pb0[i in 1:length(opf.nodes)], AffExpr())
-    for l in 1:length(opf.branches)
-        nodes = pf.DA[l,:].nzind
-        @constraint(mod, pf0[l] - (va0[first(nodes)] - va0[last(nodes)]) * pf.DA[l,first(nodes)] == 0.0)
-        add_to_expression!(pb0[first(nodes)], pf0[l])
-        add_to_expression!(pb0[last(nodes)], -1.0, pf0[l])
+function add_branch_constraint!(mod::Model, pf::DCPowerFlow, p::AbstractVector{VariableRef}, branch::Integer, rating::Real)
+    ptdf = calc_isf_vec(pf, branch)
+    # ptdf0 = JuMP.GenericAffExpr(0.0, Pair.(p, ptdf[i,:])) 
+    ptdf0 = @expression(mod, AffExpr())
+    for (i,j) in zip(ptdf, p)
+        add_to_expression!(ptdf0, i, j)
     end
-    @constraint(mod, pb0 .- p .== 0.0)
-    return nothing
+    @constraint(mod, ptdf0 + rating >= 0.0)
+    @constraint(mod, ptdf0 - rating <= 0.0)
+    return mod
 end
 
-function add_branch_constraints!(mod::Model, opf::OPFsystem, pf::DCPowerFlow, p::AbstractVector{VariableRef}, branch_rating::AbstractVector{<:Real}, 
-    contingency::Integer
-)
-    pfc = @variable(mod, [l in 1:length(opf.branches)], 
-        lower_bound = -branch_rating[l], upper_bound = branch_rating[l]
-    )
-    vac = @variable(mod, [n in 1:length(opf.nodes)], lower_bound = -π/2.0, upper_bound = π/2.0)
-    JuMP.fix(vac[pf.slack], 0.0; force=true)
-    
-    pbc = @expression(mod, [i in 1:length(opf.nodes)], AffExpr())
-    for l in 1:length(opf.branches)
-        nodes = pf.DA[l,:].nzind
-        if contingency == l
-            JuMP.fix(pfc[l], 0.0; force=true)
-        else
-            @constraint(mod, pfc[l] - (vac[first(nodes)] - vac[last(nodes)]) * pf.DA[l,first(nodes)] == 0.0)
+function constrain_branches!(mod::Model, pf::DCPowerFlow, oplim::Oplimits, total_solve_time::Real)
+    # if !has_values(mod)
+        # Note: While using a direct_model, this check fails after the model is modified for some solvers
+        update_model!(mod, pf, total_solve_time)
+    # end
+    while true
+        ol_br = find_overloaded_branches(pf.F, oplim.branch_rating)
+        if isempty(ol_br)
+            break
         end
-        add_to_expression!(pbc[first(nodes)], pfc[l])
-        add_to_expression!(pbc[last(nodes)], -1.0, pfc[l])
+        for br in ol_br
+            add_branch_constraint!(mod, pf, mod[:p0], br, oplim.branch_rating[br])
+        end
+        update_model!(mod, pf, total_solve_time)
+        @info "Iteration"
     end
-    @constraint(mod, pbc .- p .== 0.0)
-    return nothing
+    return total_solve_time
+end
+
+""" Solve model and update the power flow object """
+function update_model!(mod::Model, pf::DCPowerFlow, total_solve_time::Real)
+    solve_model!(mod)
+    total_solve_time += solve_time(mod)
+    Pᵢ = get_value(mod, :p0)
+    calc_θ!(pf, Pᵢ)
+    calc_Pline!(pf)
+    return total_solve_time
 end
 
 function add_all_contingencies!(type::OPF, opf::OPFsystem, oplim::Oplimits, mod::Model,

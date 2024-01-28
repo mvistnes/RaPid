@@ -607,6 +607,9 @@ filter_overload(flow::AbstractVector{<:Real}, linerating::AbstractVector{<:Real}
 filter_overload(Δflow::AbstractVector{<:Tuple}, linerating::AbstractVector{<:Real}, atol::Real=1e-6) =
     [(i, find_overload(ol, linerating[i])) for (i, ol) in Δflow if abs(find_overload(ol, linerating[i])) > atol]
 
+find_overloaded_branches(flow::AbstractVector{<:Real}, linerating::AbstractVector{<:Real}) =
+    findall(abs.(flow) .> linerating)
+
 " Get dual value (upper or lower bound) from model reference "
 get_low_dual(varref::VariableRef) = dual(LowerBoundRef(varref))
 get_high_dual(varref::VariableRef) = dual(UpperBoundRef(varref))

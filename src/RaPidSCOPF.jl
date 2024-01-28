@@ -112,7 +112,8 @@ export run_reliability_calculation
     Functions for printing and plotting SCOPF results.
 =#
 include("post_process_opf.jl")
-export print_active_power, print_power_flow, print_contingency_power_flow, 
-    print_generation_results, print_results, print_contingency_results, print_contingency_P
+export print_variabels, print_corrective_values, print_results, print_contingency_results, 
+    print_contingency_P, print_active_power, get_power_flow, print_power_flow, get_contingency_power_flow,
+    print_contingency_power_flow, get_generation_results, print_generation_results
 
 end
