@@ -163,6 +163,42 @@ Input:
     LinearAlgebra.mul!(X, x, x', -change * inv(c⁻¹), true) # mul!(C, A, B, α, β) -> C == $A B α + C β$
 end
 
+@views function get_changed_X!(
+    X::AbstractVector{T},
+    B::AbstractMatrix{T},
+    DA::AbstractMatrix{T},
+    K::KLU.KLUFactorization{T,<:Integer},
+    from_bus::Integer,
+    to_bus::Integer,
+    branch::Integer;
+    atol::Real=1e-10
+) where {T<:Real}
+
+    # X_new = X - (X*A[from_bus,:]*DA[from_bus,to_bus]*x)/(1+DA[from_bus,to_bus]*x*A[from_bus,:])
+    change = DA[branch, to_bus] / B[from_bus, to_bus]
+    Xf = calc_X_vec!(Vector{T}(undef, size(B,1)), K, from_bus)
+    Xt = calc_X_vec!(Vector{T}(undef, size(B,1)), K, to_bus)
+    ptdf = calc_isf_vec!(Vector{T}(undef, size(B,1)), K, DA, branch)
+    c⁻¹ = inv(B[to_bus, from_bus]) + change * (Xf[from_bus] - Xt[from_bus] - Xf[to_bus] + Xt[to_bus])
+    if isapprox(c⁻¹, zero(T); atol=atol)
+        if size(SparseArrays.getindex(B,from_bus,:).nzind, 1) <= 2 # Assummes only one islanded bus
+            c⁻¹ = inv(B[to_bus, from_bus]) + change * (- Xt[from_bus] + Xt[to_bus])
+            delta = inv(c⁻¹) * (θ₀[from_bus] - θ₀[to_bus])
+            @. ptdf = ptdf - (- Xt) * delta * change
+        elseif size(SparseArrays.getindex(B,to_bus,:).nzind, 1) <= 2
+            c⁻¹ = inv(B[to_bus, from_bus]) + change * (Xf[from_bus] - Xf[to_bus])
+            delta = inv(c⁻¹) * (θ₀[from_bus] - θ₀[to_bus])
+            @. ptdf = ptdf - (Xf) * delta * change
+        else
+            throw(DivideError())
+        end
+    else
+        delta = inv(c⁻¹) * (θ₀[from_bus] - θ₀[to_bus])
+        @. ptdf = ptdf - (Xf - Xt) * delta * change
+    end
+    return ptdf
+end
+
 """ Get the isf-matrix after a line outage using IMML. 
     isf and X are containers for output and calculation and will be overwritten """
 function get_isf!(
@@ -214,35 +250,35 @@ Input:
 @views function calculate_line_flows!(
     Pl::AbstractVector{T},
     Pl0::AbstractVector{T},
-    ptdf::AbstractMatrix{T},
     B::AbstractMatrix{T},
     DA::AbstractMatrix{T},
-    X::AbstractMatrix{T},
     θ::AbstractVector{T},
+    K::KLU.KLUFactorization{T,<:Integer},
     from_bus::Integer,
     to_bus::Integer,
     branch::Integer;
     atol::Real=1e-10
 ) where {T<:Real}
     change = DA[branch, to_bus] / B[from_bus, to_bus]
+    Xf = calc_X_vec!(Vector{T}(undef, size(B,1)), K, from_bus)
+    Xt = calc_X_vec!(Vector{T}(undef, size(B,1)), K, to_bus)
     # x = change * (X[:,from_bus] - X[:,to_bus])
-    c⁻¹ = inv(B[from_bus, to_bus]) + change * (X[from_bus, from_bus] - X[from_bus, to_bus] - X[to_bus, from_bus] + X[to_bus, to_bus])
+    c⁻¹ = inv(B[from_bus, to_bus]) + change * (Xf[from_bus] - Xt[from_bus] - Xf[to_bus] + Xt[to_bus])
     if isapprox(c⁻¹, zero(T); atol=atol)
         return throw(DivideError())
     end
     delta = inv(c⁻¹) * (θ[from_bus] - θ[to_bus])
-    @. Pl = Pl0 - (ptdf[:, from_bus] - ptdf[:, to_bus]) * change * delta
+    Pl .= Pl0 .- DA * (Xf .- Xt) .* change .* delta
     Pl[branch] = 0.0
     return nothing
 end
 @views function calculate_line_flows!(
     Pl::AbstractVector{T},
     Pl0::AbstractVector{T},
-    ptdf::AbstractMatrix{T},
     B::AbstractMatrix{T},
     DA::AbstractMatrix{T},
-    X::AbstractMatrix{T},
     θ::AbstractVector{T},
+    K::KLU.KLUFactorization{T,<:Integer},
     from_bus::Integer,
     to_bus::Integer,
     branch::Integer,
@@ -250,23 +286,23 @@ end
     atol::Real=1e-10
 ) where {T<:Real}
     change = DA[branch, to_bus] / B[from_bus, to_bus]
-    c⁻¹ = inv(B[from_bus, to_bus]) + change * (- X[from_bus, to_bus] + X[to_bus, to_bus])
+    Xt = calc_X_vec!(Vector{T}(undef, size(B,1)), K, to_bus)
+    c⁻¹ = inv(B[from_bus, to_bus]) + change * (- Xt[from_bus] + Xt[to_bus])
     if isapprox(c⁻¹, zero(T); atol=atol)
         return throw(DivideError())
     end
     delta = inv(c⁻¹) * (θ[from_bus] - θ[to_bus])
-    @. Pl = Pl0 - (- ptdf[:, to_bus]) * change * delta
+    Pl .= Pl0 .- DA * (- Xt) .* change .* delta
     Pl[branch] = 0.0
     return nothing
 end
 @views function calculate_line_flows!(
     Pl::AbstractVector{T},
     Pl0::AbstractVector{T},
-    ptdf::AbstractMatrix{T},
     B::AbstractMatrix{T},
     DA::AbstractMatrix{T},
-    X::AbstractMatrix{T},
     θ::AbstractVector{T},
+    K::KLU.KLUFactorization{T,<:Integer},
     from_bus::Integer,
     to_bus::Integer,
     branch::Integer,
@@ -274,12 +310,13 @@ end
     atol::Real=1e-10
 ) where {T<:Real}
     change = DA[branch, to_bus] / B[from_bus, to_bus]
-    c⁻¹ = inv(B[from_bus, to_bus]) + change * (X[from_bus, from_bus] - X[to_bus, from_bus])
+    Xf = calc_X_vec!(Vector{T}(undef, size(B,1)), K, from_bus)
+    c⁻¹ = inv(B[from_bus, to_bus]) + change * (Xf[from_bus] - Xf[to_bus])
     if isapprox(c⁻¹, zero(T); atol=atol)
         return throw(DivideError())
     end
     delta = inv(c⁻¹) * (θ[from_bus] - θ[to_bus])
-    @. Pl = Pl0 - (ptdf[:, from_bus]) * change * delta
+    Pl .= Pl0 .- DA * (Xf) .* change .* delta
     Pl[branch] = 0.0
     return nothing
 end
@@ -302,10 +339,10 @@ function calculate_line_flows!(
     end
     if !isempty(nodes)
         island = not_insorted_nodes(cont[1], cont[2], nodes)
-        calculate_line_flows!(Pl, F, pf.ϕ, pf.B, pf.DA, pf.X, θ, cont[1], cont[2], branch, Val(island))
+        calculate_line_flows!(Pl, F, pf.B, pf.DA, θ, pf.K, cont[1], cont[2], branch, Val(island))
         zero_not_in_array!(Pl, branches)
     else
-        calculate_line_flows!(Pl, F, pf.ϕ, pf.B, pf.DA, pf.X, θ, cont[1], cont[2], branch)
+        calculate_line_flows!(Pl, F, pf.B, pf.DA, θ, pf.K, cont[1], cont[2], branch)
     end
     return nothing
 end

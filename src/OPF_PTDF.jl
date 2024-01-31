@@ -172,10 +172,10 @@ function constrain_branches!(mod::Model, pf::DCPowerFlow, oplim::Oplimits, total
             break
         end
         for br in ol_br
+            @info "Branch $(br) added."
             add_branch_constraint!(mod, pf, mod[:p0], br, oplim.branch_rating[br])
         end
         update_model!(mod, pf, total_solve_time)
-        @info "Iteration"
     end
     return total_solve_time
 end

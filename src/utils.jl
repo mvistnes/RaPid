@@ -598,17 +598,17 @@ zip_pair(val::Tuple{AbstractVector,AbstractVector}) = [(a, b) for (a, b) in zip(
 zip_pair(val1::AbstractVector, val2::AbstractVector) = zip_pair((val1, val2))
 
 """ Return the overload of a line, else return 0.0 """
-find_overload(flow::T, rate::Real, atol::Real=1e-6) where {T<:Real} =
+find_overload(flow::T, rate::Real, atol::Real=1e-10) where {T<:Real} =
     abs(flow) - rate > atol ? sign(flow) * (abs(flow) - rate) : zero(T)
 
-filter_overload(flow::AbstractVector{<:Real}, linerating::AbstractVector{<:Real}, atol::Real=1e-6) =
+filter_overload(flow::AbstractVector{<:Real}, linerating::AbstractVector{<:Real}, atol::Real=1e-10) =
     [(i, ol) for (i, ol) in enumerate(find_overload.(flow, linerating)) if abs(ol) > atol]
 
-filter_overload(Δflow::AbstractVector{<:Tuple}, linerating::AbstractVector{<:Real}, atol::Real=1e-6) =
+filter_overload(Δflow::AbstractVector{<:Tuple}, linerating::AbstractVector{<:Real}, atol::Real=1e-10) =
     [(i, find_overload(ol, linerating[i])) for (i, ol) in Δflow if abs(find_overload(ol, linerating[i])) > atol]
 
-find_overloaded_branches(flow::AbstractVector{<:Real}, linerating::AbstractVector{<:Real}) =
-    findall(abs.(flow) .> linerating)
+find_overloaded_branches(flow::AbstractVector{<:Real}, linerating::AbstractVector{<:Real}, atol::Real=1e-10) =
+    findall(abs.(flow) .- linerating .> atol)
 
 " Get dual value (upper or lower bound) from model reference "
 get_low_dual(varref::VariableRef) = dual(LowerBoundRef(varref))

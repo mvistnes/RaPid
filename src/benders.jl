@@ -77,7 +77,7 @@ function run_benders!(
     @assert !type.C2F || isempty(Pccx)
     
     total_solve_time = solve_time(mod)
-    !has_values(mod) && return mod, opf, pf, oplim, Pc, Pcc, Pccx, total_solve_time
+    termination_status(mod) != JuMP.OPTIMAL && return mod, opf, pf, oplim, Pc, Pcc, Pccx, total_solve_time
     @debug "lower_bound = $(objective_value(mod))"
 
     # Set variables
@@ -124,7 +124,7 @@ function run_benders!(
     end
 
     total_solve_time = update_model!(mod, pf, oplim, bd, total_solve_time)
-    !has_values(mod) && return mod, opf, pf, oplim, Pc, Pcc, Pccx, total_solve_time
+    termination_status(mod) != JuMP.OPTIMAL && return mod, opf, pf, oplim, Pc, Pcc, Pccx, total_solve_time
 
     ΔPc = zeros(length(bd.Pg))
     ΔPcc = zeros(length(bd.Pg))
@@ -181,14 +181,7 @@ function run_benders!(
             if type.C2F
                 olccx = calculate_contingency_overload!(ΔPccx, brlt, Pccx, opf, mod, pf, bd, cont, i, c_obj, inodes, island_b)
             end
-            if !isempty(olc) || !isempty(olcc) || !isempty(olccx) # ptdf calculation is more computational expensive than line flow
-                if is_islanded(pf, cont[2], cont[1])
-                    ptdf = get_isf(pf, cont[2], cont[1], islands, island, island_b)
-                else
-                    ptdf = get_isf(pf, cont[2], cont[1])
-                end
-                set_tol_zero!(ptdf)
-
+            if !isempty(olc) || !isempty(olcc) || !isempty(olccx) 
                 type.C1 && get(Pc, i, 0) == 0 && fill!(ΔPc, 0.0)
                 type.C2 && get(Pcc, i, 0) == 0 && fill!(ΔPcc, 0.0)
                 type.C2F && get(Pccx, i, 0) == 0 && fill!(ΔPccx, 0.0)
@@ -197,22 +190,22 @@ function run_benders!(
             # Cannot change the model before all data is exctracted!
             if !isempty(olc)
                 if type.P
-                    cut_added, pre = add_cut(opf, mod, bd, ptdf, olc, c_obj, cut_added, lim, pre)
+                    cut_added, pre = add_cut(opf, mod, bd, pf, olc, c_obj, cut_added, lim, pre)
                 elseif type.C1
-                    cut_added, corr1 = add_cut(Pc, opf, oplim, mod, bd, ΔPc, ptdf, olc, islands, island, c_obj, i, cut_added, lim, corr1)
+                    cut_added, corr1 = add_cut(Pc, opf, oplim, mod, bd, ΔPc, pf, olc, islands, island, c_obj, i, cut_added, lim, corr1)
                 end
             end
             if !isempty(olcc)
-                cut_added, corr2 = add_cut(Pcc, opf, oplim, mod, bd, ΔPcc, ptdf, olcc, islands, island, c_obj, i, cut_added, lim, corr2)
+                cut_added, corr2 = add_cut(Pcc, opf, oplim, mod, bd, ΔPcc, pf, olcc, islands, island, c_obj, i, cut_added, lim, corr2)
             end
             if !isempty(olccx)
-                cut_added, corr2f = add_cut(Pccx, opf, oplim, mod, bd, ΔPccx, ptdf, olccx, islands, island, c_obj, i, cut_added, lim, corr2f)
+                cut_added, corr2f = add_cut(Pccx, opf, oplim, mod, bd, ΔPccx, pf, olccx, islands, island, c_obj, i, cut_added, lim, corr2f)
             end
             if cut_added > 1
                 total_solve_time = update_model!(mod, pf, oplim, bd, total_solve_time)
                 cut_added = 1
             end
-            !has_values(mod) && return mod, opf, pf, oplim, Pc, Pcc, Pccx, total_solve_time
+            termination_status(mod) != JuMP.OPTIMAL && return mod, opf, pf, oplim, Pc, Pcc, Pccx, total_solve_time
         end
 
     end
@@ -258,7 +251,7 @@ function calculate_contingency_line_flows!(ΔP::Vector{<:Real}, P::Dict{<:Intege
     end
     ΔP = get_ΔP!(ΔP, mod, opf, P, c)
     ΔP[cont[2]] -= get_ΔP(mod, cont, c_obj, P, c)
-    LinearAlgebra.mul!(pf.vb_tmp, pf.ϕ, (Pᵢ .+ ΔP))
+    calculate_line_flows!(pf.vb_tmp, pf.vn_tmp, pf.K, pf.DA, (Pᵢ .+ ΔP), pf.slack)
     return pf.vb_tmp
 end
 
@@ -277,7 +270,7 @@ function calculate_contingency_line_flows(
     island::Vector, island_b::Vector{<:Integer}, val=get_ΔP(mod, cont, c_obj)
 )
     P[cont[2]] -= val
-    LinearAlgebra.mul!(pf.vb_tmp, pf.ϕ, P)
+    calculate_line_flows!(pf.vb_tmp, pf.vn_tmp, pf.K, pf.DA, P, pf.slack)
     P[cont[2]] += val
     return pf.vb_tmp
 end
@@ -366,13 +359,14 @@ function add_overload_expr!(mod::Model, expr::JuMP.AbstractJuMPScalar, ol::Real,
     end
 end
 
-function add_cut(opf::OPFsystem, mod::Model, bd::Benders, ptdf::AbstractMatrix{<:Real}, overloads::Vector{<:Tuple{Integer,Real}},
+function add_cut(opf::OPFsystem, mod::Model, bd::Benders, pf::DCPowerFlow, overloads::Vector{<:Tuple{Integer,Real}},
     c_obj::Component, cut_added::Integer, lim::Real, id::Integer
 )
     for (i, ol) in overloads
-        expr = AffExpr() + sum(ptdf[i, :] .* bd.Pᵢ)
-        for j in axes(ptdf,2)
-            add_to_expression!(expr, -ptdf[i, j], mod[:inj_p0][j])
+        ptdf = calc_isf_vec(pf, i)
+        expr = AffExpr() + sum(ptdf .* bd.Pᵢ)
+        for (i,j) in zip(ptdf, mod[:inj_p0])
+            add_to_expression!(expr, -i, j)
         end
 
         id += 1
@@ -384,7 +378,7 @@ end
 
 """ Finding and adding Benders cuts to mitigate overloads from one contingency """
 function add_cut(P::Dict{<:Integer, <:ContExpr}, opf::OPFsystem, oplim::Oplimits, mod::Model, bd::Benders, ΔP::Vector{<:Real},
-    ptdf::AbstractMatrix{<:Real}, overloads::Vector{<:Tuple{Integer,Real}}, islands::Vector, island::Integer,
+    pf::DCPowerFlow, overloads::Vector{<:Tuple{Integer,Real}}, islands::Vector, island::Integer,
     c_obj::Component, c::Integer, cut_added::Integer, lim::Real, id::Integer
 )
     p = get(P, c, 0)
@@ -395,7 +389,11 @@ function add_cut(P::Dict{<:Integer, <:ContExpr}, opf::OPFsystem, oplim::Oplimits
     for (i, ol) in overloads
         expr = make_cut(p, opf, mod)
         add_to_expression!.(expr, bd.Pᵢ + ΔP)
-        expr2 = JuMP.@expression(mod, sum((ptdf[i, :] .* expr)))
+        ptdf = calc_isf_vec(pf, i)
+        expr2 = AffExpr() 
+        for (i,j) in zip(ptdf, expr)
+            add_to_expression!(expr2, i, j)
+        end
 
         id += 1
         add_overload_expr!(mod, expr2, ol, get_name(p), id, c_obj, opf, i, lim)

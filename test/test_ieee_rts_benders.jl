@@ -2,7 +2,7 @@ using Test
 using PowerSystems
 import JuMP
 # import Ipopt # LP, SOCP, NLP
-import Gurobi # LP, SOCP, NLP, MILP, MINLP
+# import Gurobi # LP, SOCP, NLP, MILP, MINLP
 # import GLPK # LP, MILP
 import HiGHS # LP, MILP
 # import Tulip
@@ -21,7 +21,8 @@ import Logging
 ## SCOPF.reset_timer!(SCOPF.tmr)
 
 Random.seed!(42)
-const GUROBI_ENV = Gurobi.Env()
+# const GUROBI_ENV = Gurobi.Env()
+
 # optimizer = Gurobi.Optimizer(GUROBI_ENV)
 # JuMP.set_optimizer_attribute(optimizer, "Threads", Threads.nthreads())
 # optimizer = JuMP.optimizer_with_attributes(GLPK.Optimizer, "msg_lev" => GLPK.GLP_MSG_ON)

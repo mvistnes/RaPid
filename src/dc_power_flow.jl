@@ -240,6 +240,15 @@ end
 calc_X(B::AbstractMatrix{<:Real}, slack::Integer) = calc_X!(Matrix(B), B, slack)
 calc_X(K::KLU.KLUFactorization{T,<:Integer}, slack::Integer) where {T<:Real} = calc_X!(Matrix{T}(undef, size(K)), K, slack)
 
+function calc_X_vec!(X::Vector{T}, K::KLU.KLUFactorization{T,<:Integer}, branch::Integer
+) where {T<:Real}
+    X .= zero(T)
+    X[branch] = one(T)
+    KLU.solve!(K, X)
+    return X
+end
+calc_X_vec(pf::DCPowerFlow, branch::Integer) = calc_X_vec!(pf.vn_tmp, pf.K, branch)
+    
 calc_isf(DA::AbstractMatrix{<:Real}, X::AbstractMatrix{<:Real}) = DA * X
 calc_isf!(ϕ::AbstractMatrix{<:Real}, DA::AbstractMatrix{<:Real}, X::AbstractMatrix{<:Real}) =
     LinearAlgebra.mul!(ϕ, DA, X)
@@ -266,7 +275,7 @@ end
 
 function calc_isf_vec!(ϕ_vec::Vector{T}, K::KLU.KLUFactorization{T,<:Integer}, DA::AbstractMatrix{T}, branch::Integer
 ) where {T<:Real}
-    copyto!(ϕ_vec, Vector(DA[branch,:]))
+    copyto!(ϕ_vec, DA[branch,:])
     KLU.solve!(K, ϕ_vec)
     return ϕ_vec
 end
@@ -301,12 +310,21 @@ end
 Calculate the power flow on the lines from the connectivity 
 and the diagonal admittance matrices and the voltage angles 
 """
-calc_Pline(DA::AbstractMatrix{<:Real}, θ::AbstractVector{<:Real}) = DA * θ
+calc_Pline!(F::AbstractMatrix{<:Real}, DA::AbstractMatrix{<:Real}, θ::AbstractVector{<:Real}) = LinearAlgebra.mul!(F, DA, θ)
+calc_Pline(DA::AbstractMatrix{T}, θ::AbstractVector{T}) where {T<:Real} = calc_Pline!(Vector{T}(undef, size(DA,1)), DA, θ)
 calc_Pline!(pf::DCPowerFlow) = LinearAlgebra.mul!(pf.F, pf.DA, pf.θ)
 
 """ DC line flow calculation using Injection Shift Factors and Power Injection vector"""
 calculate_line_flows(isf::AbstractMatrix{<:Real}, Pᵢ::AbstractVector{<:Real}) = isf * Pᵢ
 calculate_line_flows!(pf::DCPowerFlow, Pᵢ::AbstractVector{<:Real}) = LinearAlgebra.mul!(pf.F, pf.ϕ, Pᵢ)
+
+function calculate_line_flows!(F::AbstractMatrix{<:Real}, θ::AbstractVector{<:Real}, K::KLU.KLUFactorization, 
+    DA::AbstractMatrix{<:Real}, P::AbstractVector{<:Real}, slack::Integer
+)
+    run_pf!(θ, K, P, slack)
+    calc_Pline!(F, DA, θ)
+    return F
+end
 
 """ DC power flow calculation using the Admittance matrix factorization and Power Injection vector returning the bus angles """
 function run_pf!(θ::AbstractVector{<:Real}, K::KLU.KLUFactorization, P::AbstractVector{<:Real}, slack::Integer)
