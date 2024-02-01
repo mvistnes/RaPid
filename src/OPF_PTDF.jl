@@ -150,7 +150,8 @@ function add_branch_constraints!(mod::Model, ptdf::AbstractMatrix{<:Real}, p::Ab
 end
 
 function add_branch_constraint!(mod::Model, pf::DCPowerFlow, p::AbstractVector{VariableRef}, branch::Integer, rating::Real)
-    ptdf = calc_isf_vec(pf, branch)
+    # ptdf = calc_isf_vec(pf, branch)
+    ptdf = view(pf.ϕ, branch, :)
     # ptdf0 = JuMP.GenericAffExpr(0.0, Pair.(p, ptdf[i,:])) 
     ptdf0 = @expression(mod, AffExpr())
     for (i,j) in zip(ptdf, p)
@@ -164,7 +165,7 @@ end
 function constrain_branches!(mod::Model, pf::DCPowerFlow, oplim::Oplimits, total_solve_time::Real)
     # if !has_values(mod)
         # Note: While using a direct_model, this check fails after the model is modified for some solvers
-        update_model!(mod, pf, total_solve_time)
+        total_solve_time = update_model!(mod, pf, total_solve_time)
     # end
     while true
         ol_br = find_overloaded_branches(pf.F, oplim.branch_rating)
@@ -173,9 +174,9 @@ function constrain_branches!(mod::Model, pf::DCPowerFlow, oplim::Oplimits, total
         end
         for br in ol_br
             add_branch_constraint!(mod, pf, mod[:p0], br, oplim.branch_rating[br])
+            @info "Branch $br added"
         end
-        update_model!(mod, pf, total_solve_time)
-        @info "Iteration"
+        total_solve_time = update_model!(mod, pf, total_solve_time)
     end
     return total_solve_time
 end
