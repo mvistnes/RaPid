@@ -160,11 +160,12 @@ function get_isf!(ϕ::AbstractMatrix{<:Real}, ϕ₀::AbstractMatrix{<:Real},
     return ϕ
 end
 
-function get_isf(pf::DCPowerFlow, cont::Tuple{Real,Real}, c::Integer, islands::Vector, 
+function get_isf(pf::DCPowerFlow{T, <:Integer}, cont::Tuple{Real,Real}, c::Integer, islands::Vector, 
     island::Integer, island_b::Vector{<:Integer}
-)
-    get_isf!(pf.mbn_tmp, pf.ϕ, islands[island], island_b)
-    return pf.mbn_tmp
+) where {T<:Real}
+    isf = Matrix{T}(undef, size(pf.DA))
+    get_isf!(isf, pf.ϕ, islands[island], island_b)
+    return isf
 end
 
 function calculate_line_flows!(F::AbstractVector{T}, ϕ::AbstractMatrix{<:Real}, ϕ₀::AbstractMatrix{<:Real}, Pᵢ::AbstractVector{<:Real}, 

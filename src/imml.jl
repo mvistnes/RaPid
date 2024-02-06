@@ -1,8 +1,8 @@
 """ Primitive IMML """
-get_power_flow_change(F::AbstractVector{<:Real}, ϕ::AbstractMatrix{<:Real}, A::AbstractMatrix{<:Integer}, branch) =
-    F .+ get_change(ϕ, A, branch) * F[branch]
+calc_power_flow_change(F::AbstractVector{<:Real}, ϕ::AbstractMatrix{<:Real}, A::AbstractMatrix{<:Integer}, branch::Integer) =
+    F .+ calc_change(ϕ, A, branch) * F[branch]
 
-function get_change(ϕ::AbstractMatrix{<:Real}, A::AbstractMatrix{<:Integer}, branch; atol::Real=1e-10)
+function calc_change(ϕ::AbstractMatrix{<:Real}, A::AbstractMatrix{<:Integer}, branch::Integer; atol::Real=1e-10)
     x = LinearAlgebra.I - ϕ[branch, :]' * A[branch, :]
     if isapprox(x, zero(typeof(x)); atol=atol)
         return zeros(typeof(x), size(x))
@@ -10,8 +10,40 @@ function get_change(ϕ::AbstractMatrix{<:Real}, A::AbstractMatrix{<:Integer}, br
     return ϕ * A[branch, :] * inv(x)
 end
 
+function calc_change(X::AbstractMatrix{<:Real}, A::AbstractMatrix{<:Integer}, br_x::Real, branch::Integer; atol::Real=1e-10)
+    u = A[branch,:]
+    v = -u
+    mx = X - (br_x * X * u * v' * X) / (1 + br_x * v' * X * u)
+    set_tol_zero!(mx)
+    return mx
+end
+
+function calc_ptdf_vec(Xf::AbstractVector{<:Real}, Xt::AbstractVector{<:Real}, Xk::AbstractVector{<:Real}, Xl::AbstractVector{<:Real}, 
+    x_c::Real, x_l::Real, fbus::Integer, tbus::Integer, kbus::Integer, lbus::Integer; atol::Real=1e-10
+)
+    cinv = 1 + x_c * (Xf[tbus] - Xf[fbus] + Xt[fbus] - Xt[tbus])
+    xft = -Xf[kbus] + Xt[kbus] + Xf[lbus] - Xt[lbus]
+    vec = x_l * ((Xk .- Xl) .- x_c * xft / cinv * (Xf .- Xt))
+    # set_tol_zero!(vec)
+    # xftl = Xl .- x_c * (Xt .- Xf) * (Xf[lbus] - Xt[lbus]) / cinv
+    # xftk = Xk .- x_c * (Xt .- Xf) * (Xf[kbus] - Xt[kbus]) / cinv
+    # vec = x_l * (xftk .- xftl)
+    return vec
+end
+
+function calc_ptdf_vec(B::AbstractMatrix{T}, K::KLU.KLUFactorization{T,<:Integer}, slack::Integer, 
+    fbus::Integer, tbus::Integer, kbus::Integer, lbus::Integer; atol::Real=1e-10
+) where {T<:Real}
+    n = size(B, 1)
+    Xf = calc_x_vec!(Vector{T}(undef, n), K, fbus, slack)
+    Xt = calc_x_vec!(Vector{T}(undef, n), K, tbus, slack)
+    Xk = calc_x_vec!(Vector{T}(undef, n), K, kbus, slack)
+    Xl = calc_x_vec!(Vector{T}(undef, n), K, lbus, slack)
+    return calc_ptdf_vec(Xf, Xt, Xk, Xl, -B[fbus, tbus], -B[kbus, lbus], fbus, tbus, kbus, lbus, atol=atol)
+end
+
 """ Multi contingency Woodbury """
-@views function get_changed_X!(
+@views function calc_changed_X!(
     X::AbstractMatrix{T},
     X₀::AbstractMatrix{T},
     B::AbstractMatrix{T},
@@ -38,7 +70,7 @@ Input:
     - from_bus: From bus index
     - to_bus: To bus index
 """
-@views function get_changed_angles!(
+@views function calc_changed_angles!(
     θ::AbstractVector{T},
     X::AbstractMatrix{T},
     B::AbstractMatrix{T},
@@ -86,7 +118,7 @@ function calc_Pline!(
     cont::Tuple{Integer,Integer},
     branch::Integer
 )
-    get_changed_angles!(θ, X, B, DA, θ₀, cont[1], cont[2], branch)
+    calc_changed_angles!(θ, X, B, DA, θ₀, cont[1], cont[2], branch)
     LinearAlgebra.mul!(F, DA, θ)
     F[branch] = 0.0
     return F
@@ -125,7 +157,7 @@ Input:
     - to_bus: To bus index
     - branch: Branch index
 """
-@views function get_changed_X!(
+@views function calc_changed_X!(
     X::AbstractMatrix{T},
     X₀::AbstractMatrix{T},
     B::AbstractMatrix{T},
@@ -201,7 +233,7 @@ end
 
 """ Get the isf-matrix after a line outage using IMML. 
     isf and X are containers for output and calculation and will be overwritten """
-function get_isf!(
+function calc_isf!(
     isf::AbstractMatrix{<:Real},
     X::AbstractMatrix{<:Real},
     X₀::AbstractMatrix{<:Real},
@@ -210,7 +242,7 @@ function get_isf!(
     cont::Tuple{Integer,Integer},
     branch::Integer
 )
-    get_changed_X!(X, X₀, B, DA, cont[1], cont[2], branch)
+    calc_changed_X!(X, X₀, B, DA, cont[1], cont[2], branch)
     calc_isf!(isf, DA, X)
     isf[branch, :] .= 0.0
     nothing
@@ -218,16 +250,18 @@ end
 
 """ Get the isf-matrix after a line outage using IMML. 
      """
-function get_isf(
-    pf::DCPowerFlow,
+function calc_isf(
+    pf::DCPowerFlow{T, <:Integer},
     cont::Tuple{Integer,Integer},
     branch::Integer
-)
-    get_isf!(pf.mbn_tmp, pf.mnn_tmp, pf.X, pf.B, pf.DA, cont, branch)
-    return pf.mbn_tmp
+) where {T<:Real}
+    isf = Matrix{T}(undef, size(pf.DA))
+    X = Matrix{T}(undef, size(pf.X))
+    calc_isf!(isf, X, pf.X, pf.B, pf.DA, cont, branch)
+    return isf
 end
 
-function get_isf(pf::DCPowerFlow, cont::Real, c::Integer)
+function calc_isf(pf::DCPowerFlow, cont::Real, c::Integer)
     return pf.ϕ
 end
 
@@ -360,23 +394,23 @@ end
 LODF value for a contingency at line l_mn change in line k_pq 
     From the book Optimization of power system operation 
 """
-@views get_lodf(x_l::Real, m::Integer, n::Integer, x_k::Real, p::Integer, q::Integer, X::AbstractMatrix) =
+@views calc_lodf(x_l::Real, m::Integer, n::Integer, x_k::Real, p::Integer, q::Integer, X::AbstractMatrix) =
     (x_l / x_k) * (X[p, m] - X[q, m] - X[p, n] + X[q, n]) /
     (x_l - (X[m, m] + X[n, n] - 2 * X[m, n]))
-@views get_lodf(x_l::Real, m::Integer, n::Integer, x_k::AbstractVector{<:Real}, A::AbstractMatrix, X::AbstractMatrix) =
+@views calc_lodf(x_l::Real, m::Integer, n::Integer, x_k::AbstractVector{<:Real}, A::AbstractMatrix, X::AbstractMatrix) =
     (x_l ./ x_k) .* A * (X[:, m] - X[:, n]) ./
     (x_l - (X[m, m] + X[n, n] - 2 * X[m, n]))
 
-function get_lodf(branch_l::Branch, branch_k::Branch, X::AbstractMatrix, idx::Dict{<:Any,<:Int})
+function calc_lodf(branch_l::Branch, branch_k::Branch, X::AbstractMatrix, idx::Dict{<:Any,<:Int})
     (m, n) = get_bus_idx(branch_l, idx)
     (p, q) = get_bus_idx(branch_k, idx)
-    return get_lodf(get_x(branch_l), m, n, get_x(branch_k), p, q, X)
+    return calc_lodf(get_x(branch_l), m, n, get_x(branch_k), p, q, X)
 end
-function get_lodf(branch_l::Branch, branches::AbstractVector{<:Branch}, A::AbstractMatrix, X::AbstractMatrix, idx::Dict{<:Any,<:Int})
+function calc_lodf(branch_l::Branch, branches::AbstractVector{<:Branch}, A::AbstractMatrix, X::AbstractMatrix, idx::Dict{<:Any,<:Int})
     (m, n) = get_bus_idx(branch_l, idx)
-    return get_lodf(get_x(branch_l), m, n, get_x.(branches), A, X)
+    return calc_lodf(get_x(branch_l), m, n, get_x.(branches), A, X)
 end
-function get_lodf(from_bus, to_bus, x::AbstractVector{<:Real}, A::AbstractMatrix, X::AbstractMatrix)
-    mx = reshape(reduce(vcat, get_lodf.(x, from_bus, to_bus, [x], [A], [X])), (length(x), length(x)))
+function calc_lodf(from_bus, to_bus, x::AbstractVector{<:Real}, A::AbstractMatrix, X::AbstractMatrix)
+    mx = reshape(reduce(vcat, calc_lodf.(x, from_bus, to_bus, [x], [A], [X])), (length(x), length(x)))
     return mx - LinearAlgebra.Diagonal(mx) - LinearAlgebra.I
 end
