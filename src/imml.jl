@@ -1,13 +1,45 @@
 """ Primitive IMML """
-get_power_flow_change(F::AbstractVector{<:Real}, ϕ::AbstractMatrix{<:Real}, A::AbstractMatrix{<:Integer}, branch) =
+get_power_flow_change(F::AbstractVector{<:Real}, ϕ::AbstractMatrix{<:Real}, A::AbstractMatrix{<:Integer}, branch::Integer) =
     F .+ get_change(ϕ, A, branch) * F[branch]
 
-function get_change(ϕ::AbstractMatrix{<:Real}, A::AbstractMatrix{<:Integer}, branch; atol::Real=1e-10)
+function get_change(ϕ::AbstractMatrix{<:Real}, A::AbstractMatrix{<:Integer}, branch::Integer; atol::Real=1e-10)
     x = LinearAlgebra.I - ϕ[branch, :]' * A[branch, :]
     if isapprox(x, zero(typeof(x)); atol=atol)
         return zeros(typeof(x), size(x))
     end
     return ϕ * A[branch, :] * inv(x)
+end
+
+function get_change(X::AbstractMatrix{<:Real}, A::AbstractMatrix{<:Integer}, br_x::Real, branch::Integer; atol::Real=1e-10)
+    u = A[branch,:]
+    v = -u
+    mx = X - (br_x * X * u * v' * X) / (1 + br_x * v' * X * u)
+    set_tol_zero!(mx)
+    return mx
+end
+
+function get_ptdf_vec(Xf::AbstractVector{<:Real}, Xt::AbstractVector{<:Real}, Xk::AbstractVector{<:Real}, Xl::AbstractVector{<:Real}, 
+    x_c::Real, x_l::Real, fbus::Integer, tbus::Integer, kbus::Integer, lbus::Integer; atol::Real=1e-10
+)
+    cinv = 1 + x_c * (Xf[tbus] - Xf[fbus] + Xt[fbus] - Xt[tbus])
+    xft = -Xf[kbus] + Xt[kbus] + Xf[lbus] - Xt[lbus]
+    vec = x_l * ((Xk .- Xl) .- x_c * xft / cinv * (Xf .- Xt))
+    # set_tol_zero!(vec)
+    # xftl = Xl .- x_c * (Xt .- Xf) * (Xf[lbus] - Xt[lbus]) / cinv
+    # xftk = Xk .- x_c * (Xt .- Xf) * (Xf[kbus] - Xt[kbus]) / cinv
+    # vec = x_l * (xftk .- xftl)
+    return vec
+end
+
+function get_ptdf_vec(B::AbstractMatrix{<:Real}, K::KLU.KLUFactorization{T,<:Integer}, slack::Integer, 
+    fbus::Integer, tbus::Integer, kbus::Integer, lbus::Integer; atol::Real=1e-10
+)
+    n = size(B, 1)
+    Xf = calc_x_vec!(Vector{T}(undef, n), K, fbus, slack)
+    Xt = calc_x_vec!(Vector{T}(undef, n), K, tbus, slack)
+    Xk = calc_x_vec!(Vector{T}(undef, n), K, kbus, slack)
+    Xl = calc_x_vec!(Vector{T}(undef, n), K, lbus, slack)
+    return get_ptdf_vec(Xf, Xt, Xk, Xl, -B[fbus, tbus], -B[kbus, lbus], fbus, tbus, kbus, lbus, atol=atol)
 end
 
 """ Multi contingency Woodbury """
@@ -21,8 +53,8 @@ end
     atol::Real=1e-10
 ) where {T<:Real}
     iE = X₀
-    F = X₀[:, last.(bx)]
-    iG = inv(B[first.(bx), last.(bx)])
+    F = X₀[:, last.(bx[branches])]
+    iG = inv(B[first.(bx[branches]), last.(bx[branches])])
     H = F'
     X = iE - iE*F*inv(iG + H*iE*F)*H*iE
 end
@@ -177,6 +209,7 @@ function get_isf!(
     get_changed_X!(X, X₀, B, DA, cont[1], cont[2], branch)
     calc_isf!(isf, DA, X)
     isf[branch, :] .= 0.0
+    set_tol_zero!(isf)
     nothing
 end
 
