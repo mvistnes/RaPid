@@ -33,7 +33,7 @@ end
 
 function get_ptdf_vec(B::AbstractMatrix{<:Real}, K::KLU.KLUFactorization{T,<:Integer}, slack::Integer, 
     fbus::Integer, tbus::Integer, kbus::Integer, lbus::Integer; atol::Real=1e-10
-)
+) where {T<:Real}
     n = size(B, 1)
     Xf = calc_x_vec!(Vector{T}(undef, n), K, fbus, slack)
     Xt = calc_x_vec!(Vector{T}(undef, n), K, tbus, slack)
