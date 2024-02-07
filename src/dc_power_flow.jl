@@ -88,14 +88,13 @@ end
 function set_dist_slack!(ϕ::AbstractMatrix{<:Real}, mgx::AbstractMatrix{<:Real}, dist_slack::AbstractVector{<:Real})
     @assert !iszero(sum(dist_slack))
     slack_array = dist_slack / sum(dist_slack)
-    ϕ = ϕ .- ((slack_array' * mgx) * ϕ')'
+    ϕ .-= ((slack_array' * mgx) * ϕ')'
 end
 function set_dist_slack!(pf::DCPowerFlow, opf::OPFsystem, dist_slack::AbstractVector{<:Real} = Float64[])
     if isempty(dist_slack)
         dist_slack = getproperty.(get_active_power_limits.(opf.ctrl_generation), [:max])
     end
-    mgx = calc_connectivity(opf.ctrl_generation, length(opf.nodes), opf.idx)
-    set_dist_slack!(pf.ϕ, mgx, dist_slack)
+    set_dist_slack!(pf.ϕ, opf.mgx, dist_slack)
 end
 
 """ Make the component connectivity matrix """

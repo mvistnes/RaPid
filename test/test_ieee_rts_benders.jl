@@ -29,7 +29,7 @@ Random.seed!(42)
 # open("output.txt", "w") do out
 #     redirect_stdout(out) do
 
-system = System(joinpath("data","matpower","IEEE_RTS.m"))
+system = System(joinpath("cases","IEEE_RTS.m"))
 # SCOPF.fix_generation_cost!(system);
 # nodes = SCOPF.sort_components!(SCOPF.get_nodes(system))
 # idx = SCOPF.get_nodes_idx(nodes)
