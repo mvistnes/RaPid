@@ -1,3 +1,5 @@
+@testset "Test IMML" begin
+
 using Test
 using PowerSystems
 import JuMP
@@ -85,3 +87,5 @@ SCOPF.get_isf!(ϕ, pf.ϕ, islands[island], island_b); LinearAlgebra.mul!(flow6, 
 SCOPF.calculate_line_flows!(flow7, ϕ, pf.ϕ, (Pᵢ .+ ΔPc), islands[island], island_b); # hack2
 @test flow6 ≈ flow7 
 
+
+end

@@ -1,3 +1,5 @@
+@testset "Test dc power flow" begin
+
 using Test
 using PowerSystems
 import JuMP
@@ -89,3 +91,5 @@ SCOPF.get_isf!(ϕ, pf.ϕ, islands[island], island_b); LinearAlgebra.mul!(flow3, 
 @test flow2 ≈ flow3 
 SCOPF.calculate_line_flows!(flow4, ϕ, pf.ϕ, (Pᵢ .+ ΔPc), islands[island], island_b); # hack2
 @test flow3 ≈ flow4 
+
+end

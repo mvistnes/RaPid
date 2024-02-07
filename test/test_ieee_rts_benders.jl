@@ -1,3 +1,5 @@
+@testset "Test Benders" begin
+
 using Test
 using PowerSystems
 import JuMP
@@ -117,4 +119,6 @@ function benders_pc_scopf()
     SCOPF.print_power_flow(opf, model)
     bx = SCOPF.typesort_component.(SCOPF.get_interarea(opf.branches), [opf])
     SCOPF.print_contingency_power_flow(opf, model, pf, Pc, Pcc, Pccx, short, long; subset=first.(bx))
+end
+
 end

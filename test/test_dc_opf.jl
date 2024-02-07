@@ -1,3 +1,5 @@
+@testset "Test dc opf" begin
+
 using Test
 using PowerSystems
 import JuMP
@@ -26,3 +28,5 @@ SCOPF.solve_model!(model2)
 
 @test JuMP.objective_value(model) ≈ JuMP.objective_value(model2)
 @test SCOPF.get_value(model, :p0) ≈ SCOPF.get_value(model2, :p0)
+
+end
