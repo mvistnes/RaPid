@@ -169,9 +169,8 @@ function constrain_branches!(mod::Model, pf::DCPowerFlow, oplim::Oplimits, total
     # end
     while true
         ol_br = find_overloaded_branches(pf.F, oplim.branch_rating)
-        if isempty(ol_br)
-            break
-        end
+        isempty(ol_br) && break 
+        JuMP.termination_status(mod) != JuMP.OPTIMAL && break
         for br in ol_br
             add_branch_constraint!(mod, pf, mod[:p0], br, oplim.branch_rating[br])
             @info "Branch $br added"
