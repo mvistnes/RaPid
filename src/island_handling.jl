@@ -124,7 +124,7 @@ function is_islanded(
     X::AbstractMatrix{T},
     cont::Tuple{Integer,Integer},
     branch::Integer;
-    atol::Real=1e-5
+    atol::Real=1e-14
 ) where {T<:Real}
     (fbus, tbus) = cont
     return isapprox(
@@ -132,10 +132,10 @@ function is_islanded(
                             ((X[fbus, fbus] - X[fbus, tbus]) - (X[tbus, fbus] - X[tbus, tbus])),
         zero(T), atol=atol)
 end
-is_islanded(pf::DCPowerFlow, cont::Tuple{Integer,Integer}, branch::Integer; atol::Real=1e-5) =
+is_islanded(pf::DCPowerFlow, cont::Tuple{Integer,Integer}, branch::Integer; atol::Real=1e-14) =
     is_islanded(pf.DA, pf.B, pf.X, cont, branch, atol=atol)
 
-is_islanded(pf::DCPowerFlow, cont::Integer, branch::Integer; atol::Real=1e-5) = false
+is_islanded(pf::DCPowerFlow, cont::Integer, branch::Integer; atol::Real=1e-14) = false
 
 " Find nodes connected to a node "
 function find_connected(branches::AbstractVector{<:Branch}, node::Bus)
@@ -185,7 +185,7 @@ end
     Find islands after a contingency.
     Removes all connection between the two nodes i and j.
 """
-function island_detection(T::SparseArrays.SparseMatrixCSC{Ty,<:Integer}, i::Integer, j::Integer; atol::Real=1e-5) where {Ty}
+function island_detection(T::SparseArrays.SparseMatrixCSC{Ty,<:Integer}, i::Integer, j::Integer; atol::Real=1e-14) where {Ty}
     val = T[i, j]
     SparseArrays.dropstored!(T, i, j)
     SparseArrays.dropstored!(T, j, i)
@@ -207,7 +207,7 @@ function island_detection(T::SparseArrays.SparseMatrixCSC{Ty,<:Integer}, i::Inte
     end
     return islands
 end
-function island_detection_thread_safe(Y::SparseArrays.SparseMatrixCSC{Ty,<:Integer}, i::Integer, j::Integer; atol::Real=1e-5) where {Ty}
+function island_detection_thread_safe(Y::SparseArrays.SparseMatrixCSC{Ty,<:Integer}, i::Integer, j::Integer; atol::Real=1e-14) where {Ty}
     T = create_connectivity_matrix(Y)
     val = Y[i, j]
     SparseArrays.dropstored!(T, i, j)
@@ -221,7 +221,7 @@ function island_detection_thread_safe(Y::SparseArrays.SparseMatrixCSC{Ty,<:Integ
     end
     return islands
 end
-function island_detection_thread_safe(Y::SparseArrays.SparseMatrixCSC{Ty,<:Integer}, cont::AbstractVector{<:Tuple{Integer,Integer}}; atol::Real=1e-5) where {Ty}
+function island_detection_thread_safe(Y::SparseArrays.SparseMatrixCSC{Ty,<:Integer}, cont::AbstractVector{<:Tuple{Integer,Integer}}; atol::Real=1e-14) where {Ty}
     T = create_connectivity_matrix(Y)
     for (i,j) in cont
         val = Y[i, j]

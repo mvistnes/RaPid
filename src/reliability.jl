@@ -12,7 +12,7 @@ SystemRunData(runs::Integer, datasize::Integer) = SystemRunData([zeros(runs, 3, 
 get_objective(val::SystemRunData, run::Integer, i::Integer) = sum(val.objective[run, :, i])
 
 function gather_run_data!(vals::SystemRunData, run::Integer, i::Integer, model::Model, opfs::OPFsystem, 
-    Pc::Dict{<:Integer,ExprC}, Pcc::Dict{<:Integer,ExprCC}, atol::Real=1e-6
+    Pc::Dict{<:Integer,ExprC}, Pcc::Dict{<:Integer,ExprCC}, atol::Real=1e-14
 )
     MOI.get(model, MOI.ResultCount()) < 1 && return
 
@@ -160,5 +160,5 @@ get_objective(mod::Model) = termination_status(mod) != MOI.OPTIMAL ? -1.0 : obje
 get_ens(mod::Model, cont::Dict, symb::Symbol) = 
     sum(sum(get_value(mod, getfield(c, symb))) for (i,c) in cont)
     
-get_lol(mod::Model, cont::Dict, symb::Symbol, atol::Real=1e-6) = 
+get_lol(mod::Model, cont::Dict, symb::Symbol, atol::Real=1e-14) = 
     sum(count(x->(abs(x)>atol), get_value(mod, getfield(c, symb))) for (i,c) in cont)

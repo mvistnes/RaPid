@@ -2,7 +2,7 @@
 get_power_flow_change(F::AbstractVector{<:Real}, ϕ::AbstractMatrix{<:Real}, A::AbstractMatrix{<:Integer}, branch::Integer) =
     F .+ get_change(ϕ, A, branch) * F[branch]
 
-function get_change(ϕ::AbstractMatrix{<:Real}, A::AbstractMatrix{<:Integer}, branch::Integer; atol::Real=1e-10)
+function get_change(ϕ::AbstractMatrix{<:Real}, A::AbstractMatrix{<:Integer}, branch::Integer; atol::Real=1e-14)
     x = LinearAlgebra.I - ϕ[branch, :]' * A[branch, :]
     if isapprox(x, zero(typeof(x)); atol=atol)
         return zeros(typeof(x), size(x))
@@ -10,7 +10,7 @@ function get_change(ϕ::AbstractMatrix{<:Real}, A::AbstractMatrix{<:Integer}, br
     return ϕ * A[branch, :] * inv(x)
 end
 
-function get_change(X::AbstractMatrix{<:Real}, A::AbstractMatrix{<:Integer}, br_x::Real, branch::Integer; atol::Real=1e-10)
+function get_change(X::AbstractMatrix{<:Real}, A::AbstractMatrix{<:Integer}, br_x::Real, branch::Integer; atol::Real=1e-14)
     u = A[branch,:]
     v = -u
     mx = X - (br_x * X * u * v' * X) / (1 + br_x * v' * X * u)
@@ -19,7 +19,7 @@ function get_change(X::AbstractMatrix{<:Real}, A::AbstractMatrix{<:Integer}, br_
 end
 
 function get_ptdf_vec(Xf::AbstractVector{<:Real}, Xt::AbstractVector{<:Real}, Xk::AbstractVector{<:Real}, Xl::AbstractVector{<:Real}, 
-    x_c::Real, x_l::Real, fbus::Integer, tbus::Integer, kbus::Integer, lbus::Integer; atol::Real=1e-10
+    x_c::Real, x_l::Real, fbus::Integer, tbus::Integer, kbus::Integer, lbus::Integer; atol::Real=1e-14
 )
     cinv = 1 + x_c * (Xf[tbus] - Xf[fbus] + Xt[fbus] - Xt[tbus])
     xft = -Xf[kbus] + Xt[kbus] + Xf[lbus] - Xt[lbus]
@@ -32,7 +32,7 @@ function get_ptdf_vec(Xf::AbstractVector{<:Real}, Xt::AbstractVector{<:Real}, Xk
 end
 
 function get_ptdf_vec(B::AbstractMatrix{<:Real}, K::KLU.KLUFactorization{T,<:Integer}, slack::Integer, 
-    fbus::Integer, tbus::Integer, kbus::Integer, lbus::Integer; atol::Real=1e-10
+    fbus::Integer, tbus::Integer, kbus::Integer, lbus::Integer; atol::Real=1e-14
 ) where {T<:Real}
     n = size(B, 1)
     Xf = calc_x_vec!(Vector{T}(undef, n), K, fbus, slack)
@@ -50,7 +50,7 @@ end
     DA::AbstractMatrix{T},
     bx::AbstractVector{<:Tuple{Integer, Integer}},
     branches::AbstractVector{<:Integer};
-    atol::Real=1e-10
+    atol::Real=1e-14
 ) where {T<:Real}
     iE = X₀
     F = X₀[:, last.(bx[branches])]
@@ -79,7 +79,7 @@ Input:
     from_bus::Integer,
     to_bus::Integer,
     branch::Integer;
-    atol::Real=1e-10
+    atol::Real=1e-14
 ) where {T<:Real}
     change = DA[branch, to_bus] / B[from_bus, to_bus]
     # x = change * (X[:, from_bus] - X[:, to_bus])
@@ -165,7 +165,7 @@ Input:
     from_bus::Integer,
     to_bus::Integer,
     branch::Integer;
-    atol::Real=1e-10
+    atol::Real=1e-14
 ) where {T<:Real}
 
     # X_new = X - (X*A[from_bus,:]*DA[from_bus,to_bus]*x)/(1+DA[from_bus,to_bus]*x*A[from_bus,:])
@@ -255,7 +255,7 @@ Input:
     from_bus::Integer,
     to_bus::Integer,
     branch::Integer;
-    atol::Real=1e-10
+    atol::Real=1e-14
 ) where {T<:Real}
     change = DA[branch, to_bus] / B[from_bus, to_bus]
     # x = change * (X[:,from_bus] - X[:,to_bus])
@@ -280,7 +280,7 @@ end
     to_bus::Integer,
     branch::Integer,
     ::Val{1}; # from_bus is not connected to the system
-    atol::Real=1e-10
+    atol::Real=1e-14
 ) where {T<:Real}
     change = DA[branch, to_bus] / B[from_bus, to_bus]
     c⁻¹ = inv(B[from_bus, to_bus]) + change * (- X[from_bus, to_bus] + X[to_bus, to_bus])
@@ -304,7 +304,7 @@ end
     to_bus::Integer,
     branch::Integer,
     ::Val{2}; # to_bus is not connected to the system
-    atol::Real=1e-10
+    atol::Real=1e-14
 ) where {T<:Real}
     change = DA[branch, to_bus] / B[from_bus, to_bus]
     c⁻¹ = inv(B[from_bus, to_bus]) + change * (X[from_bus, from_bus] - X[to_bus, from_bus])

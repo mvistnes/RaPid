@@ -13,7 +13,7 @@ function benders(opf::OPFsystem, mod::Model)
     Pᵢ = get_value(mod, :p0)
     Pg = get_controllable(opf, mod)
     Pd = get_Pd(opf, mod) # Fixed injection
-    @assert isapprox(Pg, (Pᵢ - Pd); atol=1e-8) string(Pg - (Pᵢ - Pd))
+    @assert isapprox(Pg, (Pᵢ - Pd); atol=1e-14) string(Pg - (Pᵢ - Pd))
     return Benders{Float64}(obj, Pᵢ, Pg, Pd)
 end
 
@@ -37,7 +37,7 @@ function run_benders(
     ramp_mult=10, 
     max_shed=1.0, 
     max_curtail=1.0, 
-    lim=1e-6,
+    lim=1e-14,
     short_term_multi::Real=1.5, 
     long_term_multi::Real=1.2, 
     max_itr=max(length(contingencies), 5),
@@ -68,7 +68,7 @@ function run_benders!(
     Pc::Dict{<:Integer, ExprC}, 
     Pcc::Dict{<:Integer, ExprCC}, 
     Pccx::Dict{<:Integer, ExprCCX},
-    lim=1e-6,
+    lim=1e-14,
     max_itr=max(length(opf.contingencies), 5)
 )
     assert(type)
@@ -154,7 +154,7 @@ function run_benders!(
             return mod, opf, pf, oplim, Pc, Pcc, Pccx, total_solve_time
         end
         cut_added = 0
-        @info "Iteration $iterations"
+        @info "\n------------------\nIteration $iterations"
 
         for i in permutation
             c_obj = opf.contingencies[i]
@@ -186,8 +186,8 @@ function run_benders!(
                     ptdf = get_isf(pf, cont[2], cont[1], islands, island, island_b)
                 else
                     ptdf = get_isf(pf, cont[2], cont[1])
+                    set_tol_zero!(ptdf)
                 end
-                set_tol_zero!(ptdf)
 
                 type.C1 && get(Pc, i, 0) == 0 && fill!(ΔPc, 0.0)
                 type.C2 && get(Pcc, i, 0) == 0 && fill!(ΔPcc, 0.0)
@@ -216,7 +216,7 @@ function run_benders!(
         end
 
     end
-    @warn "Reached $(length(opf.contingencies)) iterations without a stable solution."
+    @warn "Reached $(max_itr) iterations without a stable solution."
     return mod, opf, pf, oplim, Pc, Pcc, Pccx, total_solve_time
 end
 
@@ -429,13 +429,13 @@ function make_cut(pccx::ExprCCX, opf::OPFsystem, mod::Model)
 end
 
 " An AbstractJuMPScalar nicely formatted to a string "
-sprint_expr(expr::AbstractJuMPScalar, lim=1e-6) =
+sprint_expr(expr::AbstractJuMPScalar, lim=1e-14) =
     join(Printf.@sprintf("%s%5.2f %s ", (x[2] > 0 ? "+" : "-"), abs(x[2]), x[1])
          for x in expr.terms if abs(x[2]) > lim) *
     Printf.@sprintf("<= %s%.2f", (expr.constant > 0 ? "-" : " "), abs(expr.constant)
     )
 
-function print_benders_results(opf::OPFsystem, mod::Model, Pc::Dict=Dict(), Pcc::Dict=Dict(), Pccx::Dict=Dict(), lim::Real=1e-6)
+function print_benders_results(opf::OPFsystem, mod::Model, Pc::Dict=Dict(), Pcc::Dict=Dict(), Pccx::Dict=Dict(), lim::Real=1e-14)
     function print_c(itr, symb::String, i_g::Int, lim::Real)
         for i in 1:length(opf.contingencies)
             c = get(itr, i, 0)

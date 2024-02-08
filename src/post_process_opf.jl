@@ -191,7 +191,7 @@ function get_power_flow(opf::OPFsystem, mod::Model; subset::AbstractVector{<:Int
 end
 
 function print_power_flow(opf::OPFsystem, mod::Model; subset::AbstractVector{<:Integer}=Int64[],
-    all=true, sep::String=" ", risky_flow=0.9, atol=1e-8
+    all=true, sep::String=" ", risky_flow=0.9, atol=1e-14
 )
     vals = get_power_flow(opf, mod, subset=subset)
     if !isempty(subset)
@@ -203,7 +203,7 @@ function print_power_flow(opf::OPFsystem, mod::Model; subset::AbstractVector{<:I
 end
 
 function print_power_flow(names::AbstractVector{String}, flow::AbstractVector,
-    rate::AbstractVector{<:Real}; all=true, sep::String=" ", risky_flow=0.9, atol=1e-8
+    rate::AbstractVector{<:Real}; all=true, sep::String=" ", risky_flow=0.9, atol=1e-14
 )
     all && println("         Branch     Flow  Rating")
     string_line(n, f, r, sep) = @sprintf("%15s%s %7.3f%s %7.3f\n", n, sep, f, sep, r)
@@ -243,7 +243,7 @@ end
 
 function print_contingency_power_flow(opf::OPFsystem, mod::Model, pf::DCPowerFlow,
     Pᵢ::AbstractVector{<:Real}, b_names::Vector{String}, linerates::Vector{<:Float64}, Pc::Dict; 
-    subset::AbstractVector{<:Integer}=Int64[], all=true, sep::String=" ", risky_flow=0.9, atol=1e-8
+    subset::AbstractVector{<:Integer}=Int64[], all=true, sep::String=" ", risky_flow=0.9, atol=1e-14
 )
     islands = Vector{Vector{Int}}()
     island = 0
@@ -276,7 +276,7 @@ end
 function get_contingency_power_flow(opf::OPFsystem, mod::Model, pf::DCPowerFlow, 
     Pc::Dict=Dict(), Pcc::Dict=Dict(), Pccx::Dict=Dict(), 
     short_term_multi::Float64=1.5, long_term_multi::Float64=1.0; 
-    subset::AbstractVector{<:Integer}=Int64[], all=true, sep::String=" ", risky_flow=0.9, atol=1e-8
+    subset::AbstractVector{<:Integer}=Int64[], all=true, sep::String=" ", risky_flow=0.9, atol=1e-14
 )
     b_names = get_name.(opf.branches)
     linerates = get_rate.(opf.branches)
@@ -302,7 +302,7 @@ end
 function print_contingency_power_flow(opf::OPFsystem, mod::Model, pf::DCPowerFlow, 
     Pc::Dict=Dict(), Pcc::Dict=Dict(), Pccx::Dict=Dict(), 
     short_term_multi::Float64=1.5, long_term_multi::Float64=1.0; 
-    subset::AbstractVector{<:Integer}=Int64[], all=true, sep::String=" ", risky_flow=0.9, atol=1e-8
+    subset::AbstractVector{<:Integer}=Int64[], all=true, sep::String=" ", risky_flow=0.9, atol=1e-14
 )
     b_names = PowerSystems.get_name.(opf.branches)
     linerates = get_rate.(opf.branches)

@@ -14,7 +14,7 @@ function run_contingency_select(
     ramp_mult=10, 
     max_shed=1.0, 
     max_curtail=1.0, 
-    lim=1e-6,
+    lim=1e-14,
     short_term_multi::Real=1.5, 
     long_term_multi::Real=1.2, 
     max_itr=max(length(contingencies), 5),
@@ -44,7 +44,7 @@ function run_contingency_select!(
     Pc::Dict{<:Integer, ExprC}, 
     Pcc::Dict{<:Integer, ExprCC}, 
     Pccx::Dict{<:Integer, ExprCCX},
-    lim=1e-6,
+    lim=1e-14,
     max_itr=max(length(contingencies), 5),
     branch_c=nothing, 
     rate_c=0.0, 
@@ -217,7 +217,7 @@ function run_contingency_select!(
                 cut_added = 0
             end
             iterations += 1
-            @info "Iteration $iterations"
+            @info "\n------------------\nIteration $iterations"
             i = 1
         end
     end
