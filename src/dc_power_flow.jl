@@ -88,7 +88,7 @@ end
 function set_dist_slack!(ϕ::AbstractMatrix{<:Real}, mgx::AbstractMatrix{<:Real}, dist_slack::AbstractVector{<:Real})
     @assert !iszero(sum(dist_slack))
     slack_array = dist_slack / sum(dist_slack)
-    ϕ .-= ((slack_array' * mgx) * ϕ')'
+    ϕ = ϕ .- ((slack_array' * mgx) * ϕ')'
 end
 function set_dist_slack!(pf::DCPowerFlow, opf::OPFsystem, dist_slack::AbstractVector{<:Real} = Float64[])
     if isempty(dist_slack)
