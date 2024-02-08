@@ -111,18 +111,19 @@ function print_contingency_results(opf::OPFsystem, Pccx::Dict{<:Integer, ExprCCX
     end
 end
 
-function print_contingency_results(opf::OPFsystem, Pc::Dict{<:Integer, ExprC}, Pcc::Dict{<:Integer, ExprCC}, Pccx=Dict())
-    print_contingency_results.([opf], [Pc], [opf.contingencies], keys(Pc))
-    print_contingency_results.([opf], [Pcc], [opf.contingencies], keys(Pcc))
-    print_contingency_results.([opf], [Pcc], [opf.contingencies], keys(Pccx))
+function print_contingency_results(case::Case)
+    print_contingency_results.([case.opf], [case.Pc], [case.opf.contingencies], keys(case.Pc))
+    print_contingency_results.([case.opf], [case.Pcc], [case.opf.contingencies], keys(case.Pcc))
+    print_contingency_results.([case.opf], [case.Pcc], [case.opf.contingencies], keys(case.Pccx))
     return
 end
 
-function print_contingency_P(opf::OPFsystem, Pc, Pcc, Pccx=Dict())
+function print_contingency_P(case::Case)
+    opf = case.opf
     println("Pc; cont, node, val")
     for (c, cont) in enumerate(opf.contingencies)
         P = zeros(length(opf.nodes))
-        x = get(Pc, c, 0)
+        x = get(case.Pc, c, 0)
         if x != 0
             add_to!(P, x.pgu, opf.idx, opf.ctrl_generation, +)
             add_to!(P, x.pgd, opf.idx, opf.ctrl_generation, -)
@@ -139,7 +140,7 @@ function print_contingency_P(opf::OPFsystem, Pc, Pcc, Pccx=Dict())
     println("Pcc; cont, node, val")
     for (c, cont) in enumerate(opf.contingencies)
         P = zeros(length(opf.nodes))
-        x = get(Pcc, c, 0)
+        x = get(case.Pcc, c, 0)
         if x != 0
             add_to!(P, x.pgu, opf.idx, opf.ctrl_generation, +)
             add_to!(P, x.pgd, opf.idx, opf.ctrl_generation, -)
@@ -273,58 +274,52 @@ function print_contingency_power_flow(opf::OPFsystem, mod::Model, pf::DCPowerFlo
     end
 end
 
-function get_contingency_power_flow(opf::OPFsystem, mod::Model, pf::DCPowerFlow, 
-    Pc::Dict=Dict(), Pcc::Dict=Dict(), Pccx::Dict=Dict(), 
-    short_term_multi::Float64=1.5, long_term_multi::Float64=1.0; 
+function get_contingency_power_flow(case::Case; 
     subset::AbstractVector{<:Integer}=Int64[], all=true, sep::String=" ", risky_flow=0.9, atol=1e-14
 )
-    b_names = get_name.(opf.branches)
-    linerates = get_rate.(opf.branches)
-    Pᵢ = get_value(mod, :p0)
-    brst = linerates * short_term_multi
-    brlt = linerates * long_term_multi
+    b_names = PowerSystems.get_name.(case.opf.branches)
+    Pᵢ = get_value(case.model, :p0)
+    brst = case.oplim.branch_rating * case.oplim.short_term_multi
+    brlt = case.oplim.branch_rating * case.oplim.long_term_multi
     vals = Dict("name" => b_names, "st_rate" => brst, "lt_rate" => brlt)
 
-    if !isempty(Pc) 
-        merge!(vals, get_contingency_power_flow(opf, mod, pf, Pᵢ, Pc, "short_"; subset=subset))
+    if !isempty(case.Pc) 
+        merge!(vals, get_contingency_power_flow(case.opf, case.model, case.pf, Pᵢ, case.Pc, "short_"; subset=subset))
     end
 
-    if !isempty(Pcc)
-        merge!(vals, get_contingency_power_flow(opf, mod, pf, Pᵢ, Pcc, "long_"; subset=subset))
+    if !isempty(case.Pcc)
+        merge!(vals, get_contingency_power_flow(case.opf, case.model, case.pf, Pᵢ, case.Pcc, "long_"; subset=subset))
     end
 
-    if !isempty(Pccx)
-        merge!(vals, get_contingency_power_flow(opf, mod, pf, Pᵢ, Pccx, "long_x_"; subset=subset))
+    if !isempty(case.Pccx)
+        merge!(vals, get_contingency_power_flow(case.opf, case.model, case.pf, Pᵢ, case.Pccx, "long_x_"; subset=subset))
     end
     return vals
 end
 
-function print_contingency_power_flow(opf::OPFsystem, mod::Model, pf::DCPowerFlow, 
-    Pc::Dict=Dict(), Pcc::Dict=Dict(), Pccx::Dict=Dict(), 
-    short_term_multi::Float64=1.5, long_term_multi::Float64=1.0; 
+function print_contingency_power_flow(case::Case; 
     subset::AbstractVector{<:Integer}=Int64[], all=true, sep::String=" ", risky_flow=0.9, atol=1e-14
 )
-    b_names = PowerSystems.get_name.(opf.branches)
-    linerates = get_rate.(opf.branches)
-    Pᵢ = get_value(mod, :p0)
-    brst = linerates * short_term_multi
-    brlt = linerates * long_term_multi
+    b_names = PowerSystems.get_name.(case.opf.branches)
+    Pᵢ = get_value(case.model, :p0)
+    brst = case.oplim.branch_rating * case.oplim.short_term_multi
+    brlt = case.oplim.branch_rating * case.oplim.long_term_multi
 
-    if !isempty(Pc) 
+    if !isempty(case.Pc) 
         println("Short-term post-contingency")
-        print_contingency_power_flow(opf, mod, pf, Pᵢ, b_names, brst, Pc; 
+        print_contingency_power_flow(case.opf, case.model, case.pf, Pᵢ, b_names, brst, case.Pc; 
                                      subset=subset, all=all, sep=sep, risky_flow=risky_flow, atol=atol)
     end
 
-    if !isempty(Pcc)
+    if !isempty(case.Pcc)
         println("Long-term post-contingency")
-        print_contingency_power_flow(opf, mod, pf, Pᵢ, b_names, brlt, Pcc; 
+        print_contingency_power_flow(case.opf, case.model, case.pf, Pᵢ, b_names, brlt, case.Pcc; 
                                      subset=subset, all=all, sep=sep, risky_flow=risky_flow, atol=atol)
     end
 
-    if !isempty(Pccx)
+    if !isempty(case.Pccx)
         println("Long-term post-contingency corrective failed")
-        print_contingency_power_flow(opf, mod, pf, Pᵢ, b_names, brlt, Pccx; 
+        print_contingency_power_flow(case.opf, case.model, case.pf, Pᵢ, b_names, brlt, case.Pccx; 
                                      subset=subset, all=all, sep=sep, risky_flow=risky_flow, atol=atol)
     end
     return
@@ -347,6 +342,43 @@ function print_generation_results(opf::OPFsystem, mod::Model)
     end
     
     # pr_lim = get_active_power.(opf.renewables)
+end
+
+
+function print_benders_results(case::Case, lim::Real=1e-14)
+    function print_c(itr, symb::String, i_g::Int, lim::Real)
+        for i in 1:length(opf.contingencies)
+            c = get(itr, i, 0)
+            if c != 0 && JuMP.value(getfield(c, Symbol(symb))[i_g]) > lim
+                @printf("          c %12s: %s: %.3f\n", opf.contingencies[i].name, symb, JuMP.value(getfield(c, Symbol(symb))[i_g]))
+            end
+        end
+    end
+
+    for (i_g, g) in enumerate(case.opf.ctrl_generation)
+        @printf("%12s: %5.3f (%.3f)\n", g.name, JuMP.value(case.model[:pg0][i_g]), get_active_power_limits(g).max)
+        print_c(case.Pc, "pgu", i_g, lim)
+        print_c(case.Pc, "pgd", i_g, lim)
+        print_c(case.Pcc, "pgu", i_g, lim)
+        print_c(case.Pcc, "pgd", i_g, lim)
+        print_c(case.Pccx, "pgdx", i_g, lim)
+    end
+    for (i_g, g) in enumerate(case.opf.dc_branches)
+        @printf("%12s: %5.3f (%.3f)\n", g.name, JuMP.value(case.model[:pfdc0][i_g]), get_active_power_limits(g).max)
+        print_c(case.Pcc, "pfdccc", i_g, lim)
+    end
+    for (i_g, g) in enumerate(case.opf.renewables)
+        @printf("%12s: %5.3f (%.3f)\n", g.name, JuMP.value(case.model[:pr0][i_g]), get_active_power_limits(g).max)
+        print_c(case.Pc, "prc", i_g, lim)
+        print_c(case.Pcc, "prcc", i_g, lim)
+        print_c(case.Pccx, "prccx", i_g, lim)
+    end
+    for (i_g, g) in enumerate(case.opf.demands)
+        @printf("%12s: %5.3f (%.3f)\n", g.name, JuMP.value(case.model[:ls0][i_g]), get_active_power(g))
+        print_c(case.Pc, "lsc", i_g, lim)
+        print_c(case.Pcc, "lscc", i_g, lim)
+        print_c(case.Pccx, "lsccx", i_g, lim)
+    end
 end
 
 # # corrective control failure probability

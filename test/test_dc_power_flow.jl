@@ -1,12 +1,4 @@
-using Test
-using PowerSystems
-import JuMP
-import HiGHS
-import LinearAlgebra
-import Logging
-import Random
-Random.seed!(42)
-Logging.disable_logging(Logging.Info)
+@testset "Test dc power flow" begin
 
 # SETUP
 LinearAlgebra.BLAS.set_num_threads(Threads.nthreads())
@@ -89,3 +81,5 @@ SCOPF.get_isf!(ϕ, pf.ϕ, islands[island], island_b); LinearAlgebra.mul!(flow3, 
 @test flow2 ≈ flow3 
 SCOPF.calculate_line_flows!(flow4, ϕ, pf.ϕ, (Pᵢ .+ ΔPc), islands[island], island_b); # hack2
 @test flow3 ≈ flow4 
+
+end

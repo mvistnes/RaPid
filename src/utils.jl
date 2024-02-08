@@ -720,3 +720,19 @@ calc_severity(values::AbstractVector{<:Real}, rate::AbstractVector{<:Real}, lim:
 " Calculate the severity index for a component based on the rating "
 calc_line_severity(value::Real, rate::Real, lim::Real=0.9) =
     abs(value) > lim * rate ? (1 / (1 - lim)) * (abs(value) / rate - lim) : 0
+
+" An AbstractJuMPScalar nicely formatted to a string "
+sprint_expr(expr::AbstractJuMPScalar, lim=1e-14) =
+    join(Printf.@sprintf("%s%5.2f %s ", (x[2] > 0 ? "+" : "-"), abs(x[2]), x[1])
+            for x in expr.terms if abs(x[2]) > lim) *
+    Printf.@sprintf("<= %s%.2f", (expr.constant > 0 ? "-" : " "), abs(expr.constant)
+    )
+
+function print_cuts(type::OPF, pre, corr1, corr2, corr2f)
+    print("Cuts added:")
+    type.P && print(" pre=", pre)
+    type.C1 && print(" corr1=", corr1)
+    type.C2 && print(" corr2=", corr2)
+    type.C2F && print(" corr2f=", corr2f)
+    println("")
+end

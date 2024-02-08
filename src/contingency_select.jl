@@ -19,22 +19,23 @@ function run_contingency_select(
     long_term_multi::Real=1.2, 
     max_itr=max(length(contingencies), 5),
     p_failure=0.0, 
-    branch_c=nothing, 
-    rate_c=0.0, 
     silent=true,
     debug=false
 )
-    mod, opf, pf, oplim, Pc, Pcc, Pccx = opf_base(OPF(true, false, false, false, false), system, optimizer, voll=voll, contingencies=contingencies, prob=prob,
-        dist_slack = dist_slack, time_limit_sec=time_limit_sec, ramp_minutes=ramp_minutes, ramp_mult=ramp_mult, max_shed=max_shed, max_curtail=max_curtail,
-        short_term_multi=short_term_multi, long_term_multi=long_term_multi, p_failure=p_failure, silent=silent, debug=debug)
-    
-    solve_model!(mod)
+    case = Case(opf_base(OPF(true, false, false, false, false), system, optimizer, voll=voll, contingencies=contingencies, prob=prob,
+    dist_slack=dist_slack, time_limit_sec=time_limit_sec, ramp_minutes=ramp_minutes, ramp_mult=ramp_mult, max_shed=max_shed, max_curtail=max_curtail,
+    short_term_multi=short_term_multi, long_term_multi=long_term_multi, p_failure=p_failure, silent=silent, debug=debug)...)
+
+    total_solve_time = constrain_branches!(case.model, case.pf, case.oplim, 0.0)
     if !type.P & !type.C1 & !type.C2 & !type.C2F
-        return mod, opf, pf, oplim, Pc, Pcc, Pccx, solve_time(mod)
+        return case, total_solve_time
     end
-    return run_contingency_select!(type, mod, opf, pf, oplim, Pc, Pcc, Pccx, lim, max_itr, branch_c, rate_c, debug)
+    return run_contingency_select!(type, case, lim, max_itr)
 end
-        
+
+run_contingency_select!(type::OPF, case::Case, lim=1e-14, max_itr=max(length(case.opf.contingencies), 5)) = 
+    run_contingency_select!(type, case.model, case.opf, case.pf, case.oplim, case.Pc, case.Pcc, case.Pccx, lim, max_itr)
+
 function run_contingency_select!(
     type::OPF, 
     mod::Model, 
@@ -45,10 +46,7 @@ function run_contingency_select!(
     Pcc::Dict{<:Integer, ExprCC}, 
     Pccx::Dict{<:Integer, ExprCCX},
     lim=1e-14,
-    max_itr=max(length(contingencies), 5),
-    branch_c=nothing, 
-    rate_c=0.0, 
-    debug=false
+    max_itr=max(length(contingencies), 5)
 )
     assert(type)
     @assert !type.C1 || isempty(Pc)
@@ -56,14 +54,11 @@ function run_contingency_select!(
     @assert !type.C2F || isempty(Pccx)
     
     total_solve_time = solve_time(mod)
-    termination_status(mod) != MOI.OPTIMAL && return mod, opf, pf, oplim, Pc, Pcc, Pccx, total_solve_time
+    termination_status(mod) != MOI.OPTIMAL && return Case(mod, opf, pf, oplim, Pc, Pcc, Pccx), total_solve_time
     @debug "lower_bound = $(objective_value(mod))"
 
     # Set variables
     set_dist_slack!(pf, opf, oplim.dist_slack)
-    calc_θ!(pf, get_value(mod, :p0))
-    calc_Pline!(pf)
-    total_solve_time = constrain_branches!(mod, pf, oplim, total_solve_time)
     bd = benders(opf, mod)
     
     overloads = zeros(length(opf.contingencies))
@@ -112,7 +107,7 @@ function run_contingency_select!(
     end
     
     total_solve_time = update_model!(mod, pf, oplim, bd, total_solve_time)
-    termination_status(mod) != MOI.OPTIMAL && return mod, opf, pf, oplim, Pc, Pcc, Pccx, total_solve_time
+    termination_status(mod) != MOI.OPTIMAL && return Case(mod, opf, pf, oplim, Pc, Pcc, Pccx), total_solve_time
 
     ΔPc = zeros(length(bd.Pg))
     ΔPcc = zeros(length(bd.Pg))
@@ -206,13 +201,13 @@ function run_contingency_select!(
         else
             i += 1
         end
-        termination_status(mod) != MOI.OPTIMAL && return mod, opf, pf, oplim, Pc, Pcc, Pccx, total_solve_time
+        termination_status(mod) != MOI.OPTIMAL && return Case(mod, opf, pf, oplim, Pc, Pcc, Pccx), total_solve_time
         if i > length(permutation)
             iterations > max_itr && break
             if cut_added == 0 # loops until no new cuts are added for the contingencies
                 # @printf "END: Total solve time %.4f.\n" total_solve_time
                 print_cuts(type, pre, corr1, corr2, corr2f)
-                return mod, opf, pf, oplim, Pc, Pcc, Pccx, total_solve_time
+                return Case(mod, opf, pf, oplim, Pc, Pcc, Pccx), total_solve_time
             else
                 cut_added = 0
             end
@@ -222,5 +217,5 @@ function run_contingency_select!(
         end
     end
     # @warn "Reached $(length(opf.contingencies)) iterations without a stable solution."
-    return mod, opf, pf, oplim, Pc, Pcc, Pccx, total_solve_time
+    return Case(mod, opf, pf, oplim, Pc, Pcc, Pccx), total_solve_time
 end

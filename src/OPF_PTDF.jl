@@ -129,7 +129,6 @@ function opf_base(type::OPF, system::System, optimizer;
         add_unit_commit!(opf)
     end
 
-    case = Case(mod, opf, pf, oplim, Pc, Pcc, Pccx)
     if any([type.P, type.C1, type.C2, type.C2F])
         return add_all_contingencies!(type, opf, oplim, mod, pf, Pc, Pcc, Pccx)
     end
@@ -487,9 +486,9 @@ function fix_base_case!(mod::Model)
 end
 
 """ Fix all contingency varibles to its current values in the model """
-function fix_contingecies!(mod::Model, P::Dict{<:Integer,ContExpr})
+function fix_contingencies!(mod::Model, P::Dict{<:Integer,<:ContExpr})
     for (_, c) in P
-        for symb in propertynames(P)
+        for symb in propertynames(c)
             fix_values!(mod, getproperty(c, symb))
         end
     end
@@ -504,14 +503,16 @@ calc_ctrl_cost(mod::Model, opf::OPFsystem, var::AbstractVector{JuMP.VariableRef}
 # sum(c[1] * g^2 + c[2] * g for (c, g) in zip(opf.cost_ctrl_gen, get_value(mod, var)))
 
 """ Calculate the cost of the modelled slack for all contingencies. """
-function calc_slack_cost(mod::Model, opf::OPFsystem, pf::DCPowerFlow; dist_slack=Float64[])
+function calc_slack_cost(case::Case)
+    mod = case.model
+    opf = case.opf
+    pf = case.pf
     costs = zeros(length(opf.contingencies))
     pg0 = get_value(mod, :pg0)
-    if isempty(dist_slack)
+    if isempty(case.oplim.dist_slack)
         slack_cost = sum(last.(get_generator_cost.(opf.ctrl_generation[opf.mgx[:,pf.slack].nzind])))
     else
-        dist_slack = dist_slack / sum(dist_slack)
-        slack_cost = opf.mgx' * (getproperty.(opf.cost_ctrl_gen, :ramp) .* dist_slack .* pg0)
+        slack_cost = opf.mgx' * (getproperty.(opf.cost_ctrl_gen, :ramp) .* case.oplim.dist_slack .* pg0)
     end
     pg0 = opf.mgx' * pg0
     pr = opf.mrx' * (get_value(mod, :pr) - get_value(mod, :pr0))
@@ -558,30 +559,27 @@ calc_objective(mod::Model, opf::OPFsystem, Pc::Dict{<:Integer,ExprC},
 ) = calc_objective(mod, opf) + calc_objective(mod, opf, Pc) +
     calc_objective(mod, opf, Pcc) + calc_objective(mod, opf, Pccx)
 
-function print_costs(mod::Model, opf::OPFsystem, pf::DCPowerFlow; dist_slack=Float64[]
-)
-    base_cost = calc_objective(mod, opf)
-    slack_cost = sum(opf.prob .* calc_slack_cost(mod, opf, pf, dist_slack=dist_slack))
+function print_costs(case::Case)
+    base_cost = calc_objective(case.model, case.opf)
+    slack_cost = sum(case.opf.prob .* calc_slack_cost(case))
     @printf "Base cost %.2f; " base_cost
     @printf "Slack cost %.2f; " slack_cost
     @printf "Total cost %.2f \n" base_cost + slack_cost
     return base_cost, slack_cost
 end
 
-function get_costs(mod::Model, opf::OPFsystem, pf::DCPowerFlow, Pc::Dict{<:Integer,ExprC},
-    Pcc::Dict{<:Integer,ExprCC}, Pccx::Dict{<:Integer,ExprCCX}, dist_slack=Float64[]
-)
-    costs = SparseArrays.spzeros(length(opf.contingencies), 5)
-    costs[:,1] .= calc_objective(mod, opf)
-    for c in keys(Pc)
-        costs[c,2] = calc_objective(mod, opf, Pc[c])
+function get_costs(case::Case)
+    costs = SparseArrays.spzeros(length(case.opf.contingencies), 5)
+    costs[:,1] .= calc_objective(case.model, case.opf)
+    for c in keys(case.Pc)
+        costs[c,2] = calc_objective(case.model, case.opf, case.Pc[c])
     end
-    for c in keys(Pcc)
-        costs[c,3] = calc_objective(mod, opf, Pcc[c])
+    for c in keys(case.Pcc)
+        costs[c,3] = calc_objective(case.model, case.opf, case.Pcc[c])
     end
-    for c in keys(Pccx)
-        costs[c,4] = calc_objective(mod, opf, Pccx[c])
+    for c in keys(case.Pccx)
+        costs[c,4] = calc_objective(case.model, case.opf, case.Pccx[c])
     end
-    costs[:,5] = calc_slack_cost(mod, opf, pf, dist_slack=dist_slack)
+    costs[:,5] = calc_slack_cost(case)
     return costs, [:Base, :Pc, :Pcc, :Pccx, :distslack]
 end

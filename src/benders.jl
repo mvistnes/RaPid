@@ -45,16 +45,19 @@ function run_benders(
     silent=true,
     debug=false
 )
-    mod, opf, pf, oplim, Pc, Pcc, Pccx = opf_base(OPF(true, false, false, false, false), system, optimizer, voll=voll, contingencies=contingencies, prob=prob,
+    case = Case(opf_base(OPF(true, false, false, false, false), system, optimizer, voll=voll, contingencies=contingencies, prob=prob,
         dist_slack=dist_slack, time_limit_sec=time_limit_sec, ramp_minutes=ramp_minutes, ramp_mult=ramp_mult, max_shed=max_shed, max_curtail=max_curtail,
-        short_term_multi=short_term_multi, long_term_multi=long_term_multi, p_failure=p_failure, silent=silent, debug=debug)
+        short_term_multi=short_term_multi, long_term_multi=long_term_multi, p_failure=p_failure, silent=silent, debug=debug)...)
 
-    solve_model!(mod)
+    total_solve_time = constrain_branches!(case.model, case.pf, case.oplim, 0.0)
     if !type.P & !type.C1 & !type.C2 & !type.C2F
-        return mod, opf, pf, oplim, Pc, Pcc, Pccx, solve_time(mod)
+        return case, total_solve_time
     end
-    return run_benders!(type, mod, opf, pf, oplim, Pc, Pcc, Pccx, lim, max_itr)
+    return run_benders!(type, case, lim, max_itr)
 end
+
+run_benders!(type::OPF, case::Case, lim=1e-14, max_itr=max(length(case.opf.contingencies), 5)) =
+    run_benders!(type, case.model, case.opf, case.pf, case.oplim, case.Pc, case.Pcc, case.Pccx, lim, max_itr)
 
 """
 Solve the optimization model using Benders decomposition.
@@ -77,14 +80,11 @@ function run_benders!(
     @assert !type.C2F || isempty(Pccx)
     
     total_solve_time = solve_time(mod)
-    !has_values(mod) && return mod, opf, pf, oplim, Pc, Pcc, Pccx, total_solve_time
+    !has_values(mod) && return Case(mod, opf, pf, oplim, Pc, Pcc, Pccx), total_solve_time
     @debug "lower_bound = $(objective_value(mod))"
 
     # Set variables
     set_dist_slack!(pf, opf, oplim.dist_slack)
-    calc_θ!(pf, get_value(mod, :p0))
-    calc_Pline!(pf)
-    total_solve_time = constrain_branches!(mod, pf, oplim, total_solve_time)
     bd = benders(opf, mod)
 
     overloads = zeros(length(opf.contingencies))
@@ -124,7 +124,7 @@ function run_benders!(
     end
 
     total_solve_time = update_model!(mod, pf, oplim, bd, total_solve_time)
-    !has_values(mod) && return mod, opf, pf, oplim, Pc, Pcc, Pccx, total_solve_time
+    !has_values(mod) && return Case(mod, opf, pf, oplim, Pc, Pcc, Pccx), total_solve_time
 
     ΔPc = zeros(length(bd.Pg))
     ΔPcc = zeros(length(bd.Pg))
@@ -151,7 +151,7 @@ function run_benders!(
         if cut_added == 0 # loops until no new cuts are added for the contingencies
             # @printf "\nEND: Total solve time %.4f.\n" total_solve_time
             print_cuts(type, pre, corr1, corr2, corr2f)
-            return mod, opf, pf, oplim, Pc, Pcc, Pccx, total_solve_time
+            return Case(mod, opf, pf, oplim, Pc, Pcc, Pccx), total_solve_time
         end
         cut_added = 0
         @info "\n------------------\nIteration $iterations"
@@ -212,12 +212,12 @@ function run_benders!(
                 total_solve_time = update_model!(mod, pf, oplim, bd, total_solve_time)
                 cut_added = 1
             end
-            !has_values(mod) && return mod, opf, pf, oplim, Pc, Pcc, Pccx, total_solve_time
+            !has_values(mod) && return Case(mod, opf, pf, oplim, Pc, Pcc, Pccx), total_solve_time
         end
 
     end
     @warn "Reached $(max_itr) iterations without a stable solution."
-    return mod, opf, pf, oplim, Pc, Pcc, Pccx, total_solve_time
+    return Case(mod, opf, pf, oplim, Pc, Pcc, Pccx), total_solve_time
 end
 
 """ Solve model and update the power flow object """
@@ -426,55 +426,4 @@ function make_cut(pccx::ExprCCX, opf::OPFsystem, mod::Model)
     add_to_expression!.(expr, -opf.mdcx' * mod[:pfdc0])
     add_to_expression!.(expr, -opf.mdx' * (pccx.lsccx - mod[:pd]))
     return expr
-end
-
-" An AbstractJuMPScalar nicely formatted to a string "
-sprint_expr(expr::AbstractJuMPScalar, lim=1e-14) =
-    join(Printf.@sprintf("%s%5.2f %s ", (x[2] > 0 ? "+" : "-"), abs(x[2]), x[1])
-         for x in expr.terms if abs(x[2]) > lim) *
-    Printf.@sprintf("<= %s%.2f", (expr.constant > 0 ? "-" : " "), abs(expr.constant)
-    )
-
-function print_benders_results(opf::OPFsystem, mod::Model, Pc::Dict=Dict(), Pcc::Dict=Dict(), Pccx::Dict=Dict(), lim::Real=1e-14)
-    function print_c(itr, symb::String, i_g::Int, lim::Real)
-        for i in 1:length(opf.contingencies)
-            c = get(itr, i, 0)
-            if c != 0 && JuMP.value(getfield(c, Symbol(symb))[i_g]) > lim
-                @printf("          c %12s: %s: %.3f\n", opf.contingencies[i].name, symb, JuMP.value(getfield(c, Symbol(symb))[i_g]))
-            end
-        end
-    end
-    for (i_g, g) in enumerate(opf.ctrl_generation)
-        @printf("%12s: %5.3f (%.3f)\n", g.name, JuMP.value(mod[:pg0][i_g]), get_active_power_limits(g).max)
-        print_c(Pc, "pgu", i_g, lim)
-        print_c(Pc, "pgd", i_g, lim)
-        print_c(Pcc, "pgu", i_g, lim)
-        print_c(Pcc, "pgd", i_g, lim)
-        print_c(Pccx, "pgdx", i_g, lim)
-    end
-    for (i_g, g) in enumerate(opf.dc_branches)
-        @printf("%12s: %5.3f (%.3f)\n", g.name, JuMP.value(mod[:pfdc0][i_g]), get_active_power_limits(g).max)
-        print_c(Pcc, "pfdccc", i_g, lim)
-    end
-    for (i_g, g) in enumerate(opf.renewables)
-        @printf("%12s: %5.3f (%.3f)\n", g.name, JuMP.value(mod[:pr0][i_g]), get_active_power_limits(g).max)
-        print_c(Pc, "prc", i_g, lim)
-        print_c(Pcc, "prcc", i_g, lim)
-        print_c(Pccx, "prccx", i_g, lim)
-    end
-    for (i_g, g) in enumerate(opf.demands)
-        @printf("%12s: %5.3f (%.3f)\n", g.name, JuMP.value(mod[:ls0][i_g]), get_active_power(g))
-        print_c(Pc, "lsc", i_g, lim)
-        print_c(Pcc, "lscc", i_g, lim)
-        print_c(Pccx, "lsccx", i_g, lim)
-    end
-end
-
-function print_cuts(type::OPF, pre, corr1, corr2, corr2f)
-    print("Cuts added:")
-    type.P && print(" pre=", pre)
-    type.C1 && print(" corr1=", corr1)
-    type.C2 && print(" corr2=", corr2)
-    type.C2F && print(" corr2f=", corr2f)
-    println("")
 end

@@ -1,12 +1,4 @@
-using Test
-using PowerSystems
-import JuMP
-import HiGHS
-import LinearAlgebra
-import Logging
-import Random
-Random.seed!(42)
-Logging.disable_logging(Logging.Info)
+@testset "Test dc opf" begin
 
 # SETUP
 LinearAlgebra.BLAS.set_num_threads(Threads.nthreads())
@@ -26,3 +18,5 @@ SCOPF.solve_model!(model2)
 
 @test JuMP.objective_value(model) ≈ JuMP.objective_value(model2)
 @test SCOPF.get_value(model, :p0) ≈ SCOPF.get_value(model2, :p0)
+
+end
