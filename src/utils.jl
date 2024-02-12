@@ -180,6 +180,15 @@ function check_values(val::TwoTerminalHVDCLine)
     check_values(lmt[2], val, "rate_dc_branches_max")
 end
 
+function nan_to_zero!(vals::AbstractArray{T}) where {T<:Real}
+    @inbounds for i in eachindex(vals)
+        if isequal(vals[i], NaN)
+            vals[i] = zero(T)
+        end
+    end
+    return vals
+end
+
 """Find value of β, β = 1 if from-bus is the bus, β = -1 if to-bus is the bus, 0 else"""
 beta(bus::ACBus, branch::Branch) = bus == branch.arc.from ? 1 : bus == branch.arc.to ? -1 : 0
 beta(bus::String, branch::Branch) = bus == branch.arc.from.name ? 1 : bus == branch.arc.to.name ? -1 : 0
@@ -279,7 +288,7 @@ function opfsystem(sys::System, voll::Vector{TR}, contingencies::Vector{<:Compon
     A = calc_B(branches, length(nodes), idx)
     islands = island_detection(A'A)
     if length(islands) > 1
-        @warn "The system is separated into islands" islands
+        @error "The system is separated into islands" islands
     end
 
     return OPFsystem{TR, Int}(cost_ctrl_gen, cost_renewables, voll, prob, idx, mgx, mdx, mbx, mdcx, mrx,
@@ -598,16 +607,16 @@ zip_pair(val::Tuple{AbstractVector,AbstractVector}) = [(a, b) for (a, b) in zip(
 zip_pair(val1::AbstractVector, val2::AbstractVector) = zip_pair((val1, val2))
 
 """ Return the overload of a line, else return 0.0 """
-find_overload(flow::T, rate::Real, atol::Real=1e-14) where {T<:Real} =
+find_overload(flow::T, rate::Real, atol::Real=1e-6) where {T<:Real} =
     abs(flow) - rate > atol ? sign(flow) * (abs(flow) - rate) : zero(T)
 
-filter_overload(flow::AbstractVector{<:Real}, linerating::AbstractVector{<:Real}, atol::Real=1e-14) =
+filter_overload(flow::AbstractVector{<:Real}, linerating::AbstractVector{<:Real}, atol::Real=1e-6) =
     [(i, ol) for (i, ol) in enumerate(find_overload.(flow, linerating)) if abs(ol) > atol]
 
-filter_overload(Δflow::AbstractVector{<:Tuple}, linerating::AbstractVector{<:Real}, atol::Real=1e-14) =
+filter_overload(Δflow::AbstractVector{<:Tuple}, linerating::AbstractVector{<:Real}, atol::Real=1e-6) =
     [(i, find_overload(ol, linerating[i])) for (i, ol) in Δflow if abs(find_overload(ol, linerating[i])) > atol]
 
-find_overloaded_branches(flow::AbstractVector{<:Real}, linerating::AbstractVector{<:Real}, atol::Real=1e-14) =
+find_overloaded_branches(flow::AbstractVector{<:Real}, linerating::AbstractVector{<:Real}, atol::Real=1e-6) =
     findall(abs.(flow) .- linerating .> atol)
 
 " Get dual value (upper or lower bound) from model reference "

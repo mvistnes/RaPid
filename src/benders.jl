@@ -357,7 +357,7 @@ end
 function add_overload_expr!(mod::Model, expr::JuMP.AbstractJuMPScalar, ol::Real, type::String, id::Integer,
     c_obj::Component, opf::OPFsystem, i::Integer, lim::Real
 )
-    @info @sprintf "%s %d: Contingency %s %s; overload on %s of %.4f" type id string(typeof(c_obj)) c_obj.name opf.branches[i].name ol
+    @info @sprintf "%s %d: Contingency %s %s; overload on %s of %.6f" type id string(typeof(c_obj)) c_obj.name opf.branches[i].name ol
     @debug "Cut added: $(sprint_expr(expr,lim))\n"
     if ol < 0
         JuMP.@constraint(mod, expr <= ol)

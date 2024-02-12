@@ -31,7 +31,7 @@ Random.seed!(42)
 # optimizer = JuMP.optimizer_with_attributes(GLPK.Optimizer, "msg_lev" => GLPK.GLP_MSG_ON)
 
 
-@testset "RaPidSCOPF" begin
+tests = @testset "RaPidSCOPF" verbose=true begin
     include("test_dc_opf.jl")
 
     include("test_dc_power_flow.jl")
@@ -40,3 +40,6 @@ Random.seed!(42)
 
     include("test_ieee_rts_benders.jl")
 end
+
+Logging.disable_logging(Logging.Debug)
+tests;

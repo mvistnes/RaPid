@@ -161,13 +161,13 @@ function add_branch_constraint!(mod::Model, pf::DCPowerFlow, p::AbstractVector{V
     return mod
 end
 
-function constrain_branches!(mod::Model, pf::DCPowerFlow, oplim::Oplimits, total_solve_time::Real)
+function constrain_branches!(mod::Model, pf::DCPowerFlow, oplim::Oplimits, total_solve_time::Real, atol::Real=1e-6)
     # if !has_values(mod)
         # Note: While using a direct_model, this check fails after the model is modified for some solvers
         total_solve_time = update_model!(mod, pf, total_solve_time)
     # end
     while true
-        ol_br = find_overloaded_branches(pf.F, oplim.branch_rating)
+        ol_br = find_overloaded_branches(pf.F, oplim.branch_rating, atol)
         isempty(ol_br) && break 
         JuMP.termination_status(mod) != JuMP.OPTIMAL && break
         for br in ol_br
