@@ -525,7 +525,7 @@ function calc_slack_cost(case::Case)
             islands, island, island_b = handle_islands(pf.B, pf.DA, cont[2], cont[1], pf.slack)
             nodes = reduce(vcat, islands[1:end.!=island], init=[])
             ΔP = sum(pg0[nodes]) + sum(pr[nodes]) - sum(pd[nodes])
-            costs[i] = sum(slack_cost * ΔP) + sum(pr_cost[nodes]) + sum(ls_cost[nodes])
+            costs[i] = sum(slack_cost * abs(ΔP)) + sum(pr_cost[nodes]) + sum(ls_cost[nodes])
         elseif typeof(c_obj) <: StaticInjection
             costs[i] = sum(slack_cost * JuMP.value(mod[:pg0][cont[1]]))
         end
