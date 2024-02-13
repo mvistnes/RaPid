@@ -37,10 +37,10 @@ function run_benders(
     ramp_mult=10, 
     max_shed=1.0, 
     max_curtail=1.0, 
-    lim=1e-14,
+    atol=1e-6,
     short_term_multi::Real=1.5, 
     long_term_multi::Real=1.2, 
-    max_itr=max(length(contingencies), 5),
+    max_itr=10,
     p_failure=0.0,
     silent=true,
     debug=false
@@ -53,11 +53,11 @@ function run_benders(
     if !type.P & !type.C1 & !type.C2 & !type.C2F
         return case, total_solve_time
     end
-    return run_benders!(type, case, lim, max_itr)
+    return run_benders!(type, case, atol, max_itr)
 end
 
-run_benders!(type::OPF, case::Case, lim=1e-14, max_itr=max(length(case.opf.contingencies), 5)) =
-    run_benders!(type, case.model, case.opf, case.pf, case.oplim, case.Pc, case.Pcc, case.Pccx, lim, max_itr)
+run_benders!(type::OPF, case::Case, atol=1e-6, max_itr=max(length(case.opf.contingencies), 5)) =
+    run_benders!(type, case.model, case.opf, case.pf, case.oplim, case.Pc, case.Pcc, case.Pccx, atol, max_itr)
 
 """
 Solve the optimization model using Benders decomposition.
@@ -71,8 +71,8 @@ function run_benders!(
     Pc::Dict{<:Integer, ExprC}, 
     Pcc::Dict{<:Integer, ExprCC}, 
     Pccx::Dict{<:Integer, ExprCCX},
-    lim=1e-14,
-    max_itr=max(length(opf.contingencies), 5)
+    atol=1e-6,
+    max_itr=10
 )
     assert(type)
     @assert !type.C1 || isempty(Pc)
@@ -170,16 +170,16 @@ function run_benders!(
             end
 
             if type.P
-                olc = calculate_contingency_overload(brst, mod, pf, bd, cont, i, c_obj, inodes, island_b)
+                olc = calculate_contingency_overload(brst, mod, pf, bd, cont, i, c_obj, inodes, island_b, atol)
             end
             if type.C1
-                olc = calculate_contingency_overload!(ΔPc, brst, Pc, opf, mod, pf, bd, cont, i, c_obj, inodes, island_b)
+                olc = calculate_contingency_overload!(ΔPc, brst, Pc, opf, mod, pf, bd, cont, i, c_obj, inodes, island_b, atol)
             end
             if type.C2
-                olcc = calculate_contingency_overload!(ΔPcc, brlt, Pcc, opf, mod, pf, bd, cont, i, c_obj, inodes, island_b)
+                olcc = calculate_contingency_overload!(ΔPcc, brlt, Pcc, opf, mod, pf, bd, cont, i, c_obj, inodes, island_b, atol)
             end
             if type.C2F
-                olccx = calculate_contingency_overload!(ΔPccx, brlt, Pccx, opf, mod, pf, bd, cont, i, c_obj, inodes, island_b)
+                olccx = calculate_contingency_overload!(ΔPccx, brlt, Pccx, opf, mod, pf, bd, cont, i, c_obj, inodes, island_b, atol)
             end
             if !isempty(olc) || !isempty(olcc) || !isempty(olccx) # ptdf calculation is more computational expensive than line flow
                 if is_islanded(pf, cont[2], cont[1])
@@ -197,16 +197,16 @@ function run_benders!(
             # Cannot change the model before all data is exctracted!
             if !isempty(olc)
                 if type.P
-                    cut_added, pre = add_cut(opf, mod, bd, ptdf, olc, c_obj, cut_added, lim, pre)
+                    cut_added, pre = add_cut(opf, mod, bd, ptdf, olc, c_obj, cut_added, atol, pre)
                 elseif type.C1
-                    cut_added, corr1 = add_cut(Pc, opf, oplim, mod, bd, ΔPc, ptdf, olc, islands, island, c_obj, i, cut_added, lim, corr1)
+                    cut_added, corr1 = add_cut(Pc, opf, oplim, mod, bd, ΔPc, ptdf, olc, islands, island, c_obj, i, cut_added, atol, corr1)
                 end
             end
             if !isempty(olcc)
-                cut_added, corr2 = add_cut(Pcc, opf, oplim, mod, bd, ΔPcc, ptdf, olcc, islands, island, c_obj, i, cut_added, lim, corr2)
+                cut_added, corr2 = add_cut(Pcc, opf, oplim, mod, bd, ΔPcc, ptdf, olcc, islands, island, c_obj, i, cut_added, atol, corr2)
             end
             if !isempty(olccx)
-                cut_added, corr2f = add_cut(Pccx, opf, oplim, mod, bd, ΔPccx, ptdf, olccx, islands, island, c_obj, i, cut_added, lim, corr2f)
+                cut_added, corr2f = add_cut(Pccx, opf, oplim, mod, bd, ΔPccx, ptdf, olccx, islands, island, c_obj, i, cut_added, atol, corr2f)
             end
             if cut_added > 1
                 total_solve_time = update_model!(mod, pf, oplim, bd, total_solve_time)
@@ -288,10 +288,10 @@ end
 function calculate_contingency_overload!(ΔP::Vector{<:Real}, branch_rating::Vector{<:Real},
     Pc::Dict, opf::OPFsystem, mod::Model, pf::DCPowerFlow, bd::Benders, 
     cont::Union{Tuple{Real, Tuple{Real,Real}}, Tuple{Real,Real}}, c::Integer, c_obj::Component, 
-    island::Vector, island_b::Vector{<:Integer}
+    island::Vector, island_b::Vector{<:Integer}, atol::Real=1e-6
 )
     flow = calculate_contingency_line_flows!(ΔP, Pc, opf, mod, pf, bd.Pᵢ, cont, c, c_obj, island, island_b)
-    return filter_overload(flow, branch_rating)
+    return filter_overload(flow, branch_rating, atol)
 end
 
 """
@@ -299,10 +299,10 @@ end
 """
 function calculate_contingency_overload(branch_rating::Vector{<:Real}, mod::Model, 
     pf::DCPowerFlow, bd::Benders, cont::Union{Tuple{Real, Tuple{Real,Real}}, Tuple{Real,Real}}, c::Integer, c_obj::Component,
-    island::Vector, island_b::Vector{<:Integer}
+    island::Vector, island_b::Vector{<:Integer}, atol::Real=1e-6
 )
     flow = calculate_contingency_line_flows(mod, pf, bd.Pᵢ, cont, c, c_obj, island, island_b)
-    return filter_overload(flow, branch_rating)
+    return filter_overload(flow, branch_rating, atol)
 end
 
 get_ΔP(mod::Model, cont::Tuple{Real,Real}, ::Generator) = 
@@ -355,10 +355,10 @@ end
 end
 
 function add_overload_expr!(mod::Model, expr::JuMP.AbstractJuMPScalar, ol::Real, type::String, id::Integer,
-    c_obj::Component, opf::OPFsystem, i::Integer, lim::Real
+    c_obj::Component, opf::OPFsystem, i::Integer, atol::Real
 )
     @info @sprintf "%s %d: Contingency %s %s; overload on %s of %.6f" type id string(typeof(c_obj)) c_obj.name opf.branches[i].name ol
-    @debug "Cut added: $(sprint_expr(expr,lim))\n"
+    @debug "Cut added: $(sprint_expr(expr,atol))\n"
     if ol < 0
         JuMP.@constraint(mod, expr <= ol)
     else
@@ -367,7 +367,7 @@ function add_overload_expr!(mod::Model, expr::JuMP.AbstractJuMPScalar, ol::Real,
 end
 
 function add_cut(opf::OPFsystem, mod::Model, bd::Benders, ptdf::AbstractMatrix{<:Real}, overloads::Vector{<:Tuple{Integer,Real}},
-    c_obj::Component, cut_added::Integer, lim::Real, id::Integer
+    c_obj::Component, cut_added::Integer, atol::Real, id::Integer
 )
     for (i, ol) in overloads
         expr = AffExpr() + sum(ptdf[i, :] .* bd.Pᵢ)
@@ -376,7 +376,7 @@ function add_cut(opf::OPFsystem, mod::Model, bd::Benders, ptdf::AbstractMatrix{<
         end
 
         id += 1
-        add_overload_expr!(mod, expr, ol, "Pre", id, c_obj, opf, i, lim)
+        add_overload_expr!(mod, expr, ol, "Pre", id, c_obj, opf, i, atol)
         cut_added = 2
     end
     return cut_added, id
@@ -385,7 +385,7 @@ end
 """ Finding and adding Benders cuts to mitigate overloads from one contingency """
 function add_cut(P::Dict{<:Integer, <:ContExpr}, opf::OPFsystem, oplim::Oplimits, mod::Model, bd::Benders, ΔP::Vector{<:Real},
     ptdf::AbstractMatrix{<:Real}, overloads::Vector{<:Tuple{Integer,Real}}, islands::Vector, island::Integer,
-    c_obj::Component, c::Integer, cut_added::Integer, lim::Real, id::Integer
+    c_obj::Component, c::Integer, cut_added::Integer, atol::Real, id::Integer
 )
     p = get(P, c, 0)
     if p == 0  # If the contingency is not run before, a set of corrective variables is added
@@ -398,7 +398,7 @@ function add_cut(P::Dict{<:Integer, <:ContExpr}, opf::OPFsystem, oplim::Oplimits
         expr2 = JuMP.@expression(mod, sum((ptdf[i, :] .* expr)))
 
         id += 1
-        add_overload_expr!(mod, expr2, ol, get_name(p), id, c_obj, opf, i, lim)
+        add_overload_expr!(mod, expr2, ol, get_name(p), id, c_obj, opf, i, atol)
         cut_added = 2
     end
     return cut_added, id
