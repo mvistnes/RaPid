@@ -153,7 +153,7 @@ end
 function check_values(val::Real, var::Component, typename::String; comp=<, atol=1e-5)
     if comp(val, atol)
     # if isapprox(val, zero(typeof(val)); atol=atol)
-        @info "$(get_name(var)) has $val value in $typename."
+        @info "$(PowerSystems.get_name(var)) has $val value in $typename."
     end
 end
 check_values(val::AbstractVector{<:Real}, var::AbstractVector{<:Component}, typename::String; atol=1e-5) =
@@ -375,7 +375,7 @@ end
 
 function find_component(val::Component, list::AbstractVector{<:Component})
     i = findfirst(in([val]), list)
-    i === nothing && error(string(get_name(val)) * " is not found")
+    i === nothing && error(string(PowerSystems.get_name(val)) * " is not found")
     return i
 end
 
@@ -393,7 +393,7 @@ typesort_component(val::ACBranch, opf::OPFsystem) =
 
 """ Make a DenseAxisArray using the list and function for the value of each element """
 make_named_array(value_func, list) = JuMP.Containers.DenseAxisArray(
-    [value_func(x) for x in list], get_name.(list)
+    [value_func(x) for x in list], PowerSystems.get_name.(list)
 )
 
 struct CTypes{T<:Integer}
@@ -431,7 +431,7 @@ end
 """ A list with type_func componentes distributed on their node """
 function make_list(system::System, type_func, nodes=get_nodes(system))
     list = JuMP.Containers.DenseAxisArray(
-        [[] for _ in 1:length(nodes)], get_name.(nodes)
+        [[] for _ in 1:length(nodes)], PowerSystems.get_name.(nodes)
     )
     for g in type_func(system)
         push!(list[g.bus.name], g)
@@ -707,7 +707,7 @@ function calc_severity(opf::OPFsystem, mod::Model, lim::Real=0.9)
     rate = make_named_array(get_rate, get_branches(opf.sys))
     sev = 0
     for c in 1:length(opf.contingencies)
-        for l in get_name.(get_branches(opf.sys))
+        for l in PowerSystems.get_name.(get_branches(opf.sys))
             sev += calc_line_severity(value(mod[:pfc][l, c]), rate[l], lim)
         end
     end
