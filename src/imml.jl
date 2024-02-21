@@ -35,10 +35,10 @@ function get_ptdf_vec(B::AbstractMatrix{<:Real}, K::KLU.KLUFactorization{T,<:Int
     fbus::Integer, tbus::Integer, kbus::Integer, lbus::Integer; atol::Real=1e-10
 ) where {T<:Real}
     n = size(B, 1)
-    Xf = calc_x_vec!(Vector{T}(undef, n), K, fbus, slack)
-    Xt = calc_x_vec!(Vector{T}(undef, n), K, tbus, slack)
-    Xk = calc_x_vec!(Vector{T}(undef, n), K, kbus, slack)
-    Xl = calc_x_vec!(Vector{T}(undef, n), K, lbus, slack)
+    Xf = calc_X_vec!(Vector{T}(undef, n), K, fbus, slack)
+    Xt = calc_X_vec!(Vector{T}(undef, n), K, tbus, slack)
+    Xk = calc_X_vec!(Vector{T}(undef, n), K, kbus, slack)
+    Xl = calc_X_vec!(Vector{T}(undef, n), K, lbus, slack)
     return get_ptdf_vec(Xf, Xt, Xk, Xl, -B[fbus, tbus], -B[kbus, lbus], fbus, tbus, kbus, lbus, atol=atol)
 end
 

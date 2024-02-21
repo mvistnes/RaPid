@@ -239,6 +239,16 @@ end
 calc_X(B::AbstractMatrix{<:Real}, slack::Integer) = calc_X!(Matrix(B), B, slack)
 calc_X(K::KLU.KLUFactorization{T,<:Integer}, slack::Integer) where {T<:Real} = calc_X!(Matrix{T}(undef, size(K)), K, slack)
 
+function calc_X_vec!(x::Vector{T}, K::KLU.KLUFactorization{T,<:Integer}, bus::Integer, slack::Integer
+) where {T<:Real}
+    x .= zero(T)
+    x[bus] = one(T)
+    KLU.solve!(K, x)
+    x[slack] = zero(T)
+    return x
+end
+calc_X_vec(pf::DCPowerFlow, bus::Integer) = calc_X_vec!(pf.vn_tmp, pf.K, bus, pf.slack)
+    
 calc_isf(DA::AbstractMatrix{<:Real}, X::AbstractMatrix{<:Real}) = DA * X
 calc_isf!(ϕ::AbstractMatrix{<:Real}, DA::AbstractMatrix{<:Real}, X::AbstractMatrix{<:Real}) =
     LinearAlgebra.mul!(ϕ, DA, X)
