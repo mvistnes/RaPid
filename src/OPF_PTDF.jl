@@ -89,18 +89,19 @@ function opf_base(type::OPF, system::System, optimizer;
 
     oplim = oplimits(opf, max_shed, max_curtail, dist_slack, ramp_mult, ramp_minutes, p_failure, short_term_multi, long_term_multi)
 
+
     @variables(m, begin
-        p0[n in 1:length(opf.nodes)]
+        p0[n in 1:size(opf.mgx, 2)]
         # active power injection on each node
-        oplim.pg_lim_min[g] <= pg0[g in 1:length(opf.ctrl_generation)] <= oplim.pg_lim_max[g]
+        oplim.pg_lim_min[g] <= pg0[g in 1:length(oplim.pg_lim_max)] <= oplim.pg_lim_max[g]
         # active power variables for the generators
-        oplim.dc_lim_min[l] <= pfdc0[l in 1:length(opf.dc_branches)] <= oplim.dc_lim_max[l]
+        oplim.dc_lim_min[l] <= pfdc0[l in 1:length(oplim.dc_lim_max)] <= oplim.dc_lim_max[l]
         # power flow on DC branches
-        pd[d in 1:length(opf.demands)]
-        0.0 <= ls0[d in 1:length(opf.demands)] <= oplim.pd_lim[d] * (typeof(oplim.max_shed) <: Real ? 1.0 : oplim.max_shed[d])
+        pd[d in 1:length(oplim.pd_lim)]
+        0.0 <= ls0[d in 1:length(oplim.pd_lim)] <= oplim.pd_lim[d] * (typeof(oplim.max_shed) <: Real ? 1.0 : oplim.max_shed[d])
         # demand curtailment variables
-        pr[d in 1:length(opf.renewables)]
-        0.0 <= pr0[d in 1:length(opf.renewables)] <= oplim.pr_lim[d] * (typeof(oplim.max_curtail) <: Real ? 1.0 : oplim.max_curtail[d])
+        pr[d in 1:length(oplim.pr_lim)]
+        0.0 <= pr0[d in 1:length(oplim.pr_lim)] <= oplim.pr_lim[d] * (typeof(oplim.max_curtail) <: Real ? 1.0 : oplim.max_curtail[d])
         # renewable curtailment variables
     end)
 
@@ -202,8 +203,9 @@ function add_all_contingencies!(type::OPF, opf::OPFsystem, oplim::Oplimits, m::M
     pf::DCPowerFlow, brc_up::Dict{<:Integer, ConstraintRef}, brc_down::Dict{<:Integer, ConstraintRef}, 
     Pc::Dict{<:Integer,ExprC}, Pcc::Dict{<:Integer,ExprCC}, Pccx::Dict{<:Integer,ExprCCX}
 )
+
     obj = objective_function(m)
-    set_dist_slack!(pf, opf, oplim.dist_slack)
+    !isempty(oplim.dist_slack) && set_dist_slack!(pf.ϕ, opf.mgx, oplim.dist_slack)
     for (i, c_obj) in enumerate(opf.contingencies)
         cont = typesort_component(c_obj, opf)
         if is_islanded(pf, cont[2], cont[1])
@@ -232,7 +234,7 @@ function add_contingency!(opf::OPFsystem, pf::DCPowerFlow, oplim::Oplimits, m::M
     brc_up::Dict{<:Integer, ConstraintRef}, brc_down::Dict{<:Integer, ConstraintRef}, 
     ptdf::AbstractMatrix{<:Real}, c::Integer
 )
-    p = @variable(m, [n in 1:length(opf.nodes)], base_name = "p"*string(c))
+    p = @variable(m, [n in 1:size(opf.mgx, 2)], base_name = "p"*string(c))
     @constraint(m, m[:inj_p0] .== p)
     add_branch_constraints!(m, ptdf, p, brc_up, brc_down, oplim.branch_rating * oplim.short_term_multi)
     # add_branch_constraints!(m, opf, pf, p, oplim.branch_rating * oplim.short_term_multi, c)
@@ -242,8 +244,9 @@ function add_contingency!(Pc::Dict{<:Integer,ExprC}, opf::OPFsystem, pf::DCPower
     brc_up::Dict{<:Integer, ConstraintRef}, brc_down::Dict{<:Integer, ConstraintRef}, obj::AbstractJuMPScalar, islands::Vector,
     island::Integer, ptdf::AbstractMatrix{<:Real}, c::Integer
 )
-    pc = @variable(m, [n in 1:length(opf.nodes)], base_name = "pc"*string(c))
+    pc = @variable(m, [n in 1:size(opf.mgx, 2)], base_name = "pc"*string(c))
     pgu, pgd, prc, lsc = init_P!(Pc, opf, oplim, m, obj, islands, island, c)
+
     Pc[c].pc = pc
 
     inj_pc = @expression(m, opf.mgx' * (m[:pg0] + pgu - pgd))
@@ -260,7 +263,7 @@ function add_contingency!(Pcc::Dict{<:Integer,ExprCC}, opf::OPFsystem, pf::DCPow
     brc_up::Dict{<:Integer, ConstraintRef}, brc_down::Dict{<:Integer, ConstraintRef}, obj::AbstractJuMPScalar, islands::Vector,
     island::Integer, ptdf::AbstractMatrix{<:Real}, c::Integer
 )
-    pcc = @variable(m, [n in 1:length(opf.nodes)], base_name = "pcc"*string(c))
+    pcc = @variable(m, [n in 1:size(opf.mgx, 2)], base_name = "pcc"*string(c))
     pgu, pgd, pfdccc, prcc, lscc = init_P!(Pcc, opf, oplim, m, obj, islands, island, c)
     Pcc[c].pcc = pcc
 
@@ -278,7 +281,7 @@ function add_contingency!(Pccx::Dict{<:Integer,ExprCCX}, opf::OPFsystem, pf::DCP
     brc_up::Dict{<:Integer, ConstraintRef}, brc_down::Dict{<:Integer, ConstraintRef}, obj::AbstractJuMPScalar, islands::Vector,
     island::Integer, ptdf::AbstractMatrix{<:Real}, c::Integer
 )
-    pccx = @variable(m, [n in 1:length(opf.nodes)], base_name = "pccx"*string(c))
+    pccx = @variable(m, [n in 1:size(opf.mgx, 2)], base_name = "pccx"*string(c))
     pgd, prcc, lscc = init_P!(Pccx, opf, oplim, m, obj, islands, island, c)
     Pccx[c].pccx = pccx
 
@@ -296,15 +299,15 @@ end
 function init_P!(Pc::Dict{<:Integer,ExprC}, opf::OPFsystem, oplim::Oplimits, m::Model, obj::AbstractJuMPScalar, 
     islands::Vector, island::Integer, c::Integer
 )
-    pgu = @variable(m, [g in 1:length(opf.ctrl_generation)], base_name = "pgu"*string(c),
+    pgu = @variable(m, [g in 1:length(m[:pg0])], base_name = "pgu"*string(c),
         lower_bound = 0.0, upper_bound = oplim.rampup[g] * 0.0)
     # active power variables for the generators in contingencies ramp up 
-    pgd = @variable(m, [g in 1:length(opf.ctrl_generation)], base_name = "pgd"*string(c),
+    pgd = @variable(m, [g in 1:length(m[:pg0])], base_name = "pgd"*string(c),
         lower_bound = 0.0) #, upper_bound = rampdown[g] * 0.0)
     # and ramp down
-    prc = @variable(m, [d in 1:length(opf.renewables)], base_name = "prc"*string(c),
+    prc = @variable(m, [d in 1:length(m[:pr])], base_name = "prc"*string(c),
         lower_bound = 0.0, upper_bound = oplim.pr_lim[d] * (typeof(oplim.max_curtail) <: Real ? 1.0 : oplim.max_curtail[d]))
-    lsc = @variable(m, [d in 1:length(opf.demands)], base_name = "lsc"*string(c),
+    lsc = @variable(m, [d in 1:length(m[:pd])], base_name = "lsc"*string(c),
         lower_bound = 0.0, upper_bound = oplim.pd_lim[d] * (typeof(oplim.max_shed) <: Real ? 1.0 : oplim.max_shed[d]))
     Pc[c] = ExprC(VariableRef[], pgu, pgd, prc, lsc)
 
@@ -346,7 +349,7 @@ function init_P!(Pc::Dict{<:Integer,ExprC}, opf::OPFsystem, oplim::Oplimits, m::
             end
             @constraint(m, expr <= oplim.max_shed)
         end
-        itr = isempty(itr) ? (1:length(opf.nodes)) : islands[1:end.!=island]
+        itr = isempty(itr) ? (1:size(opf.mgx, 2)) : islands[1:end.!=island]
         for in_vec in itr
             for n in in_vec
                 for g in opf.mgx[:,n].nzind
@@ -365,17 +368,17 @@ function init_P!(Pcc::Dict{<:Integer,ExprCC}, opf::OPFsystem, oplim::Oplimits, m
     islands::Vector, island::Integer, c::Integer
 )
     # Add corrective variables
-    pgu = @variable(m, [g in 1:length(opf.ctrl_generation)], base_name = @sprintf("pgu%s", c),
+    pgu = @variable(m, [g in 1:length(m[:pg0])], base_name = @sprintf("pgu%s", c),
         lower_bound = 0.0, upper_bound = oplim.rampup[g] * oplim.ramp_minutes)
     # active power variables for the generators in contingencies ramp up 
-    pgd = @variable(m, [g in 1:length(opf.ctrl_generation)], base_name = @sprintf("pgd%s", c),
+    pgd = @variable(m, [g in 1:length(m[:pg0])], base_name = @sprintf("pgd%s", c),
         lower_bound = 0.0) #, upper_bound = rampdown[g] * ramp_minutes)
     # and ramp down
-    pfdccc = @variable(m, [d in 1:length(opf.dc_branches)], base_name = @sprintf("pfdccc%s", c),
+    pfdccc = @variable(m, [d in 1:length(m[:pfdc0])], base_name = @sprintf("pfdccc%s", c),
         lower_bound = oplim.dc_lim_min[d], upper_bound = oplim.dc_lim_max[d])
-    prcc = @variable(m, [r in 1:length(opf.renewables)], base_name = @sprintf("prcc%s", c),
+    prcc = @variable(m, [r in 1:length(m[:pr])], base_name = @sprintf("prcc%s", c),
         lower_bound = 0.0, upper_bound = oplim.pr_lim[r] * (typeof(oplim.max_curtail) <: Real ? 1.0 : oplim.max_curtail[d]))
-    lscc = @variable(m, [d in 1:length(opf.demands)], base_name = @sprintf("lscc%s", c),
+    lscc = @variable(m, [d in 1:length(m[:pd])], base_name = @sprintf("lscc%s", c),
         lower_bound = 0.0, upper_bound = oplim.pd_lim[d] * (typeof(oplim.max_shed) <: Real ? 1.0 : oplim.max_shed[d]))
     # load curtailment variables in in contingencies
     Pcc[c] = ExprCC(VariableRef[], pgu, pgd, pfdccc, prcc, lscc)
@@ -427,7 +430,7 @@ function init_P!(Pcc::Dict{<:Integer,ExprCC}, opf::OPFsystem, oplim::Oplimits, m
             end
             @constraint(m, expr <= oplim.max_shed)
         end
-        itr = isempty(itr) ? (1:length(opf.nodes)) : islands[1:end.!=island]
+        itr = isempty(itr) ? (1:size(opf.mgx, 2)) : islands[1:end.!=island]
         for in_vec in itr
             for n in in_vec
                 for g in opf.mgx[:,n].nzind
@@ -447,12 +450,12 @@ function init_P!(Pccx::Dict{<:Integer,ExprCCX}, opf::OPFsystem, oplim::Oplimits,
     islands::Vector, island::Integer, c::Integer
 )
     # Add corrective variables
-    pgd = @variable(m, [g in 1:length(opf.ctrl_generation)], base_name = @sprintf("pgdx%s", c),
+    pgd = @variable(m, [g in 1:length(m[:pg0])], base_name = @sprintf("pgdx%s", c),
         lower_bound = 0.0)#, upper_bound = oplim.rampdown[g] * oplim.ramp_minutes)
     # and ramp down
-    prcc = @variable(m, [r in 1:length(opf.renewables)], base_name = @sprintf("prccx%s", c),
+    prcc = @variable(m, [r in 1:length(m[:pr])], base_name = @sprintf("prccx%s", c),
         lower_bound = 0.0, upper_bound = oplim.pr_lim[d] * (typeof(oplim.max_curtail) <: Real ? 1.0 : oplim.max_curtail[d]))
-    lscc = @variable(m, [d in 1:length(opf.demands)], base_name = @sprintf("lsccx%s", c),
+    lscc = @variable(m, [d in 1:length(m[:pd])], base_name = @sprintf("lsccx%s", c),
         lower_bound = 0.0, upper_bound = oplim.pd_lim[d] * (typeof(oplim.max_shed) <: Real ? 1.0 : oplim.max_shed[d]))
     # load curtailment variables in in contingencies
     Pccx[c] = ExprCCX(VariableRef[], pgd, prcc, lscc)
@@ -482,7 +485,7 @@ function init_P!(Pccx::Dict{<:Integer,ExprCCX}, opf::OPFsystem, oplim::Oplimits,
             end
             @constraint(m, expr <= oplim.max_shed)
         end
-        itr = isempty(itr) ? (1:length(opf.nodes)) : islands[1:end.!=island]
+        itr = isempty(itr) ? (1:size(opf.mgx, 2)) : islands[1:end.!=island]
         for in_vec in itr
             for n in in_vec
                 for g = opf.mgx[:,n].nzind
@@ -541,7 +544,7 @@ function calc_slack_cost(case::Case)
     costs = zeros(length(opf.contingencies))
     pg0 = get_value(m, :pg0)
     if isempty(case.oplim.dist_slack)
-        slack_cost = sum(last.(get_generator_cost.(opf.ctrl_generation[opf.mgx[:,pf.slack].nzind])))
+        slack_cost = sum(getproperty.(opf.cost_ctrl_gen[opf.mgx[:,pf.slack].nzind], :ramp))
     else
         slack_cost = opf.mgx' * (getproperty.(opf.cost_ctrl_gen, :ramp) .* case.oplim.dist_slack .* pg0)
     end

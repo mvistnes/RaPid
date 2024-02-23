@@ -73,7 +73,7 @@ SCOPF.calc_isf!(ϕ, pf.ϕ, islands[island], island_b); LinearAlgebra.mul!(flow3,
 SCOPF.calculate_line_flows!(flow4, ϕ, pf.ϕ, (Pᵢ .+ ΔPc), islands[island], island_b); # hack2
 @test flow3 ≈ flow4 
 
-SCOPF.set_dist_slack!(pf, opf)
+!isempty(oplim.dist_slack) && SCOPF.set_dist_slack!(pf.ϕ, opf.mgx, oplim.dist_slack)
 SCOPF.calculate_line_flows!(flow1, θ, pf.DA, pf.B, (Pᵢ .+ ΔPc), cont2, c2, pf.slack, islands[island], island_b) # inverse with theta
 SCOPF.calc_isf!(ϕ, pf.DA, pf.B, cont2, c2, pf.slack, islands[island], island_b); LinearAlgebra.mul!(flow2, ϕ, (Pᵢ .+ ΔPc)); # inverse with ptdf
 @test flow1 ≈ flow2
