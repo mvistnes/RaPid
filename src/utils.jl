@@ -307,14 +307,6 @@ get_cost_renewables(opf::OPFsystem) = opf.cost_renewables
 get_voll(opf::OPFsystem) = opf.voll
 get_prob(opf::OPFsystem) = opf.prob
 
-get_ctrl_generation(opf::OPFsystem) = opf.ctrl_generation
-get_branches(opf::OPFsystem) = opf.branches
-get_dc_branches(opf::OPFsystem) = opf.dc_branches
-get_nodes(opf::OPFsystem) = opf.nodes
-get_demands(opf::OPFsystem) = opf.demands
-get_renewables(opf::OPFsystem) = opf.renewables
-get_contingencies(opf::OPFsystem) = opf.contingencies
-
 function get_interarea(branches::AbstractVector{T}) where {T<:Branch}
     vals = Vector{T}()
     for br in branches
@@ -391,61 +383,20 @@ typesort_component(val::ACBus, opf::OPFsystem) =
 typesort_component(val::ACBranch, opf::OPFsystem) =
     (find_component(val, get_branches(opf)), get_bus_idx(val, opf.idx))
 
+function typesort_component(val::Pair, opf::OPFsystem)
+    if first(val) == "branch"
+        return (last(val), opf.mbx[last(val),:].nzval)
+    elseif first(val) == "gen"
+        return (last(val), opf.mbx[last(val),:].nzval)
+    else
+        return (-1,-1)
+    end
+end
+
 """ Make a DenseAxisArray using the list and function for the value of each element """
 make_named_array(value_func, list) = JuMP.Containers.DenseAxisArray(
     [value_func(x) for x in list], PowerSystems.get_name.(list)
 )
-
-struct CTypes{T<:Integer}
-    node::ACBus
-    ctrl_generation::Vector{T}
-    renewables::Vector{T}
-    demands::Vector{T}
-    branches::Vector{T}
-    dc_branches::Vector{T}
-end
-
-""" Make a list where all component numbers are distributed on their node """
-function make_list(opf::OPFsystem, nodes::AbstractVector{ACBus})
-    list = [CTypes(n, [Int[] for _ in 1:5]...) for n in nodes]
-    for (i, r) in enumerate(opf.ctrl_generation)
-        push!(list[opf.idx[r.bus.number]].ctrl_generation, i)
-    end
-    for (i, r) in enumerate(opf.renewables)
-        push!(list[opf.idx[r.bus.number]].renewables, i)
-    end
-    for (i, d) in enumerate(opf.demands)
-        push!(list[opf.idx[d.bus.number]].demands, i)
-    end
-    for (i, d) in enumerate(opf.branches)
-        push!(list[opf.idx[d.arc.from.number]].branches, i)
-        push!(list[opf.idx[d.arc.to.number]].branches, i)
-    end
-    for (i, d) in enumerate(opf.dc_branches)
-        push!(list[opf.idx[d.arc.from.number]].dc_branches, i)
-        push!(list[opf.idx[d.arc.to.number]].dc_branches, i)
-    end
-    return list
-end
-
-""" A list with type_func componentes distributed on their node """
-function make_list(system::System, type_func, nodes=get_nodes(system))
-    list = JuMP.Containers.DenseAxisArray(
-        [[] for _ in 1:length(nodes)], PowerSystems.get_name.(nodes)
-    )
-    for g in type_func(system)
-        push!(list[g.bus.name], g)
-    end
-    return list
-end
-
-function get_in_list(type::Symbol, nodes::Vector{Int}, list::Vector)
-    res = Int[]
-    for n in nodes 
-        push!(res, getproperty(getindex(list, n), type)...)
-    end
-    return res
-end
 
 find_in_model(mod::Model, ::ThermalGen, name::String) = mod[:pg0][name]
 find_in_model(mod::Model, ::HydroGen, name::String) = mod[:pg0][name]
@@ -653,26 +604,6 @@ end
 
 """ Return the net power injected at each node. """
 get_net_Pᵢ(mod::Model) = get_value(mod, :p0)
-
-function get_net(power_func::Function, opf::OPFsystem)
-    vals = zeros(length(opf.nodes))
-    for r in opf.renewables
-        vals[opf.idx[r.bus.number]] += power_func(r)
-    end
-    for d in opf.demands
-        vals[opf.idx[d.bus.number]] -= power_func(d)
-    end
-    for r in opf.ctrl_generation
-        vals[opf.idx[r.bus.number]] += power_func(r)
-    end
-    for d in opf.dc_branches
-        vals[opf.idx[d.arc.from.number]] += power_func(d)
-        vals[opf.idx[d.arc.to.number]] -= power_func(d)
-    end
-    return vals
-end
-get_net_P(opf::OPFsystem) = get_net(get_active_power, opf)
-get_net_Q(opf::OPFsystem) = get_net(get_reactive_power, opf)
 
 """ Return active power from renweables and demands at each node. """
 function get_Pd!(P::Vector{<:Real}, opf::OPFsystem, mod::Model)

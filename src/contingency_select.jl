@@ -58,7 +58,7 @@ function run_contingency_select!(
     @debug "lower_bound = $(objective_value(mod))"
 
     # Set variables
-    set_dist_slack!(pf, opf, oplim.dist_slack)
+    !isempty(oplim.dist_slack) && set_dist_slack!(pf.ϕ, opf.mgx, oplim.dist_slack)
     bd = benders(opf, mod)
     
     overloads = zeros(length(opf.contingencies))

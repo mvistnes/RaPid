@@ -84,7 +84,7 @@ function run_benders!(
     @debug "lower_bound = $(objective_value(mod))"
 
     # Set variables
-    set_dist_slack!(pf, opf, oplim.dist_slack)
+    !isempty(oplim.dist_slack) && set_dist_slack!(pf.ϕ, opf.mgx, oplim.dist_slack)
     bd = benders(opf, mod)
 
     overloads = zeros(length(opf.contingencies))
@@ -106,7 +106,7 @@ function run_benders!(
                 flow = pf.vb_tmp
             end
         else
-            if typeof(c_obj) <: ACBranch
+            if typeof(c_obj) <: ACBranch || (typeof(c_obj) <: Pair && first(c_obj) == "branch")
                 flow = calculate_contingency_line_flows(mod, pf, bd.Pᵢ, cont, i, c_obj, Int[], Int[])
             else
                 flow = calculate_contingency_line_flows(mod, pf, bd.Pᵢ, cont, i, c_obj, Int[], Int[], pg[cont[1]])
