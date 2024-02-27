@@ -242,13 +242,6 @@ mutable struct OPFsystem{TR<:Real,TI<:Integer}
     mdcx::SparseArrays.SparseMatrixCSC{Int8, TI}
     mrx::SparseArrays.SparseMatrixCSC{Int8, TI}
 
-    ctrl_generation::Vector{Generator}
-    branches::Vector{ACBranch}
-    arcs::Vector{Arc}
-    dc_branches::Vector{TwoTerminalHVDCLine}
-    nodes::Vector{ACBus}
-    demands::Vector{StaticLoad}
-    renewables::Vector{RenewableGen}
     contingencies::Vector{Component}
 end
 
@@ -259,7 +252,7 @@ function opfsystem(sys::System, voll::Vector{TR}, contingencies::Vector{<:Compon
 
     ctrl_generation = sort_components!(get_ctrl_generation(sys))
     branches = sort_components!(get_branches(sys))
-    arcs = sort_components!(get_arcs(sys))
+    # arcs = sort_components!(get_arcs(sys))
     dc_branches = sort_components!(get_dc_branches(sys))
     nodes = sort_components!(get_nodes(sys))
     demands = sort_components!(get_demands(sys))
@@ -291,8 +284,8 @@ function opfsystem(sys::System, voll::Vector{TR}, contingencies::Vector{<:Compon
         @error "The system is separated into islands" islands
     end
 
-    return OPFsystem{TR, Int}(cost_ctrl_gen, cost_renewables, voll, prob, idx, mgx, mdx, mbx, mdcx, mrx,
-        ctrl_generation, branches, arcs, dc_branches, nodes, demands, renewables, contingencies)
+    return OPFsystem{TR, Int64}(cost_ctrl_gen, cost_renewables, voll, prob, idx, mgx, mdx, mbx, mdcx, mrx,
+        contingencies)
 end
 
 """ Automatic constructor for OPFsystem where voll, prob, and contingencies are automatically computed. """
@@ -383,7 +376,7 @@ typesort_component(val::ACBus, opf::OPFsystem) =
 typesort_component(val::ACBranch, opf::OPFsystem) =
     (find_component(val, get_branches(opf)), get_bus_idx(val, opf.idx))
 
-function typesort_component(val::Pair, opf::OPFsystem)
+function typesort_component(val::Pair{String, <:Any}, opf::OPFsystem)
     if first(val) == "branch"
         return (last(val), opf.mbx[last(val),:].nzval)
     elseif first(val) == "gen"

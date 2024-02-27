@@ -22,7 +22,7 @@ end
 
 """ Constructor for Oplimits """
 function oplimits(
-    opf::OPFsystem,
+    system::System,
     max_shed::Union{TR,Vector{TR}},
     max_curtail::Union{TR,Vector{TR}},
     dist_slack::Vector{TR},
@@ -32,12 +32,18 @@ function oplimits(
     short_term_multi::Union{TR,Vector{TR}},
     long_term_multi::Union{TR,Vector{TR}}
 ) where {TR<:Real}
-    branch_rating::Vector{TR} = get_rate.(opf.branches)
-    (pg_lim_min::Vector{TR}, pg_lim_max::Vector{TR}) = split_pair(get_active_power_limits.(opf.ctrl_generation))
-    (rampup::Vector{TR}, rampdown::Vector{TR}) = split_pair(get_ramp_limits.(opf.ctrl_generation))
-    pr_lim::Vector{TR} = get_active_power.(opf.renewables)
-    (dc_lim_min::Vector{TR}, dc_lim_max::Vector{TR}) = split_pair(get_active_power_limits_from.(opf.dc_branches))
-    pd_lim::Vector{TR} = get_active_power.(opf.demands)
+    ctrl_generation = sort_components!(get_ctrl_generation(system))
+    branches = sort_components!(get_branches(system))
+    dc_branches = sort_components!(get_dc_branches(system))
+    demands = sort_components!(get_demands(system))
+    renewables = sort_components!(get_renewables(system))
+
+    branch_rating::Vector{TR} = get_rate.(branches)
+    (pg_lim_min::Vector{TR}, pg_lim_max::Vector{TR}) = split_pair(get_active_power_limits.(ctrl_generation))
+    (rampup::Vector{TR}, rampdown::Vector{TR}) = split_pair(get_ramp_limits.(ctrl_generation))
+    pr_lim::Vector{TR} = get_active_power.(renewables)
+    (dc_lim_min::Vector{TR}, dc_lim_max::Vector{TR}) = split_pair(get_active_power_limits_from.(dc_branches))
+    pd_lim::Vector{TR} = get_active_power.(demands)
     if !isempty(dist_slack)
         dist_slack = dist_slack / sum(dist_slack)
     end
@@ -79,15 +85,19 @@ function opf_base(type::OPF, system::System, optimizer;
     @assert !type.C2F | !iszero(p_failure)
     m = create_model(optimizer, time_limit_sec=time_limit_sec, silent=silent, debug=debug)
     opf = isempty(voll) ? opfsystem(system) : opfsystem(system, voll, contingencies, prob, ramp_mult)
-    pf = DCPowerFlow(opf.nodes, opf.branches, opf.idx)
-    
+    pf = DCPowerFlow(system)
+    oplim = oplimits(system, max_shed, max_curtail, dist_slack, ramp_mult, ramp_minutes, p_failure, short_term_multi, long_term_multi)
+
+    return add_base_constraints!(type, opf, oplim, mod, pf, unit_commit=unit_commit)
+end
+function add_base_constraints!(type::OPF, opf::OPFsystem, oplim::Oplimits, mod::Model, pf::DCPowerFlow; 
+    unit_commit::Bool=false
+)
     brc_up = Dict{Int64,ConstraintRef}()
     brc_down = Dict{Int64,ConstraintRef}()
     Pc = Dict{Int64,ExprC}()
     Pcc = Dict{Int64,ExprCC}()
     Pccx = Dict{Int64,ExprCCX}()
-
-    oplim = oplimits(opf, max_shed, max_curtail, dist_slack, ramp_mult, ramp_minutes, p_failure, short_term_multi, long_term_multi)
 
 
     @variables(m, begin

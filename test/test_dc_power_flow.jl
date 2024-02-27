@@ -3,7 +3,7 @@
 # SETUP
 LinearAlgebra.BLAS.set_num_threads(Threads.nthreads())
 # system = System(joinpath("data","ELK14","A5.m")); c1 = 1; c2 = 5
-system = SCOPF.System(joinpath("cases","IEEE_RTS.m")); c1 = 1; c2 = 11
+system = SCOPF.System(joinpath("cases","IEEE_RTS.m")); c1 = 1; c2 = 11; slack = 13
 # system = SCOPF.System(joinpath("cases","RTS_GMLC.m")); c1 = 1; c2 = 52
 # system = SCOPF.System(joinpath("cases","ACTIVSg500.m")); c1 = 2; c2 = 1
 # system = SCOPF.System(joinpath("cases","ACTIVSg2000.m")); c1 = 1; c2 = 9
@@ -12,12 +12,11 @@ SCOPF.fix_generation_cost!(system);
 voll = SCOPF.make_voll(system)
 model, opf, pf, oplim, brc_up, brc_down, _, _, _ = SCOPF.opf_base(SCOPF.OPF(true, false, false, false, false), system, HiGHS.Optimizer(), voll=voll);
 SCOPF.constrain_branches!(model, pf, oplim, brc_up, brc_down, 0.0)
-bx = SCOPF.get_bus_idx.(opf.branches, [opf.idx])
-slack = SCOPF.find_slack(opf.nodes)[1]
+bx = [Tuple(opf.mbx[i,:].nzind) for i in axes(opf.mbx,1)]
 
 # CALC MATRICES DIRECTLY
-A = SCOPF.calc_A(opf.branches, length(opf.nodes), opf.idx)
-D = SCOPF.calc_D(opf.branches)
+A = SCOPF.calc_A(bx, size(opf.mbx,2))
+D = SCOPF.calc_D(SCOPF.sort_components!(SCOPF.get_branches(system)))
 DA = D*A
 B = SCOPF.calc_B(A, DA)
 X = SCOPF.calc_X(B, slack)
@@ -29,7 +28,7 @@ F = DA*θ
 @test θ ≈ SCOPF.run_pf(pf.K, Pᵢ, pf.slack)
 
 # CHECK DCPF-STRUCT CORRECTNESS
-pf = SCOPF.DCPowerFlow(opf.nodes, opf.branches, opf.idx, Pᵢ)
+pf = SCOPF.DCPowerFlow(system, Pᵢ)
 @test B ≈ pf.B
 @test DA ≈ pf.DA
 @test ϕ ≈ pf.ϕ
