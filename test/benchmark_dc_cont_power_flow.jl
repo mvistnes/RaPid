@@ -20,18 +20,16 @@ system = SCOPF.System(joinpath("data","matpower","ACTIVSg500.m")); c1 = 2; c2 = 
 SCOPF.fix_generation_cost!(system);
 voll = SCOPF.make_voll(system)
 model, opf, pf, oplim, _, _, _ = SCOPF.opf_base(SCOPF.Base_SCOPF, system, HiGHS.Optimizer, voll=voll);
-SCOPF.solve_model!(model)
-bx = SCOPF.get_bus_idx.(opf.branches, [opf.idx])
-slack = SCOPF.find_slack(opf.nodes)[1]
-
+SCOPF.constrain_branches!(model, pf, oplim, 0.0)
+bx = [case.opf.mbx[i,:].nzind for i in axes(case.opf.mbx,1)]
 Pᵢ = SCOPF.get_value(model, :p0)
-pf = SCOPF.DCPowerFlow(opf.nodes, opf.branches, opf.idx, Pᵢ)
+
 B = copy(pf.B)
 X = copy(pf.X)
 ϕ = copy(pf.ϕ)
 θ = copy(pf.θ)
 F = copy(pf.F)
-K = SCOPF.get_klu(B, pf.slack)
+K = copy(pf.K)
  
 # CONTAINERS FOR POWER FLOW
 flow1 = copy(pf.F)

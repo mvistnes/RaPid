@@ -40,6 +40,13 @@ function DCPowerFlow(sys::System)
     return DCPowerFlow(nodes, branches, idx)
 end
 
+function DCPowerFlow(sys::System, Pᵢ::AbstractVector{<:Real})
+    pf = DCPowerFlow(sys)
+    calc_θ!(pf, Pᵢ)
+    calc_Pline!(pf)
+    return pf
+end
+
 function DCPowerFlow(nodes::AbstractVector{<:Bus}, branches::AbstractVector{<:Branch}, idx::Dict{<:Int,<:Int}, Pᵢ::AbstractVector{<:Real})
     pf = DCPowerFlow(nodes, branches, idx)
     calc_θ!(pf, Pᵢ)
