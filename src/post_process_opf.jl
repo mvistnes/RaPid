@@ -181,7 +181,7 @@ end
 
 function get_power_flow(opf::OPFsystem, m::Model; subset::AbstractVector{<:Integer}=Int64[])
     br_names = PowerSystems.get_name.(opf.branches)
-    flow = calculate_line_flows(get_isf(opf.branches, opf.nodes), get_net_Pᵢ(m))
+    flow = calculate_line_flows(calc_isf(opf.branches, opf.nodes), get_net_Pᵢ(m))
     rate = get_rate.(opf.branches)
     if !isempty(subset)
         br_names = br_names[subset]
@@ -284,15 +284,15 @@ function get_contingency_power_flow(case::Case;
     vals = Dict("name" => b_names, "st_rate" => brst, "lt_rate" => brlt)
 
     if !isempty(case.Pc) 
-        merge!(vals, get_contingency_power_flow(case.opf, case.model, case.pf, Pᵢ, case.Pc, "short_"; subset=subset))
+        merge!(vals, calc_contingency_power_flow(case.opf, case.model, case.pf, Pᵢ, case.Pc, "short_"; subset=subset))
     end
 
     if !isempty(case.Pcc)
-        merge!(vals, get_contingency_power_flow(case.opf, case.model, case.pf, Pᵢ, case.Pcc, "long_"; subset=subset))
+        merge!(vals, calc_contingency_power_flow(case.opf, case.model, case.pf, Pᵢ, case.Pcc, "long_"; subset=subset))
     end
 
     if !isempty(case.Pccx)
-        merge!(vals, get_contingency_power_flow(case.opf, case.model, case.pf, Pᵢ, case.Pccx, "long_x_"; subset=subset))
+        merge!(vals, calc_contingency_power_flow(case.opf, case.model, case.pf, Pᵢ, case.Pccx, "long_x_"; subset=subset))
     end
     return vals
 end
@@ -325,15 +325,14 @@ function print_contingency_power_flow(case::Case;
     return
 end
 
-function get_generation_results(opf::OPFsystem, m::Model)
-    (pg_lim_min, pg_lim_max) = split_pair(get_active_power_limits.(opf.ctrl_generation))
+function get_generation_results(case::Case)
     Pg = get_value(m, :pg0)
     gen_bus = opf.ctrl_generation .|> get_bus .|> get_number
-    return Dict("Bus_num" => gen_bus, "P" => Pg, "Min_P" => pg_lim_min, "Max_P" => pg_lim_max)
+    return Dict("Bus_num" => gen_bus, "P" => Pg, "Min_P" => case.oplim.pg_lim_min, "Max_P" => case.oplim.pg_lim_max)
 end
 
-function print_generation_results(opf::OPFsystem, m::Model)
-    vals = get_generation_results(opf, m)
+function print_generation_results(case::Case)
+    vals = get_generation_results(case)
     println(" Gen   Bus        Active Power Limits \n" *
             "  #     #       Pmin       Pg       Pmax  \n" *
             "----  -----   --------  --------  --------")
@@ -346,38 +345,38 @@ end
 
 
 function print_benders_results(case::Case, lim::Real=1e-14)
-    function print_c(itr, symb::String, i_g::Int, lim::Real)
-        for i in 1:length(opf.contingencies)
+    function print_c(itr, symb::String, x::Int, lim::Real)
+        for i in 1:length(case.opf.contingencies)
             c = get(itr, i, 0)
-            if c != 0 && JuMP.value(getfield(c, Symbol(symb))[i_g]) > lim
-                @printf("          c %12s: %s: %.3f\n", opf.contingencies[i].name, symb, JuMP.value(getfield(c, Symbol(symb))[i_g]))
+            if c != 0 && JuMP.value(getfield(c, Symbol(symb))[x]) > lim
+                @printf("          c %12s: %s: %.3f\n", case.opf.contingencies[i].name, symb, JuMP.value(getfield(c, Symbol(symb))[x]))
             end
         end
     end
 
-    for (i_g, g) in enumerate(case.opf.ctrl_generation)
-        @printf("%12s: %5.3f (%.3f)\n", g.name, JuMP.value(case.model[:pg0][i_g]), get_active_power_limits(g).max)
-        print_c(case.Pc, "pgu", i_g, lim)
-        print_c(case.Pc, "pgd", i_g, lim)
-        print_c(case.Pcc, "pgu", i_g, lim)
-        print_c(case.Pcc, "pgd", i_g, lim)
-        print_c(case.Pccx, "pgdx", i_g, lim)
+    for (x, g) in enumerate(case.opf.ctrl_generation)
+        @printf("%12s: %5.3f (%.3f)\n", g.name, JuMP.value(case.model[:pg0][x]), case.oplim.pg_lim_max[x])
+        print_c(case.Pc, "pgu", x, lim)
+        print_c(case.Pc, "pgd", x, lim)
+        print_c(case.Pcc, "pgu", x, lim)
+        print_c(case.Pcc, "pgd", x, lim)
+        print_c(case.Pccx, "pgdx", x, lim)
     end
-    for (i_g, g) in enumerate(case.opf.dc_branches)
-        @printf("%12s: %5.3f (%.3f)\n", g.name, JuMP.value(case.model[:pfdc0][i_g]), get_active_power_limits(g).max)
-        print_c(case.Pcc, "pfdccc", i_g, lim)
+    for (x, g) in enumerate(case.opf.dc_branches)
+        @printf("%12s: %5.3f (%.3f)\n", g.name, JuMP.value(case.model[:pfdc0][x]), case.oplim.dc_lim_max[x])
+        print_c(case.Pcc, "pfdccc", x, lim)
     end
-    for (i_g, g) in enumerate(case.opf.renewables)
-        @printf("%12s: %5.3f (%.3f)\n", g.name, JuMP.value(case.model[:pr0][i_g]), get_active_power_limits(g).max)
-        print_c(case.Pc, "prc", i_g, lim)
-        print_c(case.Pcc, "prcc", i_g, lim)
-        print_c(case.Pccx, "prccx", i_g, lim)
+    for (x, g) in enumerate(case.opf.renewables)
+        @printf("%12s: %5.3f (%.3f)\n", g.name, JuMP.value(case.model[:pr0][x]), case.oplim.pr_lim[x])
+        print_c(case.Pc, "prc", x, lim)
+        print_c(case.Pcc, "prcc", x, lim)
+        print_c(case.Pccx, "prccx", x, lim)
     end
-    for (i_g, g) in enumerate(case.opf.demands)
-        @printf("%12s: %5.3f (%.3f)\n", g.name, JuMP.value(case.model[:ls0][i_g]), get_active_power(g))
-        print_c(case.Pc, "lsc", i_g, lim)
-        print_c(case.Pcc, "lscc", i_g, lim)
-        print_c(case.Pccx, "lsccx", i_g, lim)
+    for (x, g) in enumerate(case.opf.demands)
+        @printf("%12s: %5.3f (%.3f)\n", g.name, JuMP.value(case.model[:ls0][x]), case.oplim.pd_lim[x])
+        print_c(case.Pc, "lsc", x, lim)
+        print_c(case.Pcc, "lscc", x, lim)
+        print_c(case.Pccx, "lsccx", x, lim)
     end
 end
 

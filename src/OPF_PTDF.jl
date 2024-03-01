@@ -160,8 +160,8 @@ function add_branch_constraint!(m::Model, pf::DCPowerFlow, p::AbstractVector{Var
     for (i,j) in zip(ptdf, p)
         add_to_expression!(ptdf0, i, j)
     end
-    brc_down[c] = @constraint(m, ptdf0 + rating >= 0.0)
-    brc_up[c] = @constraint(m, ptdf0 - rating <= 0.0)
+    brc_down[branch] = @constraint(m, ptdf0 + rating >= 0.0)
+    brc_up[branch] = @constraint(m, ptdf0 - rating <= 0.0)
     return mod
 end
 
@@ -208,10 +208,10 @@ function add_all_contingencies!(type::OPF, opf::OPFsystem, oplim::Oplimits, m::M
         cont = typesort_component(c_obj, opf)
         if is_islanded(pf, cont[2], cont[1])
             islands, island, island_b = handle_islands(pf.B, pf.DA, cont[2], cont[1], pf.slack)
-            ptdf = get_isf(pf, cont[2], cont[1], islands, island, island_b)
+            ptdf = calc_isf(pf, cont[2], cont[1], islands, island, island_b)
             set_tol_zero!(ptdf)
         else
-            ptdf = get_isf(pf, cont[2], cont[1])
+            ptdf = calc_isf(pf, cont[2], cont[1])
             islands = Vector{Vector{Int64}}[]
             island = 0
         end

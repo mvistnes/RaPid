@@ -6,7 +6,7 @@ function neutralize_line!(B::AbstractMatrix, i::Integer, j::Integer, val::Real)
 end
 
 # TODO
-function get_dist_slack!(ϕ::AbstractMatrix{<:Real}, ϕ₀::AbstractMatrix{<:Real}, mgx::AbstractMatrix{<:Real}, dist_slack::AbstractVector{<:Real}, c::Integer)
+function calc_dist_slack!(ϕ::AbstractMatrix{<:Real}, ϕ₀::AbstractMatrix{<:Real}, mgx::AbstractMatrix{<:Real}, dist_slack::AbstractVector{<:Real}, c::Integer)
     @assert !iszero(sum(dist_slack))
     slack_array = dist_slack / sum(dist_slack)
     c_val = slack_array[c]
@@ -20,7 +20,7 @@ end
     Make the B-matrix after a line outage, which splits the system, using base case D*A and B. 
     cont[1] (from_bus), cont[2] (to_bus), and cont_branch are index numbers 
 """
-function get_cont_B(DA::AbstractMatrix{<:Real}, B0::AbstractMatrix{<:Real}, cont::Tuple{Integer,Integer},
+function calc_cont_B(DA::AbstractMatrix{<:Real}, B0::AbstractMatrix{<:Real}, cont::Tuple{Integer,Integer},
     cont_branch::Integer, nodes::AbstractVector{<:Integer}
 )
     (fbus, tbus) = cont
@@ -62,7 +62,7 @@ end
     Find voltage angles after a line outage using base case D*A and B. 
     cont[1] (from_bus), cont[2] (to_bus), and cont_branch are index numbers 
 """
-function get_θ!(θ::AbstractVector{<:Real}, B::AbstractMatrix{<:Real}, DA::AbstractMatrix{<:Real}, 
+function calc_θ!(θ::AbstractVector{<:Real}, B::AbstractMatrix{<:Real}, DA::AbstractMatrix{<:Real}, 
     B0::AbstractMatrix{<:Real}, P::AbstractVector{<:Real}, 
     cont::Tuple{Integer,Integer}, cont_branch::Integer, slack::Integer
 )
@@ -71,15 +71,15 @@ function get_θ!(θ::AbstractVector{<:Real}, B::AbstractMatrix{<:Real}, DA::Abst
     _calc_θ!(θ, B, P, slack)
     return θ
 end
-get_θ(DA::AbstractMatrix{T}, B0::AbstractMatrix{<:Real}, P::AbstractVector{<:Real}, 
+calc_θ(DA::AbstractMatrix{T}, B0::AbstractMatrix{<:Real}, P::AbstractVector{<:Real}, 
     cont::Tuple{Integer,Integer}, cont_branch::Integer, slack::Integer
-) where {T<:Real} = get_θ!(Vector{T}(undef, size(DA, 2)), similar(B0), DA, B0, P, cont, cont_branch, slack)
+) where {T<:Real} = calc_θ!(Vector{T}(undef, size(DA, 2)), similar(B0), DA, B0, P, cont, cont_branch, slack)
 
 function calculate_line_flows!(F::AbstractVector{T}, θ::AbstractVector{<:Real}, B::AbstractMatrix{<:Real}, 
     DA::AbstractMatrix{<:Real}, B0::AbstractMatrix{<:Real}, P::AbstractVector{<:Real}, 
     cont::Tuple{Integer,Integer}, cont_branch::Integer, slack::Integer
 ) where {T<:Real}
-    get_θ!(θ, B, DA, B0, P, cont, cont_branch, slack)
+    calc_θ!(θ, B, DA, B0, P, cont, cont_branch, slack)
     LinearAlgebra.mul!(F, DA, θ)
     F[cont_branch] = zero(T)
     return F
@@ -89,10 +89,10 @@ end
     Find voltage angles after a line outage, which splits the system, using base case B. 
     cont[1] (from_bus), cont[2] (to_bus), and cont_branch are index numbers 
 """
-function get_θ(DA::AbstractMatrix{<:Real}, B0::AbstractMatrix{<:Real}, P::AbstractVector{<:Real}, 
+function calc_θ(DA::AbstractMatrix{<:Real}, B0::AbstractMatrix{<:Real}, P::AbstractVector{<:Real}, 
     cont::Tuple{Integer,Integer}, cont_branch::Integer, slack::Integer, nodes::AbstractVector{<:Integer}
 )
-    B = get_cont_B(DA, B0, cont, cont_branch, nodes)
+    B = calc_cont_B(DA, B0, cont, cont_branch, nodes)
     θ = calc_θ!(B, view(P, nodes), searchsortedfirst(nodes, slack))
     return θ
 end
@@ -101,7 +101,7 @@ function calculate_line_flows!(F::AbstractVector{T}, θ::AbstractVector{<:Real},
     B::AbstractMatrix{<:Real}, P::AbstractVector{<:Real}, cont::Tuple{Integer,Integer}, cont_branch::Integer, 
     slack::Integer, nodes::AbstractVector{<:Integer}, branches::AbstractVector{<:Integer}
 ) where {T<:Real}
-    θ[nodes] = get_θ(DA, B, P, cont, cont_branch, slack, nodes)
+    θ[nodes] = calc_θ(DA, B, P, cont, cont_branch, slack, nodes)
     LinearAlgebra.mul!(F, DA, θ)
     zero_not_in_array!(F, branches)
     return F
@@ -110,20 +110,20 @@ end
     Make the isf-matrix after a line outage using base case D*A and B. 
     cont[1] (from_bus), cont[2] (to_bus), and cont_branch are index numbers 
 """
-function get_isf!(ϕ::AbstractMatrix{<:Real}, K::KLU.KLUFactorization{T,<:Integer}, DA::AbstractMatrix{<:Real}, 
+function calc_isf!(ϕ::AbstractMatrix{<:Real}, K::KLU.KLUFactorization{T,<:Integer}, DA::AbstractMatrix{<:Real}, 
     B0::AbstractMatrix{<:Real}, cont::Tuple{Integer,Integer}, cont_branch::Integer, slack::Integer
 ) where {T<:Real}
-    B = get_cont_B(DA, B0, cont, cont_branch, slack)
+    B = calc_cont_B(DA, B0, cont, cont_branch, slack)
     KLU.klu!(K, B)
-    copy!(ϕ, get_isf(K, DA, slack))
+    copy!(ϕ, calc_isf(K, DA, slack))
     ϕ[cont_branch, :] .= 0.0
     return ϕ
 end
-get_isf(DA::AbstractMatrix{T}, B::AbstractMatrix{<:Real}, cont::Tuple{Integer,Integer},
+calc_isf(DA::AbstractMatrix{T}, B::AbstractMatrix{<:Real}, cont::Tuple{Integer,Integer},
     cont_branch::Integer, slack::Integer) where {T<:Real} =
-    get_isf!(Matrix{T}(undef, size(DA)), get_klu!(B, slack), DA, B, cont, cont_branch, slack)
+    calc_isf!(Matrix{T}(undef, size(DA)), calc_klu!(B, slack), DA, B, cont, cont_branch, slack)
 
-function get_cont_B(DA::AbstractMatrix{<:Real}, B0::AbstractMatrix{T}, cont::Tuple{Integer,Integer}, cont_branch::Integer,
+function calc_cont_B(DA::AbstractMatrix{<:Real}, B0::AbstractMatrix{T}, cont::Tuple{Integer,Integer}, cont_branch::Integer,
     slack::Integer
 ) where {T<:Real}
     B = copy(B0)
@@ -138,20 +138,20 @@ end
     Make the isf-matrix after a line outage, which splits the system, using base case D*A and B. 
     cont[1] (from_bus), cont[2] (to_bus), and cont_branch are index numbers 
 """
-function get_isf!(ϕ::AbstractMatrix{T}, DA::AbstractMatrix{<:Real}, B0::AbstractMatrix{<:Real}, cont::Tuple{Integer,Integer},
+function calc_isf!(ϕ::AbstractMatrix{T}, DA::AbstractMatrix{<:Real}, B0::AbstractMatrix{<:Real}, cont::Tuple{Integer,Integer},
     cont_branch::Integer, slack::Integer, nodes::AbstractVector{<:Integer}, branches::AbstractVector{<:Integer}
 ) where {T<:Real}
-    B = get_cont_B(DA, B0, cont, cont_branch, nodes)
+    B = calc_cont_B(DA, B0, cont, cont_branch, nodes)
     # ϕ[sorted_missing(branches, size(ϕ,1)), sorted_missing(nodes, size(ϕ,2))] .= zero(T)
     fill!(ϕ, zero(T))
-    ϕ[branches, nodes] = get_isf!(B, view(DA, branches, nodes), searchsortedfirst(nodes, slack))
+    ϕ[branches, nodes] = calc_isf!(B, view(DA, branches, nodes), searchsortedfirst(nodes, slack))
     return ϕ
 end
-get_isf(DA::AbstractMatrix{T}, B0::AbstractMatrix{<:Real}, cont::Tuple{Integer,Integer},
+calc_isf(DA::AbstractMatrix{T}, B0::AbstractMatrix{<:Real}, cont::Tuple{Integer,Integer},
     cont_branch::Integer, slack::Integer, nodes::AbstractVector{<:Integer}, branches::AbstractVector{<:Integer}
-) where {T<:Real} = get_isf!(Matrix{T}(undef, size(DA)), DA, B0, cont, cont_branch, slack, nodes, branches)
+) where {T<:Real} = calc_isf!(Matrix{T}(undef, size(DA)), DA, B0, cont, cont_branch, slack, nodes, branches)
 
-function get_isf!(ϕ::AbstractMatrix{<:Real}, ϕ₀::AbstractMatrix{<:Real},
+function calc_isf!(ϕ::AbstractMatrix{<:Real}, ϕ₀::AbstractMatrix{<:Real},
     nodes::AbstractVector{<:Integer}, branches::AbstractVector{<:Integer}
 )
     copy!(ϕ, ϕ₀)
@@ -160,10 +160,10 @@ function get_isf!(ϕ::AbstractMatrix{<:Real}, ϕ₀::AbstractMatrix{<:Real},
     return ϕ
 end
 
-function get_isf(pf::DCPowerFlow, cont::Tuple{Real,Real}, c::Integer, islands::Vector, 
+function calc_isf(pf::DCPowerFlow, cont::Tuple{Real,Real}, c::Integer, islands::Vector, 
     island::Integer, island_b::Vector{<:Integer}
 )
-    get_isf!(pf.mbn_tmp, pf.ϕ, islands[island], island_b)
+    calc_isf!(pf.mbn_tmp, pf.ϕ, islands[island], island_b)
     return pf.mbn_tmp
 end
 
@@ -180,24 +180,24 @@ end
 
 function calculate_island_line_flows(pf::DCPowerFlow, cont::Tuple{Integer,Integer}, cont_branch::Integer, Pᵢ::AbstractVector{<:Real})
     island, island_b = handle_islands(pf.B, pf.DA, cont, cont_branch, pf.slack)
-    ptdf = get_isf(pf.DA, pf.B, cont, cont_branch, pf.slack, island, island_b)
+    ptdf = calc_isf(pf.DA, pf.B, cont, cont_branch, pf.slack, island, island_b)
     return ptdf * Pᵢ[island]
 end
 
-function get_contingency_ptdf(opf::OPFsystem, pf::DCPowerFlow)
-    contids = [(x, get_bus_idx(opf.branches[x], opf.idx)) for x in indexin(opf.contingencies, opf.branches)]
+function calc_contingency_ptdf(opf::OPFsystem, pf::DCPowerFlow)
+    contids = [(x, calc_bus_idx(opf.branches[x], opf.idx)) for x in indexin(opf.contingencies, opf.branches)]
     ptdf = Array{Float64}(undef, size(pf.ϕ, 1), size(pf.ϕ, 2), length(opf.contingencies))
     # for i in eachindex(contids)
     Threads.@threads for i in eachindex(contids)
         (cont_branch, cont) = contids[i]
         if !is_islanded(pf, cont, cont_branch)
-            get_isf!(ptdf[:, :, i], pf.X, pf.B, pf.DA, cont, cont_branch)
+            calc_isf!(ptdf[:, :, i], pf.X, pf.B, pf.DA, cont, cont_branch)
         else
             islands = island_detection_thread_safe(pf.B, cont[1], cont[2])
             island = find_ref_island(islands, pf.slack)
             island_b = find_island_branches(islands[island], pf.DA, cont_branch)
             fill!(ptdf[:, :, i], zero(Float64))
-            get_isf!(ptdf[island_b, islands[island], i], pf.DA, pf.B, cont, cont_branch, pf.slack)
+            calc_isf!(ptdf[island_b, islands[island], i], pf.DA, pf.B, cont, cont_branch, pf.slack)
         end
     end
     return ptdf

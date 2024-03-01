@@ -23,12 +23,12 @@ function DCPowerFlow(branches::AbstractVector{<:Tuple{T2,T2}}, susceptance::Abst
     A = calc_A(branches, numnodes)
     DA = calc_DA(A, susceptance)
     B = calc_B(A, DA)
-    K = get_klu(B, slack)
-    ϕ = get_isf(K, DA, slack)
+    K = calc_klu(B, slack)
+    ϕ = calc_isf(K, DA, slack)
     set_tol_zero!(ϕ)
     X = calc_X(K, slack)
     return DCPowerFlow{T1,T2}(DA, B, K, X, ϕ, zeros(T1, numnodes), zeros(T1, length(branches)), slack,
-        zeros(T1, size(DA)), get_klu(B, slack), zeros(T1, size(X)), zeros(T1, size(ϕ)), zeros(T1, numnodes), zeros(T1, length(branches)))
+        zeros(T1, size(DA)), calc_klu(B, slack), zeros(T1, size(X)), zeros(T1, size(ϕ)), zeros(T1, numnodes), zeros(T1, length(branches)))
 end
 DCPowerFlow(nodes::AbstractVector{<:Bus}, branches::AbstractVector{<:Branch}, idx::Dict{<:Int,<:Int}) =
     DCPowerFlow(get_bus_idx.(branches, [idx]), PowerSystems.get_series_susceptance.(branches), length(nodes), find_slack(nodes)[1])
@@ -208,14 +208,14 @@ function calc_B(branches::AbstractVector{<:Branch}, idx::Dict{<:Int,<:Integer}, 
     return B
 end
 
-function get_klu!(A::SparseArrays.SparseMatrixCSC{T1, T2}, slack::Integer) where {T1<:Real,T2<:Integer}
+function calc_klu!(A::SparseArrays.SparseMatrixCSC{T1, T2}, slack::Integer) where {T1<:Real,T2<:Integer}
     A[:, slack] .= zero(T1)
     A[slack, :] .= zero(T1)
     A[slack, slack] = one(T1)
     return KLU.klu(A)
 end
-get_klu(A::SparseArrays.SparseMatrixCSC, slack::Integer) =
-    get_klu!(copy(A), slack)
+calc_klu(A::SparseArrays.SparseMatrixCSC, slack::Integer) =
+    calc_klu!(copy(A), slack)
 
 """ Calculate the inverse of the admittance matrix.
     X must be filled with the values of B """
@@ -233,7 +233,7 @@ end
 """ Calculate the inverse of the admittance matrix """
 function calc_X!(X::Matrix{<:Real}, B::AbstractMatrix{T}, slack::Integer) where {T<:Real}
     copy!(X, B)
-    calc_X!(X, get_klu(B, slack), slack)
+    calc_X!(X, calc_klu(B, slack), slack)
     return X
 end
 calc_X(B::AbstractMatrix{<:Real}, slack::Integer) = calc_X!(Matrix(B), B, slack)
@@ -254,23 +254,23 @@ calc_isf!(ϕ::AbstractMatrix{<:Real}, DA::AbstractMatrix{<:Real}, X::AbstractMat
     LinearAlgebra.mul!(ϕ, DA, X)
 
 """ Make the isf-matrix """
-function get_isf(K::KLU.KLUFactorization{T,<:Integer}, DA::AbstractMatrix{T}, slack::Integer
+function calc_isf(K::KLU.KLUFactorization{T,<:Integer}, DA::AbstractMatrix{T}, slack::Integer
 ) where {T<:Real}
     ϕ = Matrix(DA')
     KLU.solve!(K, ϕ)
     ϕ[slack, :] .= zero(T)
     return ϕ'
 end
-function get_isf!(B::SparseArrays.SparseMatrixCSC{T,<:Integer}, DA::AbstractMatrix{T}, slack::Integer
+function calc_isf!(B::SparseArrays.SparseMatrixCSC{T,<:Integer}, DA::AbstractMatrix{T}, slack::Integer
 ) where {T<:Real}
-    return get_isf(get_klu(B, slack), DA, slack)
+    return calc_isf(calc_klu(B, slack), DA, slack)
 end
-function get_isf(branches::AbstractVector{<:Branch}, nodes::AbstractVector{<:Bus},
+function calc_isf(branches::AbstractVector{<:Branch}, nodes::AbstractVector{<:Bus},
     idx::Dict{<:Int,<:Integer}=get_nodes_idx(nodes), slack::Integer=find_slack(nodes)[1])
     A = calc_A(branches, length(nodes), idx)
     DA = calc_DA(A, PowerSystems.get_series_susceptance.(branches))
     B = calc_B(A, DA)
-    return get_isf!(B, DA, slack)
+    return calc_isf!(B, DA, slack)
 end
 
 function calc_isf_vec!(ϕ_vec::Vector{T}, K::KLU.KLUFactorization{T,<:Integer}, DA::AbstractMatrix{T}, branch::Integer
@@ -292,7 +292,7 @@ end
 """ Find voltage angles from the B-matrix and injected power. Change θ """
 _calc_θ!(θ::AbstractVector{T}, B::SparseArrays.SparseMatrixCSC{T,<:Integer}, P::AbstractVector{T}, slack::Integer
 ) where {T<:Real} =
-    _calc_θ!(θ, get_klu(B, slack), P, slack)
+    _calc_θ!(θ, calc_klu(B, slack), P, slack)
 calc_θ!(B::AbstractMatrix{T}, P::AbstractVector{T}, slack::Integer) where {T<:Real} =
     _calc_θ!(Vector{T}(undef, length(P)), B, P, slack)
 

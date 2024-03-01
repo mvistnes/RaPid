@@ -186,9 +186,9 @@ function run_benders!(
             end
             if !isempty(olc) || !isempty(olcc) || !isempty(olccx) # ptdf calculation is more computational expensive than line flow
                 if is_islanded(pf, cont[2], cont[1])
-                    ptdf = get_isf(pf, cont[2], cont[1], islands, island, island_b)
+                    ptdf = calc_isf(pf, cont[2], cont[1], islands, island, island_b)
                 else
-                    ptdf = get_isf(pf, cont[2], cont[1])
+                    ptdf = calc_isf(pf, cont[2], cont[1])
                     set_tol_zero!(ptdf)
                 end
 
