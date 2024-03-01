@@ -65,11 +65,11 @@ function print_corrective_values(components::AbstractVector{<:Component}, varref
     end
 end
 
-function print_results(opf::OPFsystem, mod::Model)
-    print_variabels(opf.ctrl_generation, mod[:pg0])
-    print_variabels(opf.dc_branches, mod[:pfdc0])
-    print_variabels(opf.renewables, mod[:pr0])
-    print_variabels(opf.demands, mod[:ls0])
+function print_results(opf::OPFsystem, m::Model)
+    print_variabels(opf.ctrl_generation, m[:pg0])
+    print_variabels(opf.dc_branches, m[:pfdc0])
+    print_variabels(opf.renewables, m[:pr0])
+    print_variabels(opf.demands, m[:ls0])
 end
 
 function print_contingency_results(opf::OPFsystem, Pc::Dict{<:Integer, ExprC}, 
@@ -159,16 +159,16 @@ function print_contingency_P(case::Case)
     end
 end
 
-function print_active_power(opf::OPFsystem, mod::Model)
+function print_active_power(opf::OPFsystem, m::Model)
     list = make_list(opf, opf.nodes)
     xprint(x, val) = @printf("%6.3f:%s,\t", val, x.name)
     sort_x!(list) = sort!(list, by=x -> x.name)
     print("       Bus   Total  Injections...")
     tot = 0.0
     for x in list
-        val_g = value.(mod[:pg0][x.ctrl_generation])
-        val_d = value.(mod[:pr][x.renewables]) - value.(mod[:pr0][x.renewables])
-        val_r = -value.(mod[:pd][x.demands]) + value.(mod[:ls0][x.demands])
+        val_g = value.(m[:pg0][x.ctrl_generation])
+        val_d = value.(m[:pr][x.renewables]) - value.(m[:pr0][x.renewables])
+        val_r = -value.(m[:pd][x.demands]) + value.(m[:ls0][x.demands])
         b_tot = sum(val_g, init=0.0) + sum(val_d, init=0.0) + sum(val_r, init=0.0)
         tot += b_tot
         @printf "\n%10s  %6.3f  " x.node.name b_tot
@@ -179,9 +179,9 @@ function print_active_power(opf::OPFsystem, mod::Model)
     @printf("\n       Sum %10.6f\n", tot)
 end
 
-function get_power_flow(opf::OPFsystem, mod::Model; subset::AbstractVector{<:Integer}=Int64[])
+function get_power_flow(opf::OPFsystem, m::Model; subset::AbstractVector{<:Integer}=Int64[])
     br_names = PowerSystems.get_name.(opf.branches)
-    flow = calculate_line_flows(get_isf(opf.branches, opf.nodes), get_net_Pᵢ(mod))
+    flow = calculate_line_flows(get_isf(opf.branches, opf.nodes), get_net_Pᵢ(m))
     rate = get_rate.(opf.branches)
     if !isempty(subset)
         br_names = br_names[subset]
@@ -191,10 +191,10 @@ function get_power_flow(opf::OPFsystem, mod::Model; subset::AbstractVector{<:Int
     return Dict("name" => br_names, "flow" => flow, "rate" => rate)
 end
 
-function print_power_flow(opf::OPFsystem, mod::Model; subset::AbstractVector{<:Integer}=Int64[],
+function print_power_flow(opf::OPFsystem, m::Model; subset::AbstractVector{<:Integer}=Int64[],
     all=true, sep::String=" ", risky_flow=0.9, atol=1e-14
 )
-    vals = get_power_flow(opf, mod, subset=subset)
+    vals = get_power_flow(opf, m, subset=subset)
     if !isempty(subset)
         all=true
     end
@@ -219,7 +219,7 @@ function print_power_flow(names::AbstractVector{String}, flow::AbstractVector,
     end
 end
 
-function get_contingency_power_flow(opf::OPFsystem, mod::Model, pf::DCPowerFlow, 
+function get_contingency_power_flow(opf::OPFsystem, m::Model, pf::DCPowerFlow, 
     Pᵢ::AbstractVector{<:Real}, Pc::Dict, name::String; subset::AbstractVector{<:Integer}=Int64[]
 )
     islands = Vector{Vector{Int}}()
@@ -236,13 +236,13 @@ function get_contingency_power_flow(opf::OPFsystem, mod::Model, pf::DCPowerFlow,
             empty!(island_b)
             inodes = Int[]
         end
-        flow = calculate_contingency_line_flows!(ΔP, Pc, opf, mod, pf, Pᵢ, cont, i, c_obj, inodes, island_b)
+        flow = calculate_contingency_line_flows!(ΔP, Pc, opf, m, pf, Pᵢ, cont, i, c_obj, inodes, island_b)
         vals[name * c_obj.name] = isempty(subset) ? flow : flow[subset] 
     end
     return vals
 end
 
-function print_contingency_power_flow(opf::OPFsystem, mod::Model, pf::DCPowerFlow,
+function print_contingency_power_flow(opf::OPFsystem, m::Model, pf::DCPowerFlow,
     Pᵢ::AbstractVector{<:Real}, b_names::Vector{String}, linerates::Vector{<:Float64}, Pc::Dict; 
     subset::AbstractVector{<:Integer}=Int64[], all=true, sep::String=" ", risky_flow=0.9, atol=1e-14
 )
@@ -262,7 +262,7 @@ function print_contingency_power_flow(opf::OPFsystem, mod::Model, pf::DCPowerFlo
             empty!(island_b)
             inodes = Int[]
         end
-        flow = calculate_contingency_line_flows!(ΔP, Pc, opf, mod, pf, Pᵢ, cont, i, c_obj, inodes, island_b)
+        flow = calculate_contingency_line_flows!(ΔP, Pc, opf, m, pf, Pᵢ, cont, i, c_obj, inodes, island_b)
         if all || any(abs.(flow) .> linerates * risky_flow)
             println("Contingency ", c_obj.name)
             if isempty(subset)
@@ -325,15 +325,15 @@ function print_contingency_power_flow(case::Case;
     return
 end
 
-function get_generation_results(opf::OPFsystem, mod::Model)
+function get_generation_results(opf::OPFsystem, m::Model)
     (pg_lim_min, pg_lim_max) = split_pair(get_active_power_limits.(opf.ctrl_generation))
-    Pg = get_value(mod, :pg0)
+    Pg = get_value(m, :pg0)
     gen_bus = opf.ctrl_generation .|> get_bus .|> get_number
     return Dict("Bus_num" => gen_bus, "P" => Pg, "Min_P" => pg_lim_min, "Max_P" => pg_lim_max)
 end
 
-function print_generation_results(opf::OPFsystem, mod::Model)
-    vals = get_generation_results(opf, mod)
+function print_generation_results(opf::OPFsystem, m::Model)
+    vals = get_generation_results(opf, m)
     println(" Gen   Bus        Active Power Limits \n" *
             "  #     #       Pmin       Pg       Pmax  \n" *
             "----  -----   --------  --------  --------")

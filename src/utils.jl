@@ -143,11 +143,11 @@ make_prob(contingencies::AbstractVector, prob_min=0.1, prob_max=0.4) =
 get_system(fname::String) = System(joinpath("data", fname))
 
 function create_model(optimizer; time_limit_sec::Integer=10000, silent::Bool=true, debug::Bool=false)
-    mod = direct_model(optimizer)
-    set_string_names_on_creation(mod, debug)
-    MOI.set(mod, MOI.Silent(), silent) # supress output from the solver
-    set_time_limit_sec(mod, time_limit_sec)
-    return mod
+    m = direct_model(optimizer)
+    set_string_names_on_creation(m, debug)
+    MOI.set(m, MOI.Silent(), silent) # supress output from the solver
+    set_time_limit_sec(m, time_limit_sec)
+    return m
 end
 
 function check_values(val::Real, var::Component, typename::String; comp=<, atol=1e-5)
@@ -447,11 +447,11 @@ function get_in_list(type::Symbol, nodes::Vector{Int}, list::Vector)
     return res
 end
 
-find_in_model(mod::Model, ::ThermalGen, name::String) = mod[:pg0][name]
-find_in_model(mod::Model, ::HydroGen, name::String) = mod[:pg0][name]
-find_in_model(mod::Model, ::RenewableGen, name::String) = mod[:pr0][name]
-find_in_model(mod::Model, ::StaticLoad, name::String) = mod[:ls0][name]
-find_in_model(mod::Model, ::DCBranch, name::String) = mod[:pfdc0][name]
+find_in_model(m::Model, ::ThermalGen, name::String) = m[:pg0][name]
+find_in_model(m::Model, ::HydroGen, name::String) = m[:pg0][name]
+find_in_model(m::Model, ::RenewableGen, name::String) = m[:pr0][name]
+find_in_model(m::Model, ::StaticLoad, name::String) = m[:ls0][name]
+find_in_model(m::Model, ::DCBranch, name::String) = m[:pfdc0][name]
 
 """ Return the (first) slack bus in the system. 
 Return: slack bus number in nodes. The slack bus.
@@ -624,35 +624,35 @@ get_low_dual(varref::VariableRef) = dual(LowerBoundRef(varref))
 get_high_dual(varref::VariableRef) = dual(UpperBoundRef(varref))
 
 """ This is a faster version of JuMP.value """
-get_value(mod::Model, symb::Symbol) =
-    MOI.get.([JuMP.backend(mod)], [MOI.VariablePrimal()], JuMP.index.(mod[symb]))
-get_value(mod::Model, var::JuMP.VariableRef) =
-    MOI.get(JuMP.backend(mod), MOI.VariablePrimal(), JuMP.index(var))
-get_value(mod::Model, var::Vector{JuMP.VariableRef})::Vector{Float64} =
-    MOI.get(JuMP.backend(mod), MOI.VariablePrimal(), JuMP.index.(var))
+get_value(m::Model, symb::Symbol) =
+    MOI.get.([JuMP.backend(m)], [MOI.VariablePrimal()], JuMP.index.(m[symb]))
+get_value(m::Model, var::JuMP.VariableRef) =
+    MOI.get(JuMP.backend(m), MOI.VariablePrimal(), JuMP.index(var))
+get_value(m::Model, var::Vector{JuMP.VariableRef})::Vector{Float64} =
+    MOI.get(JuMP.backend(m), MOI.VariablePrimal(), JuMP.index.(var))
 
-function get_variable_values(mod::Model)
+function get_variable_values(m::Model)
     vals = Dict{Symbol, Vector{Float64}}()
-    for obj in mod.obj_dict
+    for obj in m.obj_dict
         if typeof(last(obj)) <: Vector{VariableRef}
-            vals[first(obj)] = get_value(mod, first(obj))
+            vals[first(obj)] = get_value(m, first(obj))
         end
     end
     return vals
 end
 
-function get_variable_values(mod::Model, Pc::Dict{<:Int,T}) where {T<:Union{ExprC, ExprCC, ExprCCX}}
+function get_variable_values(m::Model, Pc::Dict{<:Int,T}) where {T<:Union{ExprC, ExprCC, ExprCCX}}
     vals = Dict(x => Dict{Int, Vector{Float64}}() for x in fieldnames(T))
     for (c, cont) in Pc
         for symb in fieldnames(T)
-            vals[symb][c] = get_value(mod, getfield(cont, symb))
+            vals[symb][c] = get_value(m, getfield(cont, symb))
         end
     end
     return vals
 end
 
 """ Return the net power injected at each node. """
-get_net_Pᵢ(mod::Model) = get_value(mod, :p0)
+get_net_Pᵢ(m::Model) = get_value(m, :p0)
 
 function get_net(power_func::Function, opf::OPFsystem)
     vals = zeros(length(opf.nodes))
@@ -675,40 +675,40 @@ get_net_P(opf::OPFsystem) = get_net(get_active_power, opf)
 get_net_Q(opf::OPFsystem) = get_net(get_reactive_power, opf)
 
 """ Return active power from renweables and demands at each node. """
-function get_Pd!(P::Vector{<:Real}, opf::OPFsystem, mod::Model)
-    P .+= opf.mrx' * get_value(mod, :pr) - opf.mdx' * get_value(mod, :pd)
+function get_Pd!(P::Vector{<:Real}, opf::OPFsystem, m::Model)
+    P .+= opf.mrx' * get_value(m, :pr) - opf.mdx' * get_value(m, :pd)
     return P
 end
-get_Pd(opf::OPFsystem, mod::Model) = get_Pd!(zeros(length(opf.nodes)), opf, mod)
+get_Pd(opf::OPFsystem, m::Model) = get_Pd!(zeros(length(opf.nodes)), opf, m)
 
 """ Return power shed from renewables and demands at each node. """
-function get_Pshed!(P::Vector{<:Real}, opf::OPFsystem, mod::Model)
-    P .+= opf.mdx' * get_value(mod, :ls0) - opf.mrx' * get_value(mod, :pr0)
+function get_Pshed!(P::Vector{<:Real}, opf::OPFsystem, m::Model)
+    P .+= opf.mdx' * get_value(m, :ls0) - opf.mrx' * get_value(m, :pr0)
     return P
 end
-get_Pshed(opf::OPFsystem, mod::Model) = get_Pshed!(zeros(length(opf.nodes)), opf, mod)
+get_Pshed(opf::OPFsystem, m::Model) = get_Pshed!(zeros(length(opf.nodes)), opf, m)
 
 """ Return the power injected by controlled generation at each node. """
-function get_Pgen!(P::Vector{<:Real}, opf::OPFsystem, mod::Model)
-    P .+= opf.mgx' * get_value(mod, :pg0) + opf.mdcx' * get_value(mod, :pfdc0)
+function get_Pgen!(P::Vector{<:Real}, opf::OPFsystem, m::Model)
+    P .+= opf.mgx' * get_value(m, :pg0) + opf.mdcx' * get_value(m, :pfdc0)
     return P
 end
-get_Pgen(opf::OPFsystem, mod::Model) = get_Pgen!(zeros(length(opf.nodes)), opf, mod)
+get_Pgen(opf::OPFsystem, m::Model) = get_Pgen!(zeros(length(opf.nodes)), opf, m)
 
 " Return the controlled generation and power shedding at each node. "
-function get_controllable(opf::OPFsystem, mod::Model)
-    P = get_Pgen(opf, mod)
-    get_Pshed!(P, opf, mod)
+function get_controllable(opf::OPFsystem, m::Model)
+    P = get_Pgen(opf, m)
+    get_Pshed!(P, opf, m)
     return P
 end
 
 " Calculate the severity index for the system based on line loading "
-function calc_severity(opf::OPFsystem, mod::Model, lim::Real=0.9)
+function calc_severity(opf::OPFsystem, m::Model, lim::Real=0.9)
     rate = make_named_array(get_rate, get_branches(opf.sys))
     sev = 0
     for c in 1:length(opf.contingencies)
         for l in PowerSystems.get_name.(get_branches(opf.sys))
-            sev += calc_line_severity(value(mod[:pfc][l, c]), rate[l], lim)
+            sev += calc_line_severity(value(m[:pfc][l, c]), rate[l], lim)
         end
     end
     return sev

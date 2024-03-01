@@ -77,7 +77,7 @@ function opf_base(type::OPF, system::System, optimizer;
     @assert type.Base
     assert(type)
     @assert !type.C2F | !iszero(p_failure)
-    mod = create_model(optimizer, time_limit_sec=time_limit_sec, silent=silent, debug=debug)
+    m = create_model(optimizer, time_limit_sec=time_limit_sec, silent=silent, debug=debug)
     opf = isempty(voll) ? opfsystem(system) : opfsystem(system, voll, contingencies, prob, ramp_mult)
     pf = DCPowerFlow(opf.nodes, opf.branches, opf.idx)
     
@@ -89,7 +89,7 @@ function opf_base(type::OPF, system::System, optimizer;
 
     oplim = oplimits(opf, max_shed, max_curtail, dist_slack, ramp_mult, ramp_minutes, p_failure, short_term_multi, long_term_multi)
 
-    @variables(mod, begin
+    @variables(m, begin
         p0[n in 1:length(opf.nodes)]
         # active power injection on each node
         oplim.pg_lim_min[g] <= pg0[g in 1:length(opf.ctrl_generation)] <= oplim.pg_lim_max[g]
@@ -104,84 +104,84 @@ function opf_base(type::OPF, system::System, optimizer;
         # renewable curtailment variables
     end)
 
-    @objective(mod, Min, sum(c.var * g for (c, g) in zip(opf.cost_ctrl_gen, pg0)) + sum(opf.voll' * ls0) + sum(pr0 * 1))
-    # @objective(mod, Min, sum(c[1] * g^2 + c[2] * g for (c, g) in zip(opf.cost_ctrl_gen, pg0)) + sum(opf.voll' * ls0) + sum(pr0 * 1))
+    @objective(m, Min, sum(c.var * g for (c, g) in zip(opf.cost_ctrl_gen, pg0)) + sum(opf.voll' * ls0) + sum(pr0 * 1))
+    # @objective(m, Min, sum(c[1] * g^2 + c[2] * g for (c, g) in zip(opf.cost_ctrl_gen, pg0)) + sum(opf.voll' * ls0) + sum(pr0 * 1))
 
     JuMP.fix.(pd, oplim.pd_lim)
     JuMP.fix.(pr, oplim.pr_lim)
     if typeof(oplim.max_shed) <: Real
-        @constraint(mod, sum_max_shed, sum(ls0) <= oplim.max_shed)
+        @constraint(m, sum_max_shed, sum(ls0) <= oplim.max_shed)
     end
 
-    @expression(mod, inj_p0, opf.mgx' * pg0)
+    @expression(m, inj_p0, opf.mgx' * pg0)
     add_to_expression!.(inj_p0, opf.mrx' * (pr - pr0))
     add_to_expression!.(inj_p0, opf.mdcx' * pfdc0)
     add_to_expression!.(inj_p0, opf.mdx' * (ls0 - pd))
-    @constraint(mod, injected_power, inj_p0 .== p0)
+    @constraint(m, injected_power, inj_p0 .== p0)
 
-    # add_branch_constraints!(mod, pf.ϕ, p0, oplim.branch_rating)
-    @expression(mod, balance, sum(pg0, init=0.0))
+    # add_branch_constraints!(m, pf.ϕ, p0, oplim.branch_rating)
+    @expression(m, balance, sum(pg0, init=0.0))
     add_to_expression!.(balance, pr)
     add_to_expression!.(balance, -pr0)
     add_to_expression!.(balance, -pd)
     add_to_expression!.(balance, ls0)
-    @constraint(mod, power_balance, balance == 0.0)
+    @constraint(m, power_balance, balance == 0.0)
 
     if any([type.P, type.C1, type.C2, type.C2F])
-        return add_all_contingencies!(type, opf, oplim, mod, pf, brc_up, brc_down, Pc, Pcc, Pccx)
+        return add_all_contingencies!(type, opf, oplim, m, pf, brc_up, brc_down, Pc, Pcc, Pccx)
     end
-    return mod, opf, pf, oplim, brc_up, brc_down, Pc, Pcc, Pccx
+    return m, opf, pf, oplim, brc_up, brc_down, Pc, Pcc, Pccx
 end
 
 " Add all constraints to the model "
-function add_branch_constraints!(mod::Model, ptdf::AbstractMatrix{<:Real}, p::AbstractVector{VariableRef}, 
+function add_branch_constraints!(m::Model, ptdf::AbstractMatrix{<:Real}, p::AbstractVector{VariableRef}, 
     brc_up::Dict{<:Integer, ConstraintRef}, brc_down::Dict{<:Integer, ConstraintRef}, rating::AbstractVector{<:Real}
 )
     for i = axes(ptdf,1)
         # ptdf0 = GenericAffExpr(0.0, Pair.(p, ptdf[i,:])) 
-        ptdf0 = @expression(mod, AffExpr())
+        ptdf0 = @expression(m, AffExpr())
         for j in axes(ptdf,2)
             add_to_expression!(ptdf0, ptdf[i,j], p[j])
         end
-        brc_down[i] = @constraint(mod, ptdf0 + rating[i] >= 0.0)
-        brc_up[i] = @constraint(mod, ptdf0 - rating[i] <= 0.0)
+        brc_down[i] = @constraint(m, ptdf0 + rating[i] >= 0.0)
+        brc_up[i] = @constraint(m, ptdf0 - rating[i] <= 0.0)
     end
     return mod
 end
 
 " Add a branch constraint for branch to the model "
-function add_branch_constraint!(mod::Model, pf::DCPowerFlow, p::AbstractVector{VariableRef}, 
+function add_branch_constraint!(m::Model, pf::DCPowerFlow, p::AbstractVector{VariableRef}, 
     brc_up::Dict{<:Integer, ConstraintRef}, brc_down::Dict{<:Integer, ConstraintRef}, branch::Integer, rating::Real
 )
     # ptdf = calc_isf_vec(pf, branch)
     ptdf = view(pf.ϕ, branch, :)
     # ptdf0 = GenericAffExpr(0.0, Pair.(p, ptdf[i,:])) 
-    ptdf0 = @expression(mod, AffExpr())
+    ptdf0 = @expression(m, AffExpr())
     for (i,j) in zip(ptdf, p)
         add_to_expression!(ptdf0, i, j)
     end
-    brc_down[c] = @constraint(mod, ptdf0 + rating >= 0.0)
-    brc_up[c] = @constraint(mod, ptdf0 - rating <= 0.0)
+    brc_down[c] = @constraint(m, ptdf0 + rating >= 0.0)
+    brc_up[c] = @constraint(m, ptdf0 - rating <= 0.0)
     return mod
 end
 
 " Add branch limits to overloaded branches "
-function constrain_branches!(mod::Model, pf::DCPowerFlow, oplim::Oplimits, brc_up::Dict{<:Integer, ConstraintRef}, brc_down::Dict{<:Integer, ConstraintRef}, 
+function constrain_branches!(m::Model, pf::DCPowerFlow, oplim::Oplimits, brc_up::Dict{<:Integer, ConstraintRef}, brc_down::Dict{<:Integer, ConstraintRef}, 
     total_solve_time::Real, atol::Real=1e-6
 )
-    # if !has_values(mod)
+    # if !has_values(m)
         # Note: While using a direct_model, this check fails after the model is modified for some solvers
-        total_solve_time = update_model!(mod, pf, total_solve_time)
+        total_solve_time = update_model!(m, pf, total_solve_time)
     # end
     while true
         ol_br = find_overloaded_branches(pf.F, oplim.branch_rating, atol)
         isempty(ol_br) && break 
-        termination_status(mod) != JuMP.OPTIMAL && break
+        termination_status(m) != JuMP.OPTIMAL && break
         for br in ol_br
-            add_branch_constraint!(mod, pf, mod[:p0], brc_up, brc_down, br, oplim.branch_rating[br])
+            add_branch_constraint!(m, pf, m[:p0], brc_up, brc_down, br, oplim.branch_rating[br])
             @info "Branch $br added"
         end
-        total_solve_time = update_model!(mod, pf, total_solve_time)
+        total_solve_time = update_model!(m, pf, total_solve_time)
     end
     return total_solve_time
 end
@@ -189,20 +189,20 @@ constrain_branches!(case::Case, total_solve_time::Real, atol::Real=1e-6) =
     constrain_branches!(case.model, case.pf, case.oplim, case.brc_up, case.brc_down, total_solve_time, atol)
 
 """ Solve model and update the power flow object """
-function update_model!(mod::Model, pf::DCPowerFlow, total_solve_time::Real)
-    solve_model!(mod)
-    total_solve_time += solve_time(mod)
-    Pᵢ = get_value(mod, :p0)
+function update_model!(m::Model, pf::DCPowerFlow, total_solve_time::Real)
+    solve_model!(m)
+    total_solve_time += solve_time(m)
+    Pᵢ = get_value(m, :p0)
     calc_θ!(pf, Pᵢ)
     calc_Pline!(pf)
     return total_solve_time
 end
 
-function add_all_contingencies!(type::OPF, opf::OPFsystem, oplim::Oplimits, mod::Model,
+function add_all_contingencies!(type::OPF, opf::OPFsystem, oplim::Oplimits, m::Model,
     pf::DCPowerFlow, brc_up::Dict{<:Integer, ConstraintRef}, brc_down::Dict{<:Integer, ConstraintRef}, 
     Pc::Dict{<:Integer,ExprC}, Pcc::Dict{<:Integer,ExprCC}, Pccx::Dict{<:Integer,ExprCCX}
 )
-    obj = objective_function(mod)
+    obj = objective_function(m)
     set_dist_slack!(pf, opf, oplim.dist_slack)
     for (i, c_obj) in enumerate(opf.contingencies)
         cont = typesort_component(c_obj, opf)
@@ -215,96 +215,96 @@ function add_all_contingencies!(type::OPF, opf::OPFsystem, oplim::Oplimits, mod:
             islands = Vector{Vector{Int64}}[]
             island = 0
         end
-        type.P && add_contingency!(opf, pf, oplim, mod, brc_up, brc_down, ptdf, i)
-        type.C1 && add_contingency!(Pc, opf, pf, oplim, mod, brc_up, brc_down, obj, islands, island, ptdf, i)
-        type.C2 && add_contingency!(Pcc, opf, pf, oplim, mod, brc_up, brc_down, obj, islands, island, ptdf, i)
-        type.C2F && add_contingency!(Pccx, opf, pf, oplim, mod, brc_up, brc_down, obj, islands, island, ptdf, i)
+        type.P && add_contingency!(opf, pf, oplim, m, brc_up, brc_down, ptdf, i)
+        type.C1 && add_contingency!(Pc, opf, pf, oplim, m, brc_up, brc_down, obj, islands, island, ptdf, i)
+        type.C2 && add_contingency!(Pcc, opf, pf, oplim, m, brc_up, brc_down, obj, islands, island, ptdf, i)
+        type.C2F && add_contingency!(Pccx, opf, pf, oplim, m, brc_up, brc_down, obj, islands, island, ptdf, i)
 
         @debug "Contingency $(get_name(c_obj)) is added"
     end
-    set_objective_function(mod, obj)
-    return mod, opf, pf, oplim, brc_up, brc_down, Pc, Pcc, Pccx
+    set_objective_function(m, obj)
+    return m, opf, pf, oplim, brc_up, brc_down, Pc, Pcc, Pccx
 end
 add_all_contingencies!(type::OPF, case::Case) = 
     add_all_contingencies!(type, case.opf, case.opflim, case.model, case.pf, case.brc_up, case.brc_down, case.Pc, case.Pcc, case.Pccx)
 
-function add_contingency!(opf::OPFsystem, pf::DCPowerFlow, oplim::Oplimits, mod::Model, 
+function add_contingency!(opf::OPFsystem, pf::DCPowerFlow, oplim::Oplimits, m::Model, 
     brc_up::Dict{<:Integer, ConstraintRef}, brc_down::Dict{<:Integer, ConstraintRef}, 
     ptdf::AbstractMatrix{<:Real}, c::Integer
 )
-    p = @variable(mod, [n in 1:length(opf.nodes)], base_name = "p"*string(c))
-    @constraint(mod, mod[:inj_p0] .== p)
-    add_branch_constraints!(mod, ptdf, p, brc_up, brc_down, oplim.branch_rating * oplim.short_term_multi)
-    # add_branch_constraints!(mod, opf, pf, p, oplim.branch_rating * oplim.short_term_multi, c)
+    p = @variable(m, [n in 1:length(opf.nodes)], base_name = "p"*string(c))
+    @constraint(m, m[:inj_p0] .== p)
+    add_branch_constraints!(m, ptdf, p, brc_up, brc_down, oplim.branch_rating * oplim.short_term_multi)
+    # add_branch_constraints!(m, opf, pf, p, oplim.branch_rating * oplim.short_term_multi, c)
 end
 
-function add_contingency!(Pc::Dict{<:Integer,ExprC}, opf::OPFsystem, pf::DCPowerFlow, oplim::Oplimits, mod::Model, 
+function add_contingency!(Pc::Dict{<:Integer,ExprC}, opf::OPFsystem, pf::DCPowerFlow, oplim::Oplimits, m::Model, 
     brc_up::Dict{<:Integer, ConstraintRef}, brc_down::Dict{<:Integer, ConstraintRef}, obj::AbstractJuMPScalar, islands::Vector,
     island::Integer, ptdf::AbstractMatrix{<:Real}, c::Integer
 )
-    pc = @variable(mod, [n in 1:length(opf.nodes)], base_name = "pc"*string(c))
-    pgu, pgd, prc, lsc = init_P!(Pc, opf, oplim, mod, obj, islands, island, c)
+    pc = @variable(m, [n in 1:length(opf.nodes)], base_name = "pc"*string(c))
+    pgu, pgd, prc, lsc = init_P!(Pc, opf, oplim, m, obj, islands, island, c)
     Pc[c].pc = pc
 
-    inj_pc = @expression(mod, opf.mgx' * (mod[:pg0] + pgu - pgd))
-    add_to_expression!.(inj_pc, opf.mrx' * (mod[:pr] - prc))
-    add_to_expression!.(inj_pc, opf.mdcx' * mod[:pfdc0])
-    add_to_expression!.(inj_pc, opf.mdx' * (lsc - mod[:pd]))
-    @constraint(mod, inj_pc .== pc)
+    inj_pc = @expression(m, opf.mgx' * (m[:pg0] + pgu - pgd))
+    add_to_expression!.(inj_pc, opf.mrx' * (m[:pr] - prc))
+    add_to_expression!.(inj_pc, opf.mdcx' * m[:pfdc0])
+    add_to_expression!.(inj_pc, opf.mdx' * (lsc - m[:pd]))
+    @constraint(m, inj_pc .== pc)
 
-    add_branch_constraints!(mod, ptdf, pc, brc_up, brc_down, oplim.branch_rating * oplim.short_term_multi)
-    # add_branch_constraints!(mod, opf, pf, pc, oplim.branch_rating * oplim.short_term_multi, c)
+    add_branch_constraints!(m, ptdf, pc, brc_up, brc_down, oplim.branch_rating * oplim.short_term_multi)
+    # add_branch_constraints!(m, opf, pf, pc, oplim.branch_rating * oplim.short_term_multi, c)
 end
 
-function add_contingency!(Pcc::Dict{<:Integer,ExprCC}, opf::OPFsystem, pf::DCPowerFlow, oplim::Oplimits, mod::Model, 
+function add_contingency!(Pcc::Dict{<:Integer,ExprCC}, opf::OPFsystem, pf::DCPowerFlow, oplim::Oplimits, m::Model, 
     brc_up::Dict{<:Integer, ConstraintRef}, brc_down::Dict{<:Integer, ConstraintRef}, obj::AbstractJuMPScalar, islands::Vector,
     island::Integer, ptdf::AbstractMatrix{<:Real}, c::Integer
 )
-    pcc = @variable(mod, [n in 1:length(opf.nodes)], base_name = "pcc"*string(c))
-    pgu, pgd, pfdccc, prcc, lscc = init_P!(Pcc, opf, oplim, mod, obj, islands, island, c)
+    pcc = @variable(m, [n in 1:length(opf.nodes)], base_name = "pcc"*string(c))
+    pgu, pgd, pfdccc, prcc, lscc = init_P!(Pcc, opf, oplim, m, obj, islands, island, c)
     Pcc[c].pcc = pcc
 
-    inj_pcc = @expression(mod, opf.mgx' * (mod[:pg0] + pgu - pgd))
-    add_to_expression!.(inj_pcc, opf.mrx' * (mod[:pr] - prcc))
+    inj_pcc = @expression(m, opf.mgx' * (m[:pg0] + pgu - pgd))
+    add_to_expression!.(inj_pcc, opf.mrx' * (m[:pr] - prcc))
     add_to_expression!.(inj_pcc, opf.mdcx' * pfdccc)
-    add_to_expression!.(inj_pcc, opf.mdx' * (lscc - mod[:pd]))
-    @constraint(mod, inj_pcc .== pcc)
+    add_to_expression!.(inj_pcc, opf.mdx' * (lscc - m[:pd]))
+    @constraint(m, inj_pcc .== pcc)
 
-    add_branch_constraints!(mod, ptdf, pcc, brc_up, brc_down, oplim.branch_rating * oplim.long_term_multi)
-    # add_branch_constraints!(mod, opf, pf, pcc, oplim.branch_rating * oplim.long_term_multi, c)
+    add_branch_constraints!(m, ptdf, pcc, brc_up, brc_down, oplim.branch_rating * oplim.long_term_multi)
+    # add_branch_constraints!(m, opf, pf, pcc, oplim.branch_rating * oplim.long_term_multi, c)
 end
 
-function add_contingency!(Pccx::Dict{<:Integer,ExprCCX}, opf::OPFsystem, pf::DCPowerFlow, oplim::Oplimits, mod::Model, 
+function add_contingency!(Pccx::Dict{<:Integer,ExprCCX}, opf::OPFsystem, pf::DCPowerFlow, oplim::Oplimits, m::Model, 
     brc_up::Dict{<:Integer, ConstraintRef}, brc_down::Dict{<:Integer, ConstraintRef}, obj::AbstractJuMPScalar, islands::Vector,
     island::Integer, ptdf::AbstractMatrix{<:Real}, c::Integer
 )
-    pccx = @variable(mod, [n in 1:length(opf.nodes)], base_name = "pccx"*string(c))
-    pgd, prcc, lscc = init_P!(Pccx, opf, oplim, mod, obj, islands, island, c)
+    pccx = @variable(m, [n in 1:length(opf.nodes)], base_name = "pccx"*string(c))
+    pgd, prcc, lscc = init_P!(Pccx, opf, oplim, m, obj, islands, island, c)
     Pccx[c].pccx = pccx
 
-    inj_pccx = @expression(mod, opf.mgx' * (mod[:pg0] - pgd))
-    add_to_expression!.(inj_pccx, opf.mrx' * (mod[:pr] - prcc))
-    add_to_expression!.(inj_pccx, opf.mdcx' * mod[:pfdc0])
-    add_to_expression!.(inj_pccx, opf.mdx' * (lscc - mod[:pd]))
-    @constraint(mod, inj_pccx .== pccx)
+    inj_pccx = @expression(m, opf.mgx' * (m[:pg0] - pgd))
+    add_to_expression!.(inj_pccx, opf.mrx' * (m[:pr] - prcc))
+    add_to_expression!.(inj_pccx, opf.mdcx' * m[:pfdc0])
+    add_to_expression!.(inj_pccx, opf.mdx' * (lscc - m[:pd]))
+    @constraint(m, inj_pccx .== pccx)
 
-    add_branch_constraints!(mod, ptdf, pccx, brc_up, brc_down, oplim.branch_rating * oplim.long_term_multi)
-    # add_branch_constraints!(mod, opf, pf, pccx, oplim.branch_rating * oplim.long_term_multi, c)
+    add_branch_constraints!(m, ptdf, pccx, brc_up, brc_down, oplim.branch_rating * oplim.long_term_multi)
+    # add_branch_constraints!(m, opf, pf, pccx, oplim.branch_rating * oplim.long_term_multi, c)
 end
 
 
-function init_P!(Pc::Dict{<:Integer,ExprC}, opf::OPFsystem, oplim::Oplimits, mod::Model, obj::AbstractJuMPScalar, 
+function init_P!(Pc::Dict{<:Integer,ExprC}, opf::OPFsystem, oplim::Oplimits, m::Model, obj::AbstractJuMPScalar, 
     islands::Vector, island::Integer, c::Integer
 )
-    pgu = @variable(mod, [g in 1:length(opf.ctrl_generation)], base_name = "pgu"*string(c),
+    pgu = @variable(m, [g in 1:length(opf.ctrl_generation)], base_name = "pgu"*string(c),
         lower_bound = 0.0, upper_bound = oplim.rampup[g] * 0.0)
     # active power variables for the generators in contingencies ramp up 
-    pgd = @variable(mod, [g in 1:length(opf.ctrl_generation)], base_name = "pgd"*string(c),
+    pgd = @variable(m, [g in 1:length(opf.ctrl_generation)], base_name = "pgd"*string(c),
         lower_bound = 0.0) #, upper_bound = rampdown[g] * 0.0)
     # and ramp down
-    prc = @variable(mod, [d in 1:length(opf.renewables)], base_name = "prc"*string(c),
+    prc = @variable(m, [d in 1:length(opf.renewables)], base_name = "prc"*string(c),
         lower_bound = 0.0, upper_bound = oplim.pr_lim[d] * (typeof(oplim.max_curtail) <: Real ? 1.0 : oplim.max_curtail[d]))
-    lsc = @variable(mod, [d in 1:length(opf.demands)], base_name = "lsc"*string(c),
+    lsc = @variable(m, [d in 1:length(opf.demands)], base_name = "lsc"*string(c),
         lower_bound = 0.0, upper_bound = oplim.pd_lim[d] * (typeof(oplim.max_shed) <: Real ? 1.0 : oplim.max_shed[d]))
     Pc[c] = ExprC(VariableRef[], pgu, pgd, prc, lsc)
 
@@ -318,24 +318,24 @@ function init_P!(Pc::Dict{<:Integer,ExprC}, opf::OPFsystem, oplim::Oplimits, mod
     end
 
     # Add new constraints that limit the corrective variables within operating limits
-    balance_pc = @expression(mod, sum(lsc))
+    balance_pc = @expression(m, sum(lsc))
     add_to_expression!.(balance_pc, -prc)
     add_to_expression!.(balance_pc, pgu)
     add_to_expression!.(balance_pc, -pgd)
-    @constraint(mod, balance_pc == 0.0)
+    @constraint(m, balance_pc == 0.0)
     if isempty(islands)
-        @constraint(mod, mod[:pg0] .+ pgu .- pgd .>= oplim.pg_lim_min)
-        # @constraint(mod, mod[:pg0] .+ pgu .- pgd .<= oplim.pg_lim_max)
+        @constraint(m, m[:pg0] .+ pgu .- pgd .>= oplim.pg_lim_min)
+        # @constraint(m, m[:pg0] .+ pgu .- pgd .<= oplim.pg_lim_max)
         if typeof(oplim.max_shed) <: Real
-            @constraint(mod, sum(lsc) <= oplim.max_shed)
+            @constraint(m, sum(lsc) <= oplim.max_shed)
         end
     else
         itr = length(islands[island]) < 2 ? Int64[] : islands[island]
         for n in itr
             for g = opf.mgx[:,n].nzind
-                @constraints(mod, begin
-                    mod[:pg0][g] + pgu[g] - pgd[g] >= oplim.pg_lim_min[g]
-                    # mod[:pg0][g] + pgu[g] - pgd[g] <= oplim.pg_lim_max[g]
+                @constraints(m, begin
+                    m[:pg0][g] + pgu[g] - pgd[g] >= oplim.pg_lim_min[g]
+                    # m[:pg0][g] + pgu[g] - pgd[g] <= oplim.pg_lim_max[g]
                 end)
             end
         end
@@ -344,14 +344,14 @@ function init_P!(Pc::Dict{<:Integer,ExprC}, opf::OPFsystem, oplim::Oplimits, mod
             for n in itr, d in opf.mdx[:,n].nzind
                 add_to_expression!(expr, lsc[d])
             end
-            @constraint(mod, expr <= oplim.max_shed)
+            @constraint(m, expr <= oplim.max_shed)
         end
         itr = isempty(itr) ? (1:length(opf.nodes)) : islands[1:end.!=island]
         for in_vec in itr
             for n in in_vec
                 for g in opf.mgx[:,n].nzind
                     set_upper_bound(pgu[g], oplim.pg_lim_max[g] - oplim.pg_lim_min[g])
-                    @constraint(mod, mod[:pg0][g] + pgu[g] - pgd[g] == 0.0)
+                    @constraint(m, m[:pg0][g] + pgu[g] - pgd[g] == 0.0)
                 end
                 fix!(prc, oplim.pr_lim, opf.mrx[:,n].nzind)
                 fix!(lsc, oplim.pd_lim, opf.mdx[:,n].nzind)
@@ -361,21 +361,21 @@ function init_P!(Pc::Dict{<:Integer,ExprC}, opf::OPFsystem, oplim::Oplimits, mod
     return pgu, pgd, prc, lsc
 end
 
-function init_P!(Pcc::Dict{<:Integer,ExprCC}, opf::OPFsystem, oplim::Oplimits, mod::Model, obj::AbstractJuMPScalar, 
+function init_P!(Pcc::Dict{<:Integer,ExprCC}, opf::OPFsystem, oplim::Oplimits, m::Model, obj::AbstractJuMPScalar, 
     islands::Vector, island::Integer, c::Integer
 )
     # Add corrective variables
-    pgu = @variable(mod, [g in 1:length(opf.ctrl_generation)], base_name = @sprintf("pgu%s", c),
+    pgu = @variable(m, [g in 1:length(opf.ctrl_generation)], base_name = @sprintf("pgu%s", c),
         lower_bound = 0.0, upper_bound = oplim.rampup[g] * oplim.ramp_minutes)
     # active power variables for the generators in contingencies ramp up 
-    pgd = @variable(mod, [g in 1:length(opf.ctrl_generation)], base_name = @sprintf("pgd%s", c),
+    pgd = @variable(m, [g in 1:length(opf.ctrl_generation)], base_name = @sprintf("pgd%s", c),
         lower_bound = 0.0) #, upper_bound = rampdown[g] * ramp_minutes)
     # and ramp down
-    pfdccc = @variable(mod, [d in 1:length(opf.dc_branches)], base_name = @sprintf("pfdccc%s", c),
+    pfdccc = @variable(m, [d in 1:length(opf.dc_branches)], base_name = @sprintf("pfdccc%s", c),
         lower_bound = oplim.dc_lim_min[d], upper_bound = oplim.dc_lim_max[d])
-    prcc = @variable(mod, [r in 1:length(opf.renewables)], base_name = @sprintf("prcc%s", c),
+    prcc = @variable(m, [r in 1:length(opf.renewables)], base_name = @sprintf("prcc%s", c),
         lower_bound = 0.0, upper_bound = oplim.pr_lim[r] * (typeof(oplim.max_curtail) <: Real ? 1.0 : oplim.max_curtail[d]))
-    lscc = @variable(mod, [d in 1:length(opf.demands)], base_name = @sprintf("lscc%s", c),
+    lscc = @variable(m, [d in 1:length(opf.demands)], base_name = @sprintf("lscc%s", c),
         lower_bound = 0.0, upper_bound = oplim.pd_lim[d] * (typeof(oplim.max_shed) <: Real ? 1.0 : oplim.max_shed[d]))
     # load curtailment variables in in contingencies
     Pcc[c] = ExprCC(VariableRef[], pgu, pgd, pfdccc, prcc, lscc)
@@ -398,26 +398,26 @@ function init_P!(Pcc::Dict{<:Integer,ExprCC}, opf::OPFsystem, oplim::Oplimits, m
     end
 
     # Add new constraints that limit the corrective variables within operating limits
-    balance_pcc = @expression(mod, sum(pgu))
+    balance_pcc = @expression(m, sum(pgu))
     add_to_expression!.(balance_pcc, lscc)
     add_to_expression!.(balance_pcc, -pgd)
     add_to_expression!.(balance_pcc, -prcc)
-    @constraint(mod, balance_pcc == 0.0)
+    @constraint(m, balance_pcc == 0.0)
     if isempty(islands)
-        @constraints(mod, begin
-            mod[:pg0] .+ pgu .- pgd .>= oplim.pg_lim_min
-            mod[:pg0] .+ pgu .- pgd .<= oplim.pg_lim_max
+        @constraints(m, begin
+            m[:pg0] .+ pgu .- pgd .>= oplim.pg_lim_min
+            m[:pg0] .+ pgu .- pgd .<= oplim.pg_lim_max
         end)
         if typeof(oplim.max_shed) <: Real
-            @constraint(mod, sum(lscc) <= oplim.max_shed)
+            @constraint(m, sum(lscc) <= oplim.max_shed)
         end
     else
         itr = length(islands[island]) < 2 ? Int64[] : islands[island]
         for n in itr
             for g in opf.mgx[:,n].nzind
-                expr = @expression(mod, mod[:pg0][g] + pgu[g] - pgd[g])
-                @constraint(mod, expr >= oplim.pg_lim_min[g])
-                @constraint(mod, expr <= oplim.pg_lim_max[g])
+                expr = @expression(m, m[:pg0][g] + pgu[g] - pgd[g])
+                @constraint(m, expr >= oplim.pg_lim_min[g])
+                @constraint(m, expr <= oplim.pg_lim_max[g])
             end
         end
         if typeof(oplim.max_shed) <: Real
@@ -425,14 +425,14 @@ function init_P!(Pcc::Dict{<:Integer,ExprCC}, opf::OPFsystem, oplim::Oplimits, m
             for n in itr, d in opf.mdx[:,n].nzind
                 add_to_expression!(expr, lscc[d])
             end
-            @constraint(mod, expr <= oplim.max_shed)
+            @constraint(m, expr <= oplim.max_shed)
         end
         itr = isempty(itr) ? (1:length(opf.nodes)) : islands[1:end.!=island]
         for in_vec in itr
             for n in in_vec
                 for g in opf.mgx[:,n].nzind
                     set_upper_bound(pgu[g], oplim.pg_lim_max[g] - oplim.pg_lim_min[g])
-                    @constraint(mod, mod[:pg0][g] + pgu[g] - pgd[g] == 0.0)
+                    @constraint(m, m[:pg0][g] + pgu[g] - pgd[g] == 0.0)
                 end
                 fix!(pfdccc, opf.mdcx[:,n].nzind)
                 fix!(prcc, oplim.pr_lim, opf.mrx[:,n].nzind)
@@ -443,16 +443,16 @@ function init_P!(Pcc::Dict{<:Integer,ExprCC}, opf::OPFsystem, oplim::Oplimits, m
     return pgu, pgd, pfdccc, prcc, lscc
 end
 
-function init_P!(Pccx::Dict{<:Integer,ExprCCX}, opf::OPFsystem, oplim::Oplimits, mod::Model, obj::AbstractJuMPScalar, 
+function init_P!(Pccx::Dict{<:Integer,ExprCCX}, opf::OPFsystem, oplim::Oplimits, m::Model, obj::AbstractJuMPScalar, 
     islands::Vector, island::Integer, c::Integer
 )
     # Add corrective variables
-    pgd = @variable(mod, [g in 1:length(opf.ctrl_generation)], base_name = @sprintf("pgdx%s", c),
+    pgd = @variable(m, [g in 1:length(opf.ctrl_generation)], base_name = @sprintf("pgdx%s", c),
         lower_bound = 0.0)#, upper_bound = oplim.rampdown[g] * oplim.ramp_minutes)
     # and ramp down
-    prcc = @variable(mod, [r in 1:length(opf.renewables)], base_name = @sprintf("prccx%s", c),
+    prcc = @variable(m, [r in 1:length(opf.renewables)], base_name = @sprintf("prccx%s", c),
         lower_bound = 0.0, upper_bound = oplim.pr_lim[d] * (typeof(oplim.max_curtail) <: Real ? 1.0 : oplim.max_curtail[d]))
-    lscc = @variable(mod, [d in 1:length(opf.demands)], base_name = @sprintf("lsccx%s", c),
+    lscc = @variable(m, [d in 1:length(opf.demands)], base_name = @sprintf("lsccx%s", c),
         lower_bound = 0.0, upper_bound = oplim.pd_lim[d] * (typeof(oplim.max_shed) <: Real ? 1.0 : oplim.max_shed[d]))
     # load curtailment variables in in contingencies
     Pccx[c] = ExprCCX(VariableRef[], pgd, prcc, lscc)
@@ -463,16 +463,16 @@ function init_P!(Pccx::Dict{<:Integer,ExprCCX}, opf::OPFsystem, oplim::Oplimits,
     add_to_expression!(obj, opf.prob[c] * oplim.p_failure, sum(60 * pgd))
 
     # Add new constraints that limit the corrective variables within operating limits
-    balance_pccx = @expression(mod, sum(lscc))
+    balance_pccx = @expression(m, sum(lscc))
     add_to_expression!.(balance_pccx, -pgd)
-    @constraint(mod, balance_pccx == 0.0)
+    @constraint(m, balance_pccx == 0.0)
     if isempty(islands)
-        @constraint(mod, mod[:pg0] .- pgd .>= 0.0)
+        @constraint(m, m[:pg0] .- pgd .>= 0.0)
     else
         itr = length(islands[island]) < 2 ? Int64[] : islands[island]
         for n in itr
             for g = opf.mgx[:,n].nzind
-                @constraint(mod, mod[:pg0][g] - pgd[g] >= 0.0)
+                @constraint(m, m[:pg0][g] - pgd[g] >= 0.0)
             end
         end
         if typeof(oplim.max_shed) <: Real
@@ -480,13 +480,13 @@ function init_P!(Pccx::Dict{<:Integer,ExprCCX}, opf::OPFsystem, oplim::Oplimits,
             for n in itr, d in opf.mdx[:,n].nzind
                 add_to_expression!(expr, lscc[d])
             end
-            @constraint(mod, expr <= oplim.max_shed)
+            @constraint(m, expr <= oplim.max_shed)
         end
         itr = isempty(itr) ? (1:length(opf.nodes)) : islands[1:end.!=island]
         for in_vec in itr
             for n in in_vec
                 for g = opf.mgx[:,n].nzind
-                    @constraint(mod, mod[:pg0][g] - pgd[g] == 0.0)
+                    @constraint(m, m[:pg0][g] - pgd[g] == 0.0)
                 end
                 fix!(prcc, oplim.pr_lim, opf.mrx[:,n].nzind)
                 fix!(lscc, oplim.pd_lim, opf.mdx[:,n].nzind)
@@ -505,51 +505,51 @@ fix!(var::AbstractVector{VariableRef}, vec::AbstractVector) =
     JuMP.fix.(var[vec], 0.0; force=true)
 
 """ Force a variable to equal its current value in the model """
-fix_values!(mod::Model, symb::Symbol) = JuMP.fix.(mod[symb], get_value(mod, symb), force=true)
-fix_values!(mod::Model, var::AbstractVector{VariableRef}) = JuMP.fix.(var, get_value(mod, var), force=true)
+fix_values!(m::Model, symb::Symbol) = JuMP.fix.(m[symb], get_value(m, symb), force=true)
+fix_values!(m::Model, var::AbstractVector{VariableRef}) = JuMP.fix.(var, get_value(m, var), force=true)
 
 """ Fix all base case varibles to its current values in the model """
-function fix_base_case!(mod::Model)
-    fix_values!(mod, :pg0)
-    fix_values!(mod, :pfdc0)
-    fix_values!(mod, :ls0)
-    fix_values!(mod, :pr0)
+function fix_base_case!(m::Model)
+    fix_values!(m, :pg0)
+    fix_values!(m, :pfdc0)
+    fix_values!(m, :ls0)
+    fix_values!(m, :pr0)
 end
 
 """ Fix all contingency varibles to its current values in the model """
-function fix_contingencies!(mod::Model, P::Dict{<:Integer,<:ContExpr})
+function fix_contingencies!(m::Model, P::Dict{<:Integer,<:ContExpr})
     for (_, c) in P
         for symb in propertynames(c)
-            fix_values!(mod, getproperty(c, symb))
+            fix_values!(m, getproperty(c, symb))
         end
     end
 end
 
 """ Calculate the cost of VOLL for the provided variables """
-calc_cens(mod::Model, opf::OPFsystem, var::AbstractVector{VariableRef}) = sum(opf.voll .* get_value(mod, var))
+calc_cens(m::Model, opf::OPFsystem, var::AbstractVector{VariableRef}) = sum(opf.voll .* get_value(m, var))
 
 """ Calculate the cost of generation for the provided variables """
-calc_ctrl_cost(mod::Model, opf::OPFsystem, var::AbstractVector{VariableRef}, symb=:var) =
-    sum(getproperty(c, symb) * g for (c, g) in zip(opf.cost_ctrl_gen, get_value(mod, var)))
-# sum(c[1] * g^2 + c[2] * g for (c, g) in zip(opf.cost_ctrl_gen, get_value(mod, var)))
+calc_ctrl_cost(m::Model, opf::OPFsystem, var::AbstractVector{VariableRef}, symb=:var) =
+    sum(getproperty(c, symb) * g for (c, g) in zip(opf.cost_ctrl_gen, get_value(m, var)))
+# sum(c[1] * g^2 + c[2] * g for (c, g) in zip(opf.cost_ctrl_gen, get_value(m, var)))
 
 """ Calculate the cost of the modelled slack for all contingencies. """
 function calc_slack_cost(case::Case)
-    mod = case.model
+    m = case.model
     opf = case.opf
     pf = case.pf
     costs = zeros(length(opf.contingencies))
-    pg0 = get_value(mod, :pg0)
+    pg0 = get_value(m, :pg0)
     if isempty(case.oplim.dist_slack)
         slack_cost = sum(last.(get_generator_cost.(opf.ctrl_generation[opf.mgx[:,pf.slack].nzind])))
     else
         slack_cost = opf.mgx' * (getproperty.(opf.cost_ctrl_gen, :ramp) .* case.oplim.dist_slack .* pg0)
     end
     pg0 = opf.mgx' * pg0
-    pr = opf.mrx' * (get_value(mod, :pr) - get_value(mod, :pr0))
+    pr = opf.mrx' * (get_value(m, :pr) - get_value(m, :pr0))
     pr_cost = pr
-    pd = opf.mdx' * (get_value(mod, :pd) - get_value(mod, :ls0))
-    ls_cost = opf.mdx' * (opf.voll' * (get_value(mod, :pd) - get_value(mod, :ls0)))
+    pd = opf.mdx' * (get_value(m, :pd) - get_value(m, :ls0))
+    ls_cost = opf.mdx' * (opf.voll' * (get_value(m, :pd) - get_value(m, :ls0)))
     for (i, c_obj) in enumerate(opf.contingencies)
         cont = typesort_component(c_obj, opf)
         if is_islanded(pf, cont[2], cont[1])
@@ -558,37 +558,37 @@ function calc_slack_cost(case::Case)
             ΔP = sum(pg0[nodes]) + sum(pr[nodes]) - sum(pd[nodes])
             costs[i] = sum(slack_cost * abs(ΔP)) + sum(pr_cost[nodes]) + sum(ls_cost[nodes])
         elseif typeof(c_obj) <: StaticInjection
-            costs[i] = sum(slack_cost * value(mod[:pg0][cont[1]]))
+            costs[i] = sum(slack_cost * value(m[:pg0][cont[1]]))
         end
     end
     return costs
 end
 
 """ Calculate the base case cost """
-calc_objective(mod::Model, opf::OPFsystem) =
-    calc_ctrl_cost(mod, opf, mod[:pg0]) + calc_cens(mod, opf, mod[:ls0])
+calc_objective(m::Model, opf::OPFsystem) =
+    calc_ctrl_cost(m, opf, m[:pg0]) + calc_cens(m, opf, m[:ls0])
 
 """ Calculate the short term state cost """
-calc_objective(mod::Model, opf::OPFsystem, expr::ExprC) =
-    calc_ctrl_cost(mod, opf, expr.pgu, :ramp) + calc_ctrl_cost(mod, opf, expr.pgd, :ramp) + calc_cens(mod, opf, expr.lsc)
+calc_objective(m::Model, opf::OPFsystem, expr::ExprC) =
+    calc_ctrl_cost(m, opf, expr.pgu, :ramp) + calc_ctrl_cost(m, opf, expr.pgd, :ramp) + calc_cens(m, opf, expr.lsc)
 
 """ Calculate the long term state cost """
-calc_objective(mod::Model, opf::OPFsystem, expr::ExprCC) =
-    calc_ctrl_cost(mod, opf, expr.pgu, :ramp) + calc_ctrl_cost(mod, opf, expr.pgd, :ramp) + calc_cens(mod, opf, expr.lscc)
+calc_objective(m::Model, opf::OPFsystem, expr::ExprCC) =
+    calc_ctrl_cost(m, opf, expr.pgu, :ramp) + calc_ctrl_cost(m, opf, expr.pgd, :ramp) + calc_cens(m, opf, expr.lscc)
 
 """ Calculate the long term with corrective failure state cost """
-calc_objective(mod::Model, opf::OPFsystem, expr::ExprCCX) =
-    60 * calc_ctrl_cost(mod, opf, expr.pgdx, :ramp) + calc_cens(mod, opf, expr.lsccx)
+calc_objective(m::Model, opf::OPFsystem, expr::ExprCCX) =
+    60 * calc_ctrl_cost(m, opf, expr.pgdx, :ramp) + calc_cens(m, opf, expr.lsccx)
 
 """ Calculate a state cost """
-calc_objective(mod::Model, opf::OPFsystem, P::Dict) =
-    sum((opf.prob[i] * calc_objective(mod, opf, c) for (i, c) in P), init=0.0)
+calc_objective(m::Model, opf::OPFsystem, P::Dict) =
+    sum((opf.prob[i] * calc_objective(m, opf, c) for (i, c) in P), init=0.0)
 
 """ Calculate the total cost """
-calc_objective(mod::Model, opf::OPFsystem, Pc::Dict{<:Integer,ExprC},
+calc_objective(m::Model, opf::OPFsystem, Pc::Dict{<:Integer,ExprC},
     Pcc::Dict{<:Integer,ExprCC}, Pccx::Dict{<:Integer,ExprCCX}
-) = calc_objective(mod, opf) + calc_objective(mod, opf, Pc) +
-    calc_objective(mod, opf, Pcc) + calc_objective(mod, opf, Pccx)
+) = calc_objective(m, opf) + calc_objective(m, opf, Pc) +
+    calc_objective(m, opf, Pcc) + calc_objective(m, opf, Pccx)
 
 function print_costs(case::Case)
     base_cost = calc_objective(case.model, case.opf)
