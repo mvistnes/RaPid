@@ -325,6 +325,13 @@ function init_P!(Pc::Dict{<:Integer,ExprC}, opf::OPFsystem, oplim::Oplimits, mod
                 end)
             end
         end
+        if typeof(oplim.max_shed) <: Real
+            expr = AffExpr()
+            for n in itr, d in opf.mdx[:,n].nzind
+                add_to_expression!(expr, lsc[d])
+            end
+            @constraint(mod, expr <= oplim.max_shed)
+        end
         itr = isempty(itr) ? (1:length(opf.nodes)) : islands[1:end.!=island]
         for in_vec in itr
             for n in in_vec
@@ -403,6 +410,13 @@ function init_P!(Pcc::Dict{<:Integer,ExprCC}, opf::OPFsystem, oplim::Oplimits, m
                 JuMP.@constraint(mod, expr <= oplim.pg_lim_max[g])
             end
         end
+        if typeof(oplim.max_shed) <: Real
+            expr = AffExpr()
+            for n in itr, d in opf.mdx[:,n].nzind
+                add_to_expression!(expr, lscc[d])
+            end
+            @constraint(mod, expr <= oplim.max_shed)
+        end
         itr = isempty(itr) ? (1:length(opf.nodes)) : islands[1:end.!=island]
         for in_vec in itr
             for n in in_vec
@@ -450,6 +464,13 @@ function init_P!(Pccx::Dict{<:Integer,ExprCCX}, opf::OPFsystem, oplim::Oplimits,
             for g = opf.mgx[:,n].nzind
                 JuMP.@constraint(mod, mod[:pg0][g] - pgd[g] >= 0.0)
             end
+        end
+        if typeof(oplim.max_shed) <: Real
+            expr = AffExpr()
+            for n in itr, d in opf.mdx[:,n].nzind
+                add_to_expression!(expr, lscc[d])
+            end
+            @constraint(mod, expr <= oplim.max_shed)
         end
         itr = isempty(itr) ? (1:length(opf.nodes)) : islands[1:end.!=island]
         for in_vec in itr
