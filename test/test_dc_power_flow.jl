@@ -10,8 +10,8 @@ system = SCOPF.System(joinpath("cases","IEEE_RTS.m")); c1 = 1; c2 = 11
 # system = SCOPF.System(joinpath("cases","case_ACTIVSg10k.m")); c1 = 1; c2 = 4
 SCOPF.fix_generation_cost!(system);
 voll = SCOPF.make_voll(system)
-model, opf, pf, oplim, _, _, _ = SCOPF.opf_base(SCOPF.OPF(true, false, false, false, false), system, HiGHS.Optimizer(), voll=voll);
-SCOPF.constrain_branches!(model, pf, oplim, 0.0)
+model, opf, pf, oplim, brc_up, brc_down, _, _, _ = SCOPF.opf_base(SCOPF.OPF(true, false, false, false, false), system, HiGHS.Optimizer(), voll=voll);
+SCOPF.constrain_branches!(model, pf, oplim, brc_up, brc_down, 0.0)
 bx = SCOPF.get_bus_idx.(opf.branches, [opf.idx])
 slack = SCOPF.find_slack(opf.nodes)[1]
 

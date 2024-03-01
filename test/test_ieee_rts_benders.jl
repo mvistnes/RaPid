@@ -41,9 +41,9 @@ function test_benders(system, optimizer, voll, contingencies, prob, max_shed,ram
         p_failure = ifelse(type.C2F, 0.10, 0.00)
         println(type)
         println("Start PTDF")
-        mod, opf, pf, oplim, Pc, Pcc, Pccx = SCOPF.opf_base(type, system, HiGHS.Optimizer(), voll=voll, contingencies=contingencies, prob=prob, max_shed=max_shed,
+        mod, opf, pf, oplim, brc_up, brc_down, Pc, Pcc, Pccx = SCOPF.opf_base(type, system, HiGHS.Optimizer(), voll=voll, contingencies=contingencies, prob=prob, max_shed=max_shed,
             ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=p_failure);
-        SCOPF.add_branch_constraints!(mod, pf.ϕ, mod[:p0], oplim.branch_rating)
+        SCOPF.add_branch_constraints!(mod, pf.ϕ, mod[:p0], brc_up, brc_down, oplim.branch_rating)
         SCOPF.solve_model!(mod);
 
         println("Start Contingency select")
@@ -67,7 +67,7 @@ function benders_pc_scopf()
     println("Start PTDF")
     @time case_ptdf = Case(SCOPF.opf_base(SCOPF.PC2_SCOPF, system, Gurobi.Optimizer(GUROBI_ENV), voll=voll, contingencies=contingencies, prob=prob, max_shed=max_shed,
         ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long)...)
-    SCOPF.add_branch_constraints!(case_ptdf.model, case_ptdf.pf.ϕ, case_ptdf.model[:p0], case_ptdf.oplim.branch_rating)
+    SCOPF.add_branch_constraints!(case_ptdf.model, case_ptdf.pf.ϕ, case_ptdf.model[:p0], case_ptdf.brc_up, case_ptdf.brc_down, case_ptdf.oplim.branch_rating)
     @time SCOPF.solve_model!(case_ptdf.model);
     println("Objective value PTDF: ", JuMP.objective_value(case_ptdf.model))
     SCOPF.print_contingency_results(case_ptdf)

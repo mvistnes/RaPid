@@ -49,7 +49,7 @@ function run_benders(
         dist_slack=dist_slack, time_limit_sec=time_limit_sec, ramp_minutes=ramp_minutes, ramp_mult=ramp_mult, max_shed=max_shed, max_curtail=max_curtail,
         short_term_multi=short_term_multi, long_term_multi=long_term_multi, p_failure=p_failure, silent=silent, debug=debug)...)
 
-    total_solve_time = constrain_branches!(case.model, case.pf, case.oplim, 0.0)
+    total_solve_time = constrain_branches!(case, 0.0)
     if !type.P & !type.C1 & !type.C2 & !type.C2F
         return case, total_solve_time
     end
@@ -57,7 +57,7 @@ function run_benders(
 end
 
 run_benders!(type::OPF, case::Case, atol=1e-6, max_itr=max(length(case.opf.contingencies), 5)) =
-    run_benders!(type, case.model, case.opf, case.pf, case.oplim, case.Pc, case.Pcc, case.Pccx, atol, max_itr)
+    run_benders!(type, case.model, case.opf, case.pf, case.oplim, case.brc_up, case.brc_down, case.Pc, case.Pcc, case.Pccx, atol, max_itr)
 
 """
 Solve the optimization model using Benders decomposition.
@@ -67,7 +67,9 @@ function run_benders!(
     mod::Model, 
     opf::OPFsystem, 
     pf::DCPowerFlow, 
-    oplim::Oplimits, 
+    oplim::Oplimits,
+    brc_up::Dict{<:Integer, ConstraintRef}, 
+    brc_down::Dict{<:Integer, ConstraintRef},
     Pc::Dict{<:Integer, ExprC}, 
     Pcc::Dict{<:Integer, ExprCC}, 
     Pccx::Dict{<:Integer, ExprCCX},
@@ -80,7 +82,7 @@ function run_benders!(
     @assert !type.C2F || isempty(Pccx)
     
     total_solve_time = solve_time(mod)
-    !has_values(mod) && return Case(mod, opf, pf, oplim, Pc, Pcc, Pccx), total_solve_time
+    !has_values(mod) && return Case(mod, opf, pf, oplim, brc_up, brc_down, Pc, Pcc, Pccx), total_solve_time
     @debug "lower_bound = $(objective_value(mod))"
 
     # Set variables
@@ -123,8 +125,8 @@ function run_benders!(
         end
     end
 
-    total_solve_time = update_model!(mod, pf, oplim, bd, total_solve_time)
-    !has_values(mod) && return Case(mod, opf, pf, oplim, Pc, Pcc, Pccx), total_solve_time
+    total_solve_time = update_model!(mod, pf, oplim, brc_up, brc_down, bd, total_solve_time)
+    !has_values(mod) && return Case(mod, opf, pf, oplim, brc_up, brc_down, Pc, Pcc, Pccx), total_solve_time
 
     ΔPc = zeros(length(bd.Pg))
     ΔPcc = zeros(length(bd.Pg))
@@ -151,7 +153,7 @@ function run_benders!(
         if cut_added == 0 # loops until no new cuts are added for the contingencies
             # @printf "\nEND: Total solve time %.4f.\n" total_solve_time
             print_cuts(type, pre, corr1, corr2, corr2f)
-            return Case(mod, opf, pf, oplim, Pc, Pcc, Pccx), total_solve_time
+            return Case(mod, opf, pf, oplim, brc_up, brc_down, Pc, Pcc, Pccx), total_solve_time
         end
         cut_added = 0
         @info "\n------------------\nIteration $iterations"
@@ -162,6 +164,7 @@ function run_benders!(
             if is_islanded(pf, cont[2], cont[1])
                 islands, island, island_b = handle_islands(pf.B, pf.DA, cont[2], cont[1], pf.slack)
                 inodes = islands[island]
+                # initialize_islands(opf, islands, island)
             else
                 empty!(islands)
                 island = 0
@@ -209,22 +212,24 @@ function run_benders!(
                 cut_added, corr2f = add_cut(Pccx, opf, oplim, mod, bd, ΔPccx, ptdf, olccx, islands, island, c_obj, i, cut_added, atol, corr2f)
             end
             if cut_added > 1
-                total_solve_time = update_model!(mod, pf, oplim, bd, total_solve_time)
+                total_solve_time = update_model!(mod, pf, oplim, brc_up, brc_down, bd, total_solve_time)
                 cut_added = 1
             end
-            !has_values(mod) && return Case(mod, opf, pf, oplim, Pc, Pcc, Pccx), total_solve_time
+            !has_values(mod) && return Case(mod, opf, pf, oplim, brc_up, brc_down, Pc, Pcc, Pccx), total_solve_time
         end
 
     end
     @warn "Reached $(max_itr) iterations without a stable solution."
-    return Case(mod, opf, pf, oplim, Pc, Pcc, Pccx), total_solve_time
+    return Case(mod, opf, pf, oplim, brc_up, brc_down, Pc, Pcc, Pccx), total_solve_time
 end
 
 """ Solve model and update the power flow object """
-function update_model!(mod::Model, pf::DCPowerFlow, oplim::Oplimits, bd::Benders, total_solve_time::Real)
+function update_model!(mod::Model, pf::DCPowerFlow, oplim::Oplimits, brc_up::Dict{<:Integer, ConstraintRef}, 
+    brc_down::Dict{<:Integer, ConstraintRef}, bd::Benders, total_solve_time::Real
+)
     # set_warm_start!(mod, :pg0) # query of information then edit of model, else OptimizeNotCalled errors
     set_objective_function(mod, bd.obj)
-    total_solve_time = constrain_branches!(mod, pf, oplim, total_solve_time)
+    total_solve_time = constrain_branches!(mod, pf, oplim, brc_up, brc_down, total_solve_time)
     bd.Pᵢ = get_value(mod, :p0)
     @. bd.Pg = bd.Pᵢ - bd.Pd
     return total_solve_time
@@ -426,4 +431,16 @@ function make_cut(pccx::ExprCCX, opf::OPFsystem, mod::Model)
     add_to_expression!.(expr, -opf.mdcx' * mod[:pfdc0])
     add_to_expression!.(expr, -opf.mdx' * (pccx.lsccx - mod[:pd]))
     return expr
+end
+
+function initialize_islands(opf::OPFsystem, islands::Vector, island::Int)
+    for sep in islands[1:end .!= island]
+        if length(sep) > 1
+            ix = 1:length(sep)
+            bx = [Tuple(opf.mbx[i,:].nzind) for i in axes(opf.mbx,1)]
+            ibx = first.(bx) .∈ [ix] .&& last.(bx) .∈ [ix]
+            return SCOPF.DCPowerFlow(opf.nodes[ix], opf.branches[ibx], SCOPF.get_nodes_idx(opf.nodes[ix]))
+        end
+    end
+    return nothing
 end

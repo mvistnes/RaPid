@@ -10,10 +10,10 @@ system = SCOPF.System(joinpath("cases","IEEE_RTS.m")); c1 = 1; c2 = 11
 # system = SCOPF.System(joinpath("cases","case_ACTIVSg10k.m")); c1 = 1; c2 = 4
 SCOPF.fix_generation_cost!(system);
 voll = SCOPF.make_voll(system)
-model, opf, pf, oplim, _, _, _ = SCOPF.opf_base(SCOPF.OPF(true, false, false, false, false), system, HiGHS.Optimizer(), voll=voll);
-SCOPF.constrain_branches!(model, pf, oplim, 0.0)
+model, opf, pf, oplim, brc_up, brc_down, _, _, _ = SCOPF.opf_base(SCOPF.OPF(true, false, false, false, false), system, HiGHS.Optimizer(), voll=voll);
+SCOPF.constrain_branches!(model, pf, oplim, brc_up, brc_down, 0.0)
 model2, opf2, pf2, oplim2, _, _, _ = SCOPF.opf_base(SCOPF.OPF(true, false, false, false, false), system, HiGHS.Optimizer(), voll=voll);
-SCOPF.add_branch_constraints!(model2, pf.ϕ, model2[:p0], oplim.branch_rating)
+SCOPF.add_branch_constraints!(model2, pf.ϕ, model2[:p0], brc_up, brc_down, oplim.branch_rating)
 SCOPF.solve_model!(model2)
 
 @test JuMP.objective_value(model) ≈ JuMP.objective_value(model2)

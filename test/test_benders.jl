@@ -9,7 +9,7 @@ function run_timed_types(types, optimizer, sys, voll, prob, cont, max_shed, ramp
     run_time = []
     for type in types
         t = @timed begin
-            model, opf, pf, oplim, Pc, Pcc, Pccx = SCOPF.opf_base(type, sys, optimizer, voll=voll, contingencies=cont, prob=prob, max_shed=max_shed,
+            model, opf, pf, oplim, brc_up, brc_down, Pc, Pcc, Pccx = SCOPF.opf_base(type, sys, optimizer, voll=voll, contingencies=cont, prob=prob, max_shed=max_shed,
                 ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, time_limit_sec=time_limit_sec)
             SCOPF.solve_model!(model)
         end

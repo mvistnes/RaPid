@@ -1,123 +1,3 @@
-# FIX: Sometimes breaks
-""" Find island(s) in the system returned in a nested Vector.
-Each element of the Vector consists of two lists, nodes and branches, in that island. """
-function get_islands(sys::System, branches::AbstractVector{<:Branch})
-    islands = Vector{Tuple{Vector{Bus},Vector{Branch}}}()
-    visited_nodes = Vector{Bus}([branches[1].arc.from]) # start node on island 1 marked as visited
-    visited_branches, new_nodes = find_connected(branches, first(visited_nodes))
-    # all nodes connected are set as neighouring nodes not visited,
-    # via visited branches
-
-    bus_number_tot = length(sys.bus_numbers)
-    bus_number = 0
-    while true
-
-        # Visit new nodes until there are no neighouring nodes connected
-        while !isempty(new_nodes)
-            node = pop!(new_nodes)
-            push!(visited_nodes, node)
-            bn = find_connected(branches, node)
-            union!(visited_branches, bn[1])
-            union!(new_nodes, setdiff(bn[2], visited_nodes))
-        end
-
-        push!(islands, (visited_nodes, visited_branches))
-        # push!(islands, (sort_nodes!(visited_nodes), sort_branches!(visited_branches)))
-        bus_number += length(visited_nodes)
-
-        bus_number_tot == bus_number && break # all nodes are visited 
-        if bus_number_tot < bus_number
-            # for i in islands
-            #     j = ""
-            #     for k in sort!(i[1], by = x -> x.name)
-            #         if j == k
-            #             println(j.name)
-            #         else
-            #             j=k
-            #         end
-            #     end
-            #     #@show get_name.(i[2])
-            # end
-            throw("More nodes counted, $(bus_number), than nodes in the system, $(bus_number_tot)!")
-        end
-
-        visited_nodes = Vector([setdiff(get_components(Bus, sys), visited_nodes) |> first])
-        # a random node not visited yet starts a new island
-        visited_branches, new_nodes = find_connected(branches, first(visited_nodes))
-    end
-    return islands
-end
-
-# FIX: Sometimes breaks
-function get_islands(nodes::AbstractVector{T}, branches::AbstractVector{T2}) where {T<:Integer,T2<:Tuple{Integer,Integer}}
-    islands = Vector{Tuple{Vector{T},Vector{T2}}}()
-    visited_nodes = Vector{T}([branches[1][1]]) # start node on island 1 marked as visited
-    visited_branches, new_nodes = find_connected(branches, first(visited_nodes))
-    # all nodes connected are set as neighouring nodes not visited,
-    # via visited branches
-
-    bus_number_tot = length(nodes)
-    bus_number = 0
-    while true
-
-        # Visit new nodes until there are no neighouring nodes connected
-        while !isempty(new_nodes)
-            node = pop!(new_nodes)
-            push!(visited_nodes, node)
-            bn = find_connected(branches, node)
-            union!(visited_branches, bn[1])
-            union!(new_nodes, setdiff(bn[2], visited_nodes))
-        end
-
-        # println(visited_nodes, visited_branches)
-        push!(islands, (visited_nodes, visited_branches))
-        # push!(islands, (sort!(visited_nodes), sort!(visited_branches)))
-        bus_number += length(visited_nodes)
-
-        bus_number_tot == bus_number && break # all nodes are visited 
-        bus_number_tot < bus_number && throw("More nodes counted, $(bus_number), than nodes in the system, $(bus_number_tot)!")
-
-        visited_nodes = Vector([setdiff(nodes, visited_nodes) |> first])
-        # a random node not visited yet starts a new island
-        visited_branches, new_nodes = find_connected(branches, first(visited_nodes))
-    end
-    return islands
-end
-
-function get_islands(T::SparseArrays.SparseMatrixCSC{<:Any,Ty}) where {Ty<:Integer}
-    islands = Vector{Vector{Ty}}()
-    visited_nodes = Vector{Ty}() # start node on island 1 marked as visited
-    new_nodes = T[:, 1].nzind
-    # all nodes connected are set as neighouring nodes not visited,
-    # via visited branches
-
-    bus_number_tot = size(T, 1)
-    bus_number = 0
-    while true
-
-        # Visit new nodes until there are no neighouring nodes connected
-        while !isempty(new_nodes)
-            node = pop!(new_nodes)
-            push!(visited_nodes, node)
-            bn = T[:, node].nzind
-            union!(new_nodes, setdiff(bn, visited_nodes))
-        end
-
-        # println(visited_nodes, visited_branches)
-        push!(islands, visited_nodes)
-        # push!(islands, (sort!(visited_nodes), sort!(visited_branches)))
-        bus_number += length(visited_nodes)
-
-        bus_number_tot == bus_number && break # all nodes are visited 
-        bus_number_tot < bus_number && throw("More nodes counted, $(bus_number), than nodes in the system, $(bus_number_tot)!")
-
-        visited_nodes = Vector([setdiff(nodes, visited_nodes) |> first])
-        # a random node not visited yet starts a new island
-        new_nodes = T[:, first(visited_nodes)].nzind
-    end
-    return islands
-end
-
 function is_islanded(
     DA::AbstractMatrix{T},
     B::AbstractMatrix{T},
@@ -255,8 +135,30 @@ function find_island_branches(island::Vector{<:Integer}, DA::SparseArrays.Sparse
     return res
 end
 
+function find_island_branches(island::Vector{<:Integer}, DA::SparseArrays.SparseMatrixCSC{<:Any,<:Integer}, c_branches::AbstractVector{<:Integer})
+    res = sort!(unique!(DA[:, island].rowval))
+    for br in c_branches
+        if insorted(br, res)
+            deleteat!(res, searchsortedfirst(res, br))
+        end
+    end
+    return res
+end
+
 function handle_islands(B::AbstractMatrix, DA::AbstractMatrix, contingency::Tuple{Integer,Integer}, branch::Integer, slack::Integer)
     islands = island_detection_thread_safe(B, contingency[1], contingency[2])
+    island = find_ref_island(islands, slack)
+    island_b = find_island_branches(islands[island], DA, branch)
+
+    # Need at least one node to make a valid system
+    if length(islands[island]) > 0
+        return islands, island, island_b
+    end
+    return Vector{Vector{Int64}}(undef, 0), 0, Vector{Int64}(undef, 0)
+end
+
+function handle_islands(B::AbstractMatrix, DA::AbstractMatrix, contingencies::AbstractVector{<:Tuple{Integer,Integer}}, branch::Integer, slack::Integer)
+    islands = island_detection_thread_safe(B, contingencies)
     island = find_ref_island(islands, slack)
     island_b = find_island_branches(islands[island], DA, branch)
 

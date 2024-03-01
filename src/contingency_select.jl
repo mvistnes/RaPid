@@ -26,7 +26,7 @@ function run_contingency_select(
     dist_slack=dist_slack, time_limit_sec=time_limit_sec, ramp_minutes=ramp_minutes, ramp_mult=ramp_mult, max_shed=max_shed, max_curtail=max_curtail,
     short_term_multi=short_term_multi, long_term_multi=long_term_multi, p_failure=p_failure, silent=silent, debug=debug)...)
 
-    total_solve_time = constrain_branches!(case.model, case.pf, case.oplim, 0.0)
+    total_solve_time = constrain_branches!(case, 0.0)
     if !type.P & !type.C1 & !type.C2 & !type.C2F
         return case, total_solve_time
     end
@@ -34,7 +34,7 @@ function run_contingency_select(
 end
 
 run_contingency_select!(type::OPF, case::Case, lim=1e-14, max_itr=max(length(case.opf.contingencies), 5)) = 
-    run_contingency_select!(type, case.model, case.opf, case.pf, case.oplim, case.Pc, case.Pcc, case.Pccx, lim, max_itr)
+    run_contingency_select!(type, case.model, case.opf, case.pf, case.oplim, case.brc_up, case.brc_down, case.Pc, case.Pcc, case.Pccx, lim, max_itr)
 
 function run_contingency_select!(
     type::OPF, 
@@ -42,6 +42,8 @@ function run_contingency_select!(
     opf::OPFsystem, 
     pf::DCPowerFlow, 
     oplim::Oplimits, 
+    brc_up::Dict{<:Integer, ConstraintRef}, 
+    brc_down::Dict{<:Integer, ConstraintRef},
     Pc::Dict{<:Integer, ExprC}, 
     Pcc::Dict{<:Integer, ExprCC}, 
     Pccx::Dict{<:Integer, ExprCCX},
@@ -54,7 +56,7 @@ function run_contingency_select!(
     @assert !type.C2F || isempty(Pccx)
     
     total_solve_time = solve_time(mod)
-    termination_status(mod) != MOI.OPTIMAL && return Case(mod, opf, pf, oplim, Pc, Pcc, Pccx), total_solve_time
+    termination_status(mod) != MOI.OPTIMAL && return Case(mod, opf, pf, oplim, brc_up, brc_down, Pc, Pcc, Pccx), total_solve_time
     @debug "lower_bound = $(objective_value(mod))"
 
     # Set variables
@@ -75,19 +77,19 @@ function run_contingency_select!(
             ptdf = get_isf(pf, cont[2], cont[1], islands, island, island_b)
             set_tol_zero!(ptdf)
             if type.P 
-                add_contingencies!(opf, pf, oplim, mod, ptdf, i)
+                add_contingency!(opf, pf, oplim, mod, brc_up, brc_down, ptdf, i)
                 pre += 1
             end
             if type.C1 
-                add_contingencies!(Pc, opf, pf, oplim, mod, bd.obj, islands, island, ptdf, i)
+                add_contingency!(Pc, opf, pf, oplim, mod, brc_up, brc_down, bd.obj, islands, island, ptdf, i)
                 corr1 += 1
             end
             if type.C2  
-                add_contingencies!(Pcc, opf, pf, oplim, mod, bd.obj, islands, island, ptdf, i)
+                add_contingency!(Pcc, opf, pf, oplim, mod, brc_up, brc_down, bd.obj, islands, island, ptdf, i)
                 corr2 += 1
             end
             if type.C2F 
-                add_contingencies!(Pccx, opf, pf, oplim, mod, bd.obj, islands, island, ptdf, i)
+                add_contingency!(Pccx, opf, pf, oplim, mod, brc_up, brc_down, bd.obj, islands, island, ptdf, i)
                 corr2f += 1
             end
             @debug "Island: Contingency $(string(typeof(c_obj))) $(get_name(c_obj))"
@@ -106,8 +108,8 @@ function run_contingency_select!(
         end
     end
     
-    total_solve_time = update_model!(mod, pf, oplim, bd, total_solve_time)
-    termination_status(mod) != MOI.OPTIMAL && return Case(mod, opf, pf, oplim, Pc, Pcc, Pccx), total_solve_time
+    total_solve_time = update_model!(mod, pf, oplim, brc_up, brc_down, bd, total_solve_time)
+    termination_status(mod) != MOI.OPTIMAL && return Case(mod, opf, pf, oplim, brc_up, brc_down, Pc, Pcc, Pccx), total_solve_time
 
     ΔPc = zeros(length(bd.Pg))
     ΔPcc = zeros(length(bd.Pg))
@@ -172,42 +174,42 @@ function run_contingency_select!(
         # Cannot change the model before all data is exctracted!
         if !isempty(olc)
             if type.P
-                add_contingencies!(opf, pf, oplim, mod, ptdf, i_c)
+                add_contingency!(opf, pf, oplim, mod, brc_up, brc_down, ptdf, i_c)
                 pre += 1
                 @info @sprintf "Pre %d: Contingency %s %s" pre string(typeof(c_obj)) PowerSystems.get_name(c_obj)
             else
-                add_contingencies!(Pc, opf, pf, oplim, mod, bd.obj, islands, island, ptdf, i_c)
+                add_contingency!(Pc, opf, pf, oplim, mod, brc_up, brc_down, bd.obj, islands, island, ptdf, i_c)
                 corr1 += 1
                 @info @sprintf "Corr1 %d: Contingency %s %s" corr1 string(typeof(c_obj)) PowerSystems.get_name(c_obj)
             end
             cut_added = 2
         end
         if !isempty(olcc)
-            add_contingencies!(Pcc, opf, pf, oplim, mod, bd.obj, islands, island, ptdf, i_c)
+            add_contingency!(Pcc, opf, pf, oplim, mod, brc_up, brc_down, bd.obj, islands, island, ptdf, i_c)
             corr2 += 1
             @info @sprintf "Corr2 %d: Contingency %s %s" corr2 string(typeof(c_obj)) PowerSystems.get_name(c_obj)
             cut_added = 2
         end
         if !isempty(olccx)
-            add_contingencies!(Pccx, opf, pf, oplim, mod, bd.obj, islands, island, ptdf, i_c)
+            add_contingency!(Pccx, opf, pf, oplim, mod, brc_up, brc_down, bd.obj, islands, island, ptdf, i_c)
             corr2f += 1
             @info @sprintf "Corr2 %d: Contingency %s %s" corr2f string(typeof(c_obj)) PowerSystems.get_name(c_obj)
             cut_added = 2
         end
         if cut_added > 1
-            total_solve_time = update_model!(mod, pf, oplim, bd, total_solve_time)
+            total_solve_time = update_model!(mod, pf, oplim, brc_up, brc_down, bd, total_solve_time)
             deleteat!(permutation, i)
             cut_added = 1
         else
             i += 1
         end
-        termination_status(mod) != MOI.OPTIMAL && return Case(mod, opf, pf, oplim, Pc, Pcc, Pccx), total_solve_time
+        termination_status(mod) != MOI.OPTIMAL && return Case(mod, opf, pf, oplim, brc_up, brc_down, Pc, Pcc, Pccx), total_solve_time
         if i > length(permutation)
             iterations > max_itr && break
             if cut_added == 0 # loops until no new cuts are added for the contingencies
                 # @printf "END: Total solve time %.4f.\n" total_solve_time
                 print_cuts(type, pre, corr1, corr2, corr2f)
-                return Case(mod, opf, pf, oplim, Pc, Pcc, Pccx), total_solve_time
+                return Case(mod, opf, pf, oplim, brc_up, brc_down, Pc, Pcc, Pccx), total_solve_time
             else
                 cut_added = 0
             end
@@ -217,5 +219,5 @@ function run_contingency_select!(
         end
     end
     # @warn "Reached $(length(opf.contingencies)) iterations without a stable solution."
-    return Case(mod, opf, pf, oplim, Pc, Pcc, Pccx), total_solve_time
+    return Case(mod, opf, pf, oplim, brc_up, brc_down, Pc, Pcc, Pccx), total_solve_time
 end
