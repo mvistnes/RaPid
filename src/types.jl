@@ -59,10 +59,9 @@ mutable struct ExprC{T<:Vector{JuMP.VariableRef}} <: ContExpr
     pc::T
     pgu::T
     pgd::T
-    prc::T
     lsc::T
 end
-ExprC() = ExprC(JuMP.VariableRef[], JuMP.VariableRef[], JuMP.VariableRef[], JuMP.VariableRef[], JuMP.VariableRef[])
+ExprC() = ExprC(JuMP.VariableRef[], JuMP.VariableRef[], JuMP.VariableRef[], JuMP.VariableRef[])
 get_name(::ExprC) = "Corr1"
 
 """ Holds the long term variables for contingencies """
@@ -71,18 +70,16 @@ mutable struct ExprCC{T<:Vector{JuMP.VariableRef}} <: ContExpr
     pgu::T
     pgd::T
     pfdccc::T
-    prcc::T
     lscc::T
 end
-ExprCC() = ExprCC(JuMP.VariableRef[], JuMP.VariableRef[], JuMP.VariableRef[], JuMP.VariableRef[], JuMP.VariableRef[], JuMP.VariableRef[])
+ExprCC() = ExprCC(JuMP.VariableRef[], JuMP.VariableRef[], JuMP.VariableRef[], JuMP.VariableRef[], JuMP.VariableRef[])
 get_name(::ExprCC) = "Corr2"
 
 """ Holds the long term variables for contingencies, no ramp up allowed """
 mutable struct ExprCCX{T<:Vector{JuMP.VariableRef}} <: ContExpr
     pccx::T
     pgdx::T
-    prccx::T
     lsccx::T
 end
-ExprCCX() = ExprCCX(JuMP.VariableRef[], JuMP.VariableRef[], JuMP.VariableRef[], JuMP.VariableRef[])
+ExprCCX() = ExprCCX(JuMP.VariableRef[], JuMP.VariableRef[], JuMP.VariableRef[])
 get_name(::ExprCCX) = "Corr2x"

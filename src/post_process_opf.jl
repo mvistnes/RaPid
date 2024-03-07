@@ -66,9 +66,8 @@ function print_corrective_values(components::AbstractVector{<:Component}, varref
 end
 
 function print_results(opf::OPFsystem, m::Model)
-    print_variabels(opf.ctrl_generation, m[:pg0])
+    print_variabels(opf.generation, m[:pg0])
     print_variabels(opf.dc_branches, m[:pfdc0])
-    print_variabels(opf.renewables, m[:pr0])
     print_variabels(opf.demands, m[:ls0])
 end
 
@@ -78,9 +77,8 @@ function print_contingency_results(opf::OPFsystem, Pc::Dict{<:Integer, ExprC},
     x = get(Pc, c, 0)
     if x != 0
         println("Contingency ", contingencies[c].name)
-        print_corrective_values(opf.ctrl_generation, x.pgu, :pguc)
-        print_corrective_values(opf.ctrl_generation, x.pgd, :pgdc)
-        print_corrective_values(opf.renewables, x.prc, :prc)
+        print_corrective_values(opf.generation, x.pgu, :pguc)
+        print_corrective_values(opf.generation, x.pgd, :pgdc)
         print_corrective_values(opf.demands, x.lsc, :lsc)
     end
 end
@@ -91,10 +89,9 @@ function print_contingency_results(opf::OPFsystem, Pcc::Dict{<:Integer, ExprCC},
     x = get(Pcc, c, 0)
     if x != 0
         println("Contingency ", contingencies[c].name)
-        print_corrective_values(opf.ctrl_generation, x.pgu, :pgucc)
-        print_corrective_values(opf.ctrl_generation, x.pgd, :pgdcc)
+        print_corrective_values(opf.generation, x.pgu, :pgucc)
+        print_corrective_values(opf.generation, x.pgd, :pgdcc)
         print_corrective_values(opf.dc_branches, x.pfdccc, :pfdccc)
-        print_corrective_values(opf.renewables, x.prcc, :prcc)
         print_corrective_values(opf.demands, x.lscc, :lscc)
     end
 end
@@ -105,8 +102,7 @@ function print_contingency_results(opf::OPFsystem, Pccx::Dict{<:Integer, ExprCCX
     x = get(Pccx, c, 0)
     if x != 0
         println("Contingency ", contingencies[c].name)
-        print_corrective_values(opf.ctrl_generation, x.pgdx, :pgdx)
-        print_corrective_values(opf.renewables, x.prccx, :prccx)
+        print_corrective_values(opf.generation, x.pgdx, :pgdx)
         print_corrective_values(opf.demands, x.lsccx, :lsccx)
     end
 end
@@ -125,9 +121,8 @@ function print_contingency_P(case::Case)
         P = zeros(length(opf.nodes))
         x = get(case.Pc, c, 0)
         if x != 0
-            add_to!(P, x.pgu, opf.idx, opf.ctrl_generation, +)
-            add_to!(P, x.pgd, opf.idx, opf.ctrl_generation, -)
-            add_to!(P, x.prc, opf.idx, opf.renewables, -)
+            add_to!(P, x.pgu, opf.idx, opf.generation, +)
+            add_to!(P, x.pgd, opf.idx, opf.generation, -)
             add_to!(P, x.lsc, opf.idx, opf.demands, +)
             for (i, val) in enumerate(P)
                 if abs(val) > 0.00001
@@ -142,9 +137,8 @@ function print_contingency_P(case::Case)
         P = zeros(length(opf.nodes))
         x = get(case.Pcc, c, 0)
         if x != 0
-            add_to!(P, x.pgu, opf.idx, opf.ctrl_generation, +)
-            add_to!(P, x.pgd, opf.idx, opf.ctrl_generation, -)
-            add_to!(P, x.prcc, opf.idx, opf.renewables, -)
+            add_to!(P, x.pgu, opf.idx, opf.generation, +)
+            add_to!(P, x.pgd, opf.idx, opf.generation, -)
             add_to!(P, x.lscc, opf.idx, opf.demands, +)
             for (i_g, g) in enumerate(opf.dc_branches)
                 P[opf.idx[g.arc.from.number]] += JuMP.value(x.pfdccc[i_g])
@@ -166,23 +160,21 @@ function print_active_power(opf::OPFsystem, m::Model)
     print("       Bus   Total  Injections...")
     tot = 0.0
     for x in list
-        val_g = value.(m[:pg0][x.ctrl_generation])
-        val_d = value.(m[:pr][x.renewables]) - value.(m[:pr0][x.renewables])
-        val_r = -value.(m[:pd][x.demands]) + value.(m[:ls0][x.demands])
-        b_tot = sum(val_g, init=0.0) + sum(val_d, init=0.0) + sum(val_r, init=0.0)
+        val_g = value.(m[:pg0][x.generation])
+        val_d = -value.(m[:pd][x.demands]) + value.(m[:ls0][x.demands])
+        b_tot = sum(val_g, init=0.0) + sum(val_d, init=0.0) 
         tot += b_tot
         @printf "\n%10s  %6.3f  " x.node.name b_tot
-        xprint.(opf.ctrl_generation[x.ctrl_generation], val_g)
-        xprint.(opf.renewables[x.renewables], val_d)
-        xprint.(opf.demands[x.demands], val_r)
+        xprint.(opf.generation[x.generation], val_g)
+        xprint.(opf.demands[x.demands], val_d)
     end
     @printf("\n       Sum %10.6f\n", tot)
 end
 
-function get_power_flow(opf::OPFsystem, m::Model; subset::AbstractVector{<:Integer}=Int64[])
-    br_names = PowerSystems.get_name.(opf.branches)
-    flow = calculate_line_flows(calc_isf(opf.branches, opf.nodes), get_net_Pᵢ(m))
-    rate = get_rate.(opf.branches)
+function get_power_flow(opf::OPFsystem, pf::DCPowerFlow, oplim::Oplimits, m::Model; subset::AbstractVector{<:Integer}=Int64[])
+    br_names = [Tuple(opf.mbx[i,:].nzind) for i in axes(opf.mbx,1)]
+    flow = calculate_line_flows(pf.ϕ, get_net_Pᵢ(m))
+    rate = oplim.branch_rating
     if !isempty(subset)
         br_names = br_names[subset]
         flow = flow[subset]
@@ -191,10 +183,10 @@ function get_power_flow(opf::OPFsystem, m::Model; subset::AbstractVector{<:Integ
     return Dict("name" => br_names, "flow" => flow, "rate" => rate)
 end
 
-function print_power_flow(opf::OPFsystem, m::Model; subset::AbstractVector{<:Integer}=Int64[],
+function print_power_flow(case::Case; subset::AbstractVector{<:Integer}=Int64[],
     all=true, sep::String=" ", risky_flow=0.9, atol=1e-14
 )
-    vals = get_power_flow(opf, m, subset=subset)
+    vals = get_power_flow(case.opf, case.pf, case.oplim, case.model, subset=subset)
     if !isempty(subset)
         all=true
     end
@@ -203,11 +195,11 @@ function print_power_flow(opf::OPFsystem, m::Model; subset::AbstractVector{<:Int
     )
 end
 
-function print_power_flow(names::AbstractVector{String}, flow::AbstractVector,
+function print_power_flow(names::AbstractVector, flow::AbstractVector,
     rate::AbstractVector{<:Real}; all=true, sep::String=" ", risky_flow=0.9, atol=1e-14
 )
-    all && println("         Branch     Flow  Rating")
-    string_line(n, f, r, sep) = @sprintf("%15s%s %7.3f%s %7.3f\n", n, sep, f, sep, r)
+    all && println("     Branch     Flow  Rating")
+    string_line(n, f, r, sep) = @sprintf("%5d-%5d%s %7.3f%s %7.3f\n", n[1], n[2], sep, f, sep, r)
     for (n, f, r) in zip(names, flow, rate)
         if abs(f) > r + atol
             printstyled(string_line(n, f, r, sep), color=:red)
@@ -327,7 +319,7 @@ end
 
 function get_generation_results(case::Case)
     Pg = get_value(m, :pg0)
-    gen_bus = opf.ctrl_generation .|> get_bus .|> get_number
+    gen_bus = opf.generation .|> get_bus .|> get_number
     return Dict("Bus_num" => gen_bus, "P" => Pg, "Min_P" => case.oplim.pg_lim_min, "Max_P" => case.oplim.pg_lim_max)
 end
 
@@ -339,22 +331,22 @@ function print_generation_results(case::Case)
     for (i, (n, min, pg, max)) in enumerate(zip(vals["Bus_num"], vals["Min_P"], vals["P"], vals["Max_P"]))
         @printf("%4d  %4d  %8.2f %s%8.2f %s%8.2f\n", i, n, min, min ≈ pg ? "=" : " ", pg, max ≈ pg ? "=" : " ", max)
     end
-    
-    # pr_lim = get_active_power.(opf.renewables)
 end
 
 
-function print_benders_results(case::Case, lim::Real=1e-14)
+function print_benders_results(case::Case, system::System, lim::Real=1e-14)
     function print_c(itr, symb::String, x::Int, lim::Real)
-        for i in 1:length(case.opf.contingencies)
+        for (i, c_obj) in enumerate(case.opf.contingencies)
+            c_i = c_obj.second
+            c_n = Tuple(case.opf.mbx[c_i,:].nzind)
             c = get(itr, i, 0)
             if c != 0 && JuMP.value(getfield(c, Symbol(symb))[x]) > lim
-                @printf("          c %12s: %s: %.3f\n", case.opf.contingencies[i].name, symb, JuMP.value(getfield(c, Symbol(symb))[x]))
+                @printf("          c %5d-%5d: %s: %.3f\n", c_n[1], c_n[2], symb, JuMP.value(getfield(c, Symbol(symb))[x]))
             end
         end
     end
 
-    for (x, g) in enumerate(case.opf.ctrl_generation)
+    for (x, g) in enumerate(sort_components!(get_generation(system)))
         @printf("%12s: %5.3f (%.3f)\n", g.name, JuMP.value(case.model[:pg0][x]), case.oplim.pg_lim_max[x])
         print_c(case.Pc, "pgu", x, lim)
         print_c(case.Pc, "pgd", x, lim)
@@ -362,17 +354,11 @@ function print_benders_results(case::Case, lim::Real=1e-14)
         print_c(case.Pcc, "pgd", x, lim)
         print_c(case.Pccx, "pgdx", x, lim)
     end
-    for (x, g) in enumerate(case.opf.dc_branches)
+    for (x, g) in enumerate(sort_components!(get_dc_branches(system)))
         @printf("%12s: %5.3f (%.3f)\n", g.name, JuMP.value(case.model[:pfdc0][x]), case.oplim.dc_lim_max[x])
         print_c(case.Pcc, "pfdccc", x, lim)
     end
-    for (x, g) in enumerate(case.opf.renewables)
-        @printf("%12s: %5.3f (%.3f)\n", g.name, JuMP.value(case.model[:pr0][x]), case.oplim.pr_lim[x])
-        print_c(case.Pc, "prc", x, lim)
-        print_c(case.Pcc, "prcc", x, lim)
-        print_c(case.Pccx, "prccx", x, lim)
-    end
-    for (x, g) in enumerate(case.opf.demands)
+    for (x, g) in enumerate(sort_components!(get_demands(system)))
         @printf("%12s: %5.3f (%.3f)\n", g.name, JuMP.value(case.model[:ls0][x]), case.oplim.pd_lim[x])
         print_c(case.Pc, "lsc", x, lim)
         print_c(case.Pcc, "lscc", x, lim)

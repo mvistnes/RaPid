@@ -29,21 +29,21 @@ function run_benders(
     system::System, 
     optimizer, 
     voll::Vector{<:Number}, 
-    prob::Vector{Float64}, 
-    contingencies::Vector{<:Component};
-    dist_slack=Float64[],
-    time_limit_sec::Int64=600, 
-    ramp_minutes=10, 
-    ramp_mult=10, 
-    max_shed=1.0, 
-    max_curtail=1.0, 
-    atol=1e-6,
+    prob::Vector{<:Number}, 
+    contingencies::Vector{Pair{String, Int64}};
+    dist_slack::Vector{<:Real}=Float64[],
+    time_limit_sec::Number=600, 
+    ramp_minutes::Number=10, 
+    ramp_mult::Number=10, 
+    max_shed::Number=1.0, 
+    max_curtail::Number=1.0, 
+    atol::Number=1e-6,
     short_term_multi::Real=1.5, 
     long_term_multi::Real=1.2, 
-    max_itr=10,
-    p_failure=0.0,
-    silent=true,
-    debug=false
+    max_itr::Integer=10,
+    p_failure::Number=0.0,
+    silent::Bool=true,
+    debug::Bool=false
 )
     case = Case(opf_base(OPF(true, false, false, false, false), system, optimizer, voll=voll, contingencies=contingencies, prob=prob,
         dist_slack=dist_slack, time_limit_sec=time_limit_sec, ramp_minutes=ramp_minutes, ramp_mult=ramp_mult, max_shed=max_shed, max_curtail=max_curtail,
@@ -73,8 +73,8 @@ function run_benders!(
     Pc::Dict{<:Integer, ExprC}, 
     Pcc::Dict{<:Integer, ExprCC}, 
     Pccx::Dict{<:Integer, ExprCCX},
-    atol=1e-6,
-    max_itr=10
+    atol::Number=1e-6,
+    max_itr::Integer=10
 )
     assert(type)
     @assert !type.C1 || isempty(Pc)
@@ -89,45 +89,6 @@ function run_benders!(
     !isempty(oplim.dist_slack) && set_dist_slack!(pf.ϕ, opf.mgx, oplim.dist_slack)
     bd = benders(opf, m)
 
-    overloads = zeros(length(opf.contingencies))
-    # PI = zeros(length(opf.contingencies))
-    pg = get_value(m, :pg0)
-    for (i, c_obj) in enumerate(opf.contingencies)
-        cont = typesort_component(c_obj, opf)
-        # cont  = get_bus_idx(opf.contingencies[c], opf.idx)
-        if is_islanded(pf, cont[2], cont[1])
-            islands, island, island_b = handle_islands(pf.B, pf.DA, cont[2], cont[1], pf.slack)
-            type.C1 && init_P!(Pc, opf, oplim, m, bd.obj, islands, island, i)
-            type.C2 && init_P!(Pcc, opf, oplim, m, bd.obj, islands, island, i)
-            type.C2F && init_P!(Pccx, opf, oplim, m, bd.obj, islands, island, i)
-            @debug "Island: Contingency $(string(typeof(c_obj))) $(get_name(c_obj))"
-            if isempty(islands)
-                fill!(flow, 0.0)
-            else
-                calculate_line_flows!(pf.vb_tmp, pf, cont[2], cont[1], nodes=islands[island], branches=island_b)
-                flow = pf.vb_tmp
-            end
-        else
-            if typeof(c_obj) <: ACBranch || (typeof(c_obj) <: Pair && first(c_obj) == "branch")
-                flow = calculate_contingency_line_flows(m, pf, bd.Pᵢ, cont, i, c_obj, Int[], Int[])
-            else
-                flow = calculate_contingency_line_flows(m, pf, bd.Pᵢ, cont, i, c_obj, Int[], Int[], pg[cont[1]])
-            end
-        end
-
-        # PI[i] = maximum((flow ./ (oplim.branch_rating * oplim.short_term_multi)).^2)
-
-        # Calculate the power flow with the new outage and find if there are any overloads
-        overload = filter_overload(flow, oplim.branch_rating * oplim.short_term_multi)
-
-        if !isempty(overload)
-            overloads[i] = maximum(x -> abs(x[2]), overload)
-        end
-    end
-
-    total_solve_time = update_model!(m, pf, oplim, brc_up, brc_down, bd, total_solve_time)
-    !has_values(m) && return Case(m, opf, pf, oplim, brc_up, brc_down, Pc, Pcc, Pccx), total_solve_time
-
     ΔPc = zeros(length(bd.Pg))
     ΔPcc = zeros(length(bd.Pg))
     ΔPccx = zeros(length(bd.Pg))
@@ -139,12 +100,56 @@ function run_benders!(
     brst = oplim.branch_rating * oplim.short_term_multi
     brlt = oplim.branch_rating * oplim.long_term_multi
 
-    olc = Vector{Tuple{Int,Float64}}()
-    olcc = Vector{Tuple{Int,Float64}}()
-    olccx = Vector{Tuple{Int,Float64}}()
-    islands = Vector{Vector{Int}}()
-    island = 0
-    island_b = Int[]
+    olc = Vector{Tuple{Int64,Float64}}()
+    olcc = Vector{Tuple{Int64,Float64}}()
+    olccx = Vector{Tuple{Int64,Float64}}()
+    islands = [Vector{Int64}()]
+    islands_b = [Vector{Int64}()]
+
+    overloads = zeros(length(opf.contingencies))
+    # PI = zeros(length(opf.contingencies))
+    for (c, c_obj) in enumerate(opf.contingencies)
+        c_i = c_obj.second
+        if c_obj.first == "branch"
+            c_n = Tuple(opf.mbx[c_i,:].nzind)
+            if is_islanded(pf, c_n, c_i)
+                islands = island_detection_thread_safe(pf.B, c_n)
+                for (n,nodes) in enumerate(islands)
+                    if length(nodes) < 2
+                        deleteat!(islands, n)
+                    end
+                end
+                islands_b = [find_island_branches(island, pf.DA, c_i) for island in islands]
+                type.C1 && init_P!(Pc, opf, oplim, m, bd.obj, islands, c)
+                type.C2 && init_P!(Pcc, opf, oplim, m, bd.obj, islands, c)
+                type.C2F && init_P!(Pccx, opf, oplim, m, bd.obj, islands, c)
+                # @debug "Island: Contingency $(string(typeof(c_obj))) $(get_name(c_obj))"
+                overload = []
+                if !isempty(islands)
+                    for (island, island_b) in zip(islands, islands_b)
+                        calculate_line_flows!(pf.vb_tmp, pf, c_n, c_i, nodes=island, branches=island_b)
+                        push!(overload, filter_overload(pf.vb_tmp, brst))
+                    end
+                    overload = reduce(vcat, overload)
+                end
+            else
+                calculate_line_flows!(pf.vb_tmp, pf, c_n, c_i)
+                flow = pf.vb_tmp
+                overload = filter_overload(flow, brst)
+            end
+            # PI[i] = maximum((flow ./ (brst)).^2)
+        elseif c_obj.first == "gen"
+            c_n = opf.mgx[c_i,:].nzind[1]
+            overload = calculate_contingency_overload!(brst, pf, c_n, c_i, islands[1], islands_b[1], atol)
+        end
+
+        if !isempty(overload)
+            overloads[c] = maximum(x -> abs(x[2]), overload)
+        end
+    end
+
+    total_solve_time = update_model!(m, pf, oplim, brc_up, brc_down, bd, total_solve_time)
+    !has_values(m) && return Case(m, opf, pf, oplim, brc_up, brc_down, Pc, Pcc, Pccx), total_solve_time
 
     permutation = sortperm(overloads, rev=true)
     # permutation = sortperm(PI, rev=true)
@@ -158,58 +163,68 @@ function run_benders!(
         cut_added = 0
         @info "\n------------------\nIteration $iterations"
 
-        for i in permutation
-            c_obj = opf.contingencies[i]
-            cont = typesort_component(c_obj, opf)
-            if is_islanded(pf, cont[2], cont[1])
-                islands, island, island_b = handle_islands(pf.B, pf.DA, cont[2], cont[1], pf.slack)
-                inodes = islands[island]
-                # initialize_islands(opf, islands, island)
+        for c in permutation
+            c_obj = opf.contingencies[c]
+            c_i = c_obj.second
+            c_n = c_obj.first == "branch" ? Tuple(opf.mbx[c_i,:].nzind) : opf.mgx[c_i,:].nzind[1]
+            if is_islanded(pf, c_n, c_i)
+                islands = island_detection_thread_safe(pf.B, c_n)
+                for (n,nodes) in enumerate(islands)
+                    if length(nodes) < 2
+                        deleteat!(islands, n)
+                    end
+                end
+                islands_b = [find_island_branches(island, pf.DA, c_i) for island in islands]
             else
-                empty!(islands)
-                island = 0
-                empty!(island_b)
-                inodes = Int[]
+                islands = [Vector{Int64}()]
+                islands_b = [Vector{Int64}()]
             end
 
             if type.P
-                olc = calculate_contingency_overload(brst, m, pf, bd, cont, i, c_obj, inodes, island_b, atol)
-            end
-            if type.C1
-                olc = calculate_contingency_overload!(ΔPc, brst, Pc, opf, m, pf, bd, cont, i, c_obj, inodes, island_b, atol)
+                olc = [calculate_contingency_overload!(brst, pf, c_n, c_i, inodes, ibranches, atol) for (inodes, ibranches) in zip(islands, islands_b)]
+            elseif type.C1
+                olc = [calculate_contingency_overload!(ΔPc, brst, Pc, opf, m, pf, bd, c_n, c_i, c, inodes, ibranches, atol) for (inodes, ibranches) in zip(islands, islands_b)]
             end
             if type.C2
-                olcc = calculate_contingency_overload!(ΔPcc, brlt, Pcc, opf, m, pf, bd, cont, i, c_obj, inodes, island_b, atol)
+                olcc = [calculate_contingency_overload!(ΔPcc, brlt, Pcc, opf, m, pf, bd, c_n, c_i, c, inodes, ibranches, atol) for (inodes, ibranches) in zip(islands, islands_b)]
             end
             if type.C2F
-                olccx = calculate_contingency_overload!(ΔPccx, brlt, Pccx, opf, m, pf, bd, cont, i, c_obj, inodes, island_b, atol)
+                olccx = [calculate_contingency_overload!(ΔPccx, brlt, Pccx, opf, m, pf, bd, c_n, c_i, c, inodes, ibranches, atol) for (inodes, ibranches) in zip(islands, islands_b)]
             end
-            if !isempty(olc) || !isempty(olcc) || !isempty(olccx) # ptdf calculation is more computational expensive than line flow
-                if is_islanded(pf, cont[2], cont[1])
-                    ptdf = calc_isf(pf, cont[2], cont[1], islands, island, island_b)
+            if sum(.!isempty.(olc)) + sum(.!isempty.(olcc)) + sum(.!isempty.(olccx)) > 0 # ptdf calculation is more computational expensive than line flow
+                if is_islanded(pf, c_n, c_i)
+                    ptdf = [calc_isf(pf, c_n, c_i, islands, n, ibranches) for (n, ibranches) in enumerate(islands_b)]
                 else
-                    ptdf = calc_isf(pf, cont[2], cont[1])
-                    set_tol_zero!(ptdf)
+                    ptdf = [calc_isf(pf, c_n, c_i)]
+                    set_tol_zero!.(ptdf)
                 end
 
-                type.C1 && get(Pc, i, 0) == 0 && fill!(ΔPc, 0.0)
-                type.C2 && get(Pcc, i, 0) == 0 && fill!(ΔPcc, 0.0)
-                type.C2F && get(Pccx, i, 0) == 0 && fill!(ΔPccx, 0.0)
+                type.C1 && get(Pc, c, 0) == 0 && fill!(ΔPc, 0.0)
+                type.C2 && get(Pcc, c, 0) == 0 && fill!(ΔPcc, 0.0)
+                type.C2F && get(Pccx, c, 0) == 0 && fill!(ΔPccx, 0.0)
             end
 
             # Cannot change the model before all data is exctracted!
-            if !isempty(olc)
+            if sum(.!isempty.(olc)) > 0
                 if type.P
-                    cut_added, pre = add_cut(opf, m, bd, ptdf, olc, c_obj, cut_added, atol, pre)
+                    for (j,ol) in enumerate(olc)
+                        cut_added, pre = add_cut(opf, m, bd, ptdf[j], ol, c_obj, cut_added, atol, pre)
+                    end
                 elseif type.C1
-                    cut_added, corr1 = add_cut(Pc, opf, oplim, m, bd, ΔPc, ptdf, olc, islands, island, c_obj, i, cut_added, atol, corr1)
+                    for (j,ol) in enumerate(olc)
+                        cut_added, corr1 = add_cut(Pc, opf, oplim, m, bd, ΔPc, ptdf[j], ol, islands, c_obj, c, cut_added, atol, corr1)
+                    end
                 end
             end
-            if !isempty(olcc)
-                cut_added, corr2 = add_cut(Pcc, opf, oplim, m, bd, ΔPcc, ptdf, olcc, islands, island, c_obj, i, cut_added, atol, corr2)
+            if sum(.!isempty.(olcc)) > 0
+                for (j,ol) in enumerate(olcc)
+                    cut_added, corr2 = add_cut(Pcc, opf, oplim, m, bd, ΔPcc, ptdf[j], ol, islands, c_obj, c, cut_added, atol, corr2)
+                end
             end
-            if !isempty(olccx)
-                cut_added, corr2f = add_cut(Pccx, opf, oplim, m, bd, ΔPccx, ptdf, olccx, islands, island, c_obj, i, cut_added, atol, corr2f)
+            if sum(.!isempty.(olccx)) > 0
+                for (j,ol) in enumerate(olccx)
+                    cut_added, corr2f = add_cut(Pccx, opf, oplim, m, bd, ΔPccx, ptdf[j], ol, islands, c_obj, c, cut_added, atol, corr2f)
+                end
             end
             if cut_added > 1
                 total_solve_time = update_model!(m, pf, oplim, brc_up, brc_down, bd, total_solve_time)
@@ -235,98 +250,102 @@ function update_model!(m::Model, pf::DCPowerFlow, oplim::Oplimits, brc_up::Dict{
     return total_solve_time
 end
 
+function calculate_contingency_line_flows!(pf::DCPowerFlow, c_n::Tuple{Real,Real}, c_i::Real,
+    island::Vector, island_b::Vector{<:Integer}
+)
+    calculate_line_flows!(pf.vb_tmp, pf, c_n, c_i, nodes=island, branches=island_b)
+    return pf.vb_tmp
+end
+function calculate_contingency_line_flows!(
+    m::Model, pf::DCPowerFlow, Pᵢ::AbstractVector{<:Real}, c_n::Integer, c_i::Integer,
+    island::Vector, island_b::Vector{<:Integer}
+) 
+    val = get_gen_ΔP(m, c_i)
+    Pᵢ[c_n] -= val
+    LinearAlgebra.mul!(pf.vb_tmp, pf.ϕ, Pᵢ)
+    Pᵢ[c_n] += val
+    return pf.vb_tmp
+end
+
+
 """
-    Calculate the contingency power flow with corrective actions.
+    Calculate the contingency power flow accounting for corrective actions.
     Assummes that island-contingencies have active variables from the pre-procedure.
 """
 function calculate_contingency_line_flows!(ΔP::Vector{<:Real}, P::Dict{<:Integer, T}, opf::OPFsystem, 
-    m::Model, pf::DCPowerFlow, Pᵢ::AbstractVector{<:Real}, cont::Tuple{Real, Tuple{Real,Real}}, 
-    c::Integer, c_obj::Component, island::Vector, island_b::Vector{<:Integer}
+    m::Model, pf::DCPowerFlow, Pᵢ::AbstractVector{<:Real}, c_n::Tuple{Real,Real}, c_i::Real,
+    c::Integer, island::Vector, island_b::Vector{<:Integer}
 ) where {T}
     if get(P, c, 0) == 0
-        return calculate_contingency_line_flows(m, pf, Pᵢ, cont, c, c_obj, island, island_b)
+        calculate_line_flows!(pf.vb_tmp, pf, c_n, c_i)
+        return pf.vb_tmp
     end
     ΔP = get_ΔP!(ΔP, m, opf, P, c)
     if iszero(ΔP)
-        calculate_line_flows!(pf.vb_tmp, pf, cont[2], cont[1], nodes=island, branches=island_b)
+        calculate_line_flows!(pf.vb_tmp, pf, c_n, c_i, nodes=island, branches=island_b)
     else
-        calculate_line_flows!(pf.vb_tmp, pf, cont[2], cont[1], Pᵢ=(Pᵢ .+ ΔP), nodes=island, branches=island_b)
+        calculate_line_flows!(pf.vb_tmp, pf, c_n, c_i, Pᵢ=(Pᵢ .+ ΔP), nodes=island, branches=island_b)
     end
     return pf.vb_tmp
 end
 function calculate_contingency_line_flows!(ΔP::Vector{<:Real}, P::Dict{<:Integer, T}, opf::OPFsystem, 
-    m::Model, pf::DCPowerFlow, Pᵢ::AbstractVector{<:Real}, cont::Tuple{Real,Real},
-    c::Integer, c_obj::Component, island::Vector, island_b::Vector{<:Integer}
+    m::Model, pf::DCPowerFlow, Pᵢ::AbstractVector{<:Real}, c_n::Integer, c_i::Integer,
+    c::Integer, island::Vector, island_b::Vector{<:Integer}
 ) where {T}
     if get(P, c, 0) == 0
-        return calculate_contingency_line_flows(m, pf, Pᵢ, cont, c, c_obj, island, island_b)
+        return calculate_contingency_line_flows!(m, pf, Pᵢ, c_n, c_i)
     end
     ΔP = get_ΔP!(ΔP, m, opf, P, c)
-    ΔP[cont[2]] -= get_ΔP(m, cont, c_obj, P, c)
+    ΔP[c_n] -= get_gen_ΔP(m, c_i, P, c)
     LinearAlgebra.mul!(pf.vb_tmp, pf.ϕ, (Pᵢ .+ ΔP))
     return pf.vb_tmp
 end
 
 """
-    Calculate the contingency power flow without corrective actions.
+    Calculate the contingency overflow.
+    c_n = affected node(s)
+    c_i = contingecy index in it's component vector
 """
-function calculate_contingency_line_flows(
-    m::Model, pf::DCPowerFlow, P::Vector{<:Real}, cont::Tuple{Real, Tuple{Real,Real}}, c::Integer, c_obj::Component,
-    island::Vector, island_b::Vector{<:Integer}, val=0.0
+function calculate_contingency_overload!(branch_rating::Vector{<:Real}, pf::DCPowerFlow, 
+    c_n::Union{Tuple{Integer,Integer}, Integer}, c_i::Integer, 
+    island::Vector, island_b::Vector{<:Integer}, atol::Real=1e-6
 )
-    calculate_line_flows!(pf.vb_tmp, pf, cont[2], cont[1], nodes=island, branches=island_b)
-    return pf.vb_tmp
-end
-function calculate_contingency_line_flows(
-    m::Model, pf::DCPowerFlow, P::Vector{<:Real}, cont::Tuple{Real,Real}, c::Integer, c_obj::StaticInjection,
-    island::Vector, island_b::Vector{<:Integer}, val=get_ΔP(m, cont, c_obj)
-)
-    P[cont[2]] -= val
-    LinearAlgebra.mul!(pf.vb_tmp, pf.ϕ, P)
-    P[cont[2]] += val
-    return pf.vb_tmp
+    flow = calculate_contingency_line_flows!(pf, c_n, c_i, island, island_b)
+    return filter_overload(flow, branch_rating, atol)
 end
 
 """
-    Calculate the contingency overflow with corrective actions.
+    Calculate the contingency overflow accounting for corrective actions.
+    c_n = affected node(s)
+    c_i = contingecy index in it's component vector
+    c = contingecy index
 """
 function calculate_contingency_overload!(ΔP::Vector{<:Real}, branch_rating::Vector{<:Real},
     Pc::Dict, opf::OPFsystem, m::Model, pf::DCPowerFlow, bd::Benders, 
-    cont::Union{Tuple{Real, Tuple{Real,Real}}, Tuple{Real,Real}}, c::Integer, c_obj::Component, 
+    c_n::Union{Tuple{Integer,Integer}, Integer}, c_i::Integer, c::Integer, 
     island::Vector, island_b::Vector{<:Integer}, atol::Real=1e-6
 )
-    flow = calculate_contingency_line_flows!(ΔP, Pc, opf, m, pf, bd.Pᵢ, cont, c, c_obj, island, island_b)
+    flow = calculate_contingency_line_flows!(ΔP, Pc, opf, m, pf, bd.Pᵢ, c_n, c_i, c, island, island_b)
     return filter_overload(flow, branch_rating, atol)
 end
 
-"""
-    Calculate the contingency overflow without corrective actions.
-"""
-function calculate_contingency_overload(branch_rating::Vector{<:Real}, m::Model, 
-    pf::DCPowerFlow, bd::Benders, cont::Union{Tuple{Real, Tuple{Real,Real}}, Tuple{Real,Real}}, c::Integer, c_obj::Component,
-    island::Vector, island_b::Vector{<:Integer}, atol::Real=1e-6
-)
-    flow = calculate_contingency_line_flows(m, pf, bd.Pᵢ, cont, c, c_obj, island, island_b)
-    return filter_overload(flow, branch_rating, atol)
-end
+get_gen_ΔP(m::Model, cont::Real) = 
+    value(m[:pg0][cont])
+get_gen_ΔP(m::Model, cont::Real, Pc::Dict{<:Integer, ExprC}, c::Integer) = 
+    value(m[:pg0][cont]) + value(Pc[c].pgu[cont]) - value(Pc[c].pgd[cont])
+get_gen_ΔP(m::Model, cont::Real, Pcc::Dict{<:Integer, ExprCC}, c::Integer) = 
+    value(m[:pg0][cont]) + value(Pcc[c].pgu[cont]) - value(Pcc[c].pgd[cont])
+get_gen_ΔP(m::Model, cont::Real, Pccx::Dict{<:Integer, ExprCCX}, c::Integer) = 
+    value(m[:pg0][cont]) - value(Pccx[c].pgdx[cont])
 
-get_ΔP(m::Model, cont::Tuple{Real,Real}, ::Generator) = 
-    value(m[:pg0][cont[1]])
-get_ΔP(m::Model, cont::Tuple{Real,Real}, ::Generator, Pc::Dict{<:Integer, ExprC}, c::Integer) = 
-    value(m[:pg0][cont[1]]) + value(Pc[c].pgu[cont[1]]) - value(Pc[c].pgd[cont[1]])
-get_ΔP(m::Model, cont::Tuple{Real,Real}, ::Generator, Pcc::Dict{<:Integer, ExprCC}, c::Integer) = 
-    value(m[:pg0][cont[1]]) + value(Pcc[c].pgu[cont[1]]) - value(Pcc[c].pgd[cont[1]])
-get_ΔP(m::Model, cont::Tuple{Real,Real}, ::Generator, Pccx::Dict{<:Integer, ExprCCX}, c::Integer) = 
-    value(m[:pg0][cont[1]]) - value(Pccx[c].pgdx[cont[1]])
-
-get_ΔP(m::Model, cont::Tuple{Real,Real}, ::StaticLoad) = 
-    value(m[:pd0][cont[1]]) - value(m[:ls0][cont[1]])
-get_ΔP(m::Model, cont::Tuple{Real,Real}, ::StaticLoad, Pc::Dict{<:Integer, ExprC}, c::Integer) = 
-    value(m[:pd0][cont[1]]) - value(Pc[c].lsc[cont[1]])
-get_ΔP(m::Model, cont::Tuple{Real,Real}, ::StaticLoad, Pcc::Dict{<:Integer, ExprCC}, c::Integer) = 
-    value(m[:pd0][cont[1]]) - value(Pcc[c].lscc[cont[1]])
-get_ΔP(m::Model, cont::Tuple{Real,Real}, ::StaticLoad, Pccx::Dict{<:Integer, ExprCCX}, c::Integer) = 
-    value(m[:pd0][cont[1]]) - value(Pccx[c].lsccx[cont[1]])
+get_load_ΔP(m::Model, cont::Real) = 
+    value(m[:pd0][cont]) - value(m[:ls0][cont])
+get_load_ΔP(m::Model, cont::Real, Pc::Dict{<:Integer, ExprC}, c::Integer) = 
+    value(m[:pd0][cont]) - value(Pc[c].lsc[cont])
+get_load_ΔP(m::Model, cont::Real, Pcc::Dict{<:Integer, ExprCC}, c::Integer) = 
+    value(m[:pd0][cont]) - value(Pcc[c].lscc[cont])
+get_load_ΔP(m::Model, cont::Real, Pccx::Dict{<:Integer, ExprCCX}, c::Integer) = 
+    value(m[:pd0][cont]) - value(Pccx[c].lsccx[cont])
 
 """ Return the contingency power injection change at each node changing ΔP. """
 function get_ΔP!(ΔP::Vector{T}, m::Model, opf::OPFsystem, 
@@ -343,14 +362,12 @@ end
 
 """ Return the short term post-contingency power injection change at each node. """
 @inline function get_ΔP(pc::ExprC, opf::OPFsystem, m::Model)
-    return opf.mgx' * (get_value(m, pc.pgu) - get_value(m, pc.pgd)) - 
-        opf.mrx' * get_value(m, pc.prc) + opf.mdx' * get_value(m, pc.lsc)
+    return opf.mgx' * (get_value(m, pc.pgu) - get_value(m, pc.pgd)) + opf.mdx' * get_value(m, pc.lsc)
 end
 
 """ Return the long term post-contingency power injection change at each node. """
 @inline function get_ΔP(pcc::ExprCC, opf::OPFsystem, m::Model)
-    return opf.mgx' * (get_value(m, pcc.pgu) - get_value(m, pcc.pgd)) - 
-        opf.mrx' * get_value(m, pcc.prcc) + opf.mdx' * get_value(m, pcc.lscc) +
+    return opf.mgx' * (get_value(m, pcc.pgu) - get_value(m, pcc.pgd)) + opf.mdx' * get_value(m, pcc.lscc) +
         opf.mdcx' * get_value(m, pcc.pfdccc)
 end
 
@@ -360,9 +377,9 @@ end
 end
 
 function add_overload_expr!(m::Model, expr::JuMP.AbstractJuMPScalar, ol::Real, type::String, id::Integer,
-    c_obj::Component, opf::OPFsystem, i::Integer, atol::Real
+    c_obj::Pair{String, Int64}, i::Integer, atol::Real
 )
-    @info @sprintf "%s %d: Contingency %s %s; overload on %s of %.6f" type id string(typeof(c_obj)) c_obj.name opf.branches[i].name ol
+    @info @sprintf "%s %d: Contingency %s %d; overload on branch %d of %.6f" type id c_obj.first c_obj.second i ol
     @debug "Cut added: $(sprint_expr(expr,atol))\n"
     if ol < 0
         JuMP.@constraint(m, expr <= ol)
@@ -372,7 +389,7 @@ function add_overload_expr!(m::Model, expr::JuMP.AbstractJuMPScalar, ol::Real, t
 end
 
 function add_cut(opf::OPFsystem, m::Model, bd::Benders, ptdf::AbstractMatrix{<:Real}, overloads::Vector{<:Tuple{Integer,Real}},
-    c_obj::Component, cut_added::Integer, atol::Real, id::Integer
+    c_obj::Pair{String, Int64}, cut_added::Integer, atol::Real, id::Integer
 )
     for (i, ol) in overloads
         expr = AffExpr() + sum(ptdf[i, :] .* bd.Pᵢ)
@@ -381,7 +398,7 @@ function add_cut(opf::OPFsystem, m::Model, bd::Benders, ptdf::AbstractMatrix{<:R
         end
 
         id += 1
-        add_overload_expr!(m, expr, ol, "Pre", id, c_obj, opf, i, atol)
+        add_overload_expr!(m, expr, ol, "Pre", id, c_obj, i, atol)
         cut_added = 2
     end
     return cut_added, id
@@ -389,12 +406,12 @@ end
 
 """ Finding and adding Benders cuts to mitigate overloads from one contingency """
 function add_cut(P::Dict{<:Integer, <:ContExpr}, opf::OPFsystem, oplim::Oplimits, m::Model, bd::Benders, ΔP::Vector{<:Real},
-    ptdf::AbstractMatrix{<:Real}, overloads::Vector{<:Tuple{Integer,Real}}, islands::Vector, island::Integer,
-    c_obj::Component, c::Integer, cut_added::Integer, atol::Real, id::Integer
+    ptdf::AbstractMatrix{<:Real}, overloads::Vector{<:Tuple{Integer,Real}}, islands::Vector,
+    c_obj::Pair{String, Int64}, c::Integer, cut_added::Integer, atol::Real, id::Integer
 )
     p = get(P, c, 0)
     if p == 0  # If the contingency is not run before, a set of corrective variables is added
-        init_P!(P, opf, oplim, m, bd.obj, islands, island, c)
+        init_P!(P, opf, oplim, m, bd.obj, islands, c)
         p = get(P, c, 0)
     end
     for (i, ol) in overloads
@@ -403,7 +420,7 @@ function add_cut(P::Dict{<:Integer, <:ContExpr}, opf::OPFsystem, oplim::Oplimits
         expr2 = JuMP.@expression(m, sum((ptdf[i, :] .* expr)))
 
         id += 1
-        add_overload_expr!(m, expr2, ol, get_name(p), id, c_obj, opf, i, atol)
+        add_overload_expr!(m, expr2, ol, get_name(p), id, c_obj, i, atol)
         cut_added = 2
     end
     return cut_added, id
@@ -411,7 +428,6 @@ end
 
 function make_cut(pc::ExprC, opf::OPFsystem, m::Model)
     expr = JuMP.@expression(m, -opf.mgx' * (m[:pg0] + pc.pgu - pc.pgd))
-    add_to_expression!.(expr, -opf.mrx' * (m[:pr] - pc.prc))
     add_to_expression!.(expr, -opf.mdcx' * m[:pfdc0])
     add_to_expression!.(expr, -opf.mdx' * (pc.lsc - m[:pd]))
     return expr
@@ -419,7 +435,6 @@ end
 
 function make_cut(pcc::ExprCC, opf::OPFsystem, m::Model)
     expr = JuMP.@expression(m, -opf.mgx' * (m[:pg0] + pcc.pgu - pcc.pgd))
-    add_to_expression!.(expr, -opf.mrx' * (m[:pr] - pcc.prcc))
     add_to_expression!.(expr, -opf.mdcx' * pcc.pfdccc)
     add_to_expression!.(expr, -opf.mdx' * (pcc.lscc - m[:pd]))
     return expr
@@ -427,7 +442,6 @@ end
 
 function make_cut(pccx::ExprCCX, opf::OPFsystem, m::Model)
     expr = JuMP.@expression(m, -opf.mgx' * (m[:pg0] - pccx.pgdx))
-    add_to_expression!.(expr, -opf.mrx' * (m[:pr] - pccx.prccx))
     add_to_expression!.(expr, -opf.mdcx' * m[:pfdc0])
     add_to_expression!.(expr, -opf.mdx' * (pccx.lsccx - m[:pd]))
     return expr

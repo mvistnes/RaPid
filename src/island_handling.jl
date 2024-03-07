@@ -87,7 +87,8 @@ function island_detection(T::SparseArrays.SparseMatrixCSC{Ty,<:Integer}, i::Inte
     end
     return islands
 end
-function island_detection_thread_safe(Y::SparseArrays.SparseMatrixCSC{Ty,<:Integer}, i::Integer, j::Integer; atol::Real=1e-14) where {Ty}
+function island_detection_thread_safe(Y::SparseArrays.SparseMatrixCSC{Ty,<:Integer}, cont::Tuple{<:Integer,<:Integer}; atol::Real=1e-14) where {Ty}
+    i, j = cont
     T = create_connectivity_matrix(Y)
     val = Y[i, j]
     SparseArrays.dropstored!(T, i, j)
@@ -146,7 +147,7 @@ function find_island_branches(island::Vector{<:Integer}, DA::SparseArrays.Sparse
 end
 
 function handle_islands(B::AbstractMatrix, DA::AbstractMatrix, contingency::Tuple{Integer,Integer}, branch::Integer, slack::Integer)
-    islands = island_detection_thread_safe(B, contingency[1], contingency[2])
+    islands = island_detection_thread_safe(B, contingency)
     island = find_ref_island(islands, slack)
     island_b = find_island_branches(islands[island], DA, branch)
 
@@ -160,17 +161,17 @@ end
 function handle_islands(B::AbstractMatrix, DA::AbstractMatrix, contingencies::AbstractVector{<:Tuple{Integer,Integer}}, branch::Integer, slack::Integer)
     islands = island_detection_thread_safe(B, contingencies)
     island = find_ref_island(islands, slack)
-    island_b = find_island_branches(islands[island], DA, branch)
+    island_b = [find_island_branches(i, DA, branch) for i in islands]
 
     # Need at least one node to make a valid system
     if length(islands[island]) > 0
         return islands, island, island_b
     end
-    return Vector{Vector{Int64}}(undef, 0), 0, Vector{Int64}(undef, 0)
+    return Vector{Vector{Int64}}(undef, 0), 0, Vector{Vector{Int64}}(undef, 0)
 end
 
 function handle_islands(B::AbstractMatrix, contingency::Tuple{Integer,Integer}, slack::Integer)
-    islands = island_detection_thread_safe(B, contingency[1], contingency[2])
+    islands = island_detection_thread_safe(B, contingency)
     island = find_ref_island(islands, slack)
     return length(islands[island]) > 0 ? (islands, islands) : Vector{Vector{Int64}}(undef, 0), 0
     # Need at least one node to make a valid system

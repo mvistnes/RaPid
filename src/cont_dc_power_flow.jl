@@ -167,6 +167,11 @@ function calc_isf(pf::DCPowerFlow, cont::Tuple{Real,Real}, c::Integer, islands::
     return pf.mbn_tmp
 end
 
+function calc_isf(pf::DCPowerFlow, islands::Vector{Vector{Int64}}, island_b::Vector{Vector{Int64}})
+    @assert length(islands) == length(island_b)
+    return copy.(getindex.([pf.ϕ],island_b, islands))
+end
+
 function calculate_line_flows!(F::AbstractVector{T}, ϕ::AbstractMatrix{<:Real}, ϕ₀::AbstractMatrix{<:Real}, Pᵢ::AbstractVector{<:Real}, 
     nodes::AbstractVector{<:Integer}, branches::AbstractVector{<:Integer}
 ) where {T<:Real}
@@ -182,23 +187,4 @@ function calculate_island_line_flows(pf::DCPowerFlow, cont::Tuple{Integer,Intege
     island, island_b = handle_islands(pf.B, pf.DA, cont, cont_branch, pf.slack)
     ptdf = calc_isf(pf.DA, pf.B, cont, cont_branch, pf.slack, island, island_b)
     return ptdf * Pᵢ[island]
-end
-
-function calc_contingency_ptdf(opf::OPFsystem, pf::DCPowerFlow)
-    contids = [(x, calc_bus_idx(opf.branches[x], opf.idx)) for x in indexin(opf.contingencies, opf.branches)]
-    ptdf = Array{Float64}(undef, size(pf.ϕ, 1), size(pf.ϕ, 2), length(opf.contingencies))
-    # for i in eachindex(contids)
-    Threads.@threads for i in eachindex(contids)
-        (cont_branch, cont) = contids[i]
-        if !is_islanded(pf, cont, cont_branch)
-            calc_isf!(ptdf[:, :, i], pf.X, pf.B, pf.DA, cont, cont_branch)
-        else
-            islands = island_detection_thread_safe(pf.B, cont[1], cont[2])
-            island = find_ref_island(islands, pf.slack)
-            island_b = find_island_branches(islands[island], pf.DA, cont_branch)
-            fill!(ptdf[:, :, i], zero(Float64))
-            calc_isf!(ptdf[island_b, islands[island], i], pf.DA, pf.B, cont, cont_branch, pf.slack)
-        end
-    end
-    return ptdf
 end

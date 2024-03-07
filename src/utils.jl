@@ -31,7 +31,7 @@ end
 
 function setup(system::System, prob_min=0.1, prob_max=0.4)
     voll = make_voll(system)
-    contingencies = sort_components!(get_branches(system))
+    contingencies = ["branch"] .=> 1:length(get_branches(system))
     prob = make_prob(contingencies, prob_min, prob_max)
     return voll, prob, contingencies
 end
@@ -68,36 +68,44 @@ PowerSystems.set_active_power!(dem::StandardLoad, val::Real) =
 " Fix for name difference in StandardLoad "
 PowerSystems.get_active_power(value::StandardLoad) = value.constant_active_power
 
+const fueldict = Dict(
+    ThermalFuels.COAL => 0.02, 
+    ThermalFuels.DISTILLATE_FUEL_OIL => 0.03, 
+    ThermalFuels.NATURAL_GAS => 0.04, 
+    ThermalFuels.NUCLEAR => 0.005, 
+    ThermalFuels.OTHER => 0.01
+)
+
+""" Set the generator ramping ability p.u./min based on ramp (or fuel type) and maximal active power """
+function set_ramp_limit!(gen::Generator, ramp::Real)
+    p_lim = get_active_power_limits(gen)
+    PowerSystems.set_ramp_limits!(gen, (up=(p_lim.max * ramp), down=(p_lim.max * ramp)))
+end
+
+set_ramp_limit!(gen::ThermalStandard) = set_ramp_limits!(gen, fueldict[get_fuel(gen)])
+set_ramp_limit!(gen::HydroDispatch) = set_ramp_limit!(gen, 0.2)
+set_ramp_limit!(gen::RenewableGen) = set_ramp_limit!(gen, 1.0)
+
 function set_ramp_limits!(system::System, ramp_mult::Real=0.01)
     set_ramp_limit!.(get_ctrl_generation(system), ramp_mult)
 end
-function set_ramp_limit!(gen::Generator, ramp_mult::Real=0.01)
-    p_lim = get_active_power_limits(gen)
-    PowerSystems.set_ramp_limits!(gen, (up=(p_lim.max * ramp_mult), down=(p_lim.max * ramp_mult)))
-end
-const fueldict = Dict(ThermalFuels.COAL => 0.02, ThermalFuels.DISTILLATE_FUEL_OIL => 0.03, ThermalFuels.NATURAL_GAS => 0.04, ThermalFuels.NUCLEAR => 0.005, ThermalFuels.OTHER => 0.01)
-function set_ramp_limit!(gen::ThermalStandard, ramp_mult::Real=0.0)
-    p_lim = get_active_power_limits(gen)
-    if iszero(ramp_mult)
-        type = get_fuel(gen)
-        ramp_mult = fueldict[type]
-    end
-    PowerSystems.set_ramp_limits!(gen, (up=(p_lim.max * ramp_mult), down=(p_lim.max * ramp_mult)))
-end
-function set_ramp_limit!(gen::HydroDispatch, ramp_mult::Real=0.2)
-    p_lim = get_active_power_limits(gen)
-    PowerSystems.set_ramp_limits!(gen, (up=(p_lim.max * ramp_mult), down=(p_lim.max * ramp_mult)))
-end
+
+PowerSystems.get_active_power_limits(gen::RenewableGen) = (min=get_active_power(gen), max=get_active_power(gen))
+PowerSystems.get_ramp_limits(gen::RenewableGen) = get_active_power_limits(gen)
 
 get_generator_cost(gen::Generator) = get_operation_cost(gen) |> get_variable |> get_cost |> _get_g_value
 _get_g_value(x::AbstractVector{<:Tuple{Real,Real}}) = x[1]
 _get_g_value(x::Tuple{<:Real,<:Real}) = x
 
-function get_generator_cost(ctrl_generation::AbstractVector{<:Generator}, ramp_cost::Float64)
-    cost = Vector{NamedTuple{(:fix, :var, :ramp)}}(undef, length(ctrl_generation))
+function get_generator_cost(ctrl_generation::AbstractVector{<:Generator}, renew_cost::Real)
+    cost = Vector{NamedTuple{(:fix, :var)}}(undef, length(ctrl_generation))
     for (i,g) in enumerate(ctrl_generation)
-        c = get_generator_cost(g)
-        cost[i] = (fix=c[1], var=c[2], ramp=c[2]*ramp_cost)
+        if typeof(g) <: RenewableGen
+            cost[i] = (fix=0.0, var=renew_cost)
+        else
+            c = get_generator_cost(g)
+            cost[i] = (fix=c[1], var=c[2])
+        end
     end
     return cost
 end
@@ -230,7 +238,7 @@ filter_active!(list::AbstractVector{<:Component}) = filter(comp -> comp.availabl
 
 """ OPF system type """
 mutable struct OPFsystem{TR<:Real,TI<:Integer}
-    cost_ctrl_gen::Vector{NamedTuple{(:fix, :var, :ramp), Tuple{TR, TR, TR}}}
+    cost_ctrl_gen::Vector{NamedTuple{(:fix, :var), Tuple{TR, TR}}}
     cost_renewables::Vector{TR}
     voll::Vector{TR}
     prob::Vector{TR}
@@ -240,40 +248,36 @@ mutable struct OPFsystem{TR<:Real,TI<:Integer}
     mdx::SparseArrays.SparseMatrixCSC{Int8, TI}
     mbx::SparseArrays.SparseMatrixCSC{Int8, TI}
     mdcx::SparseArrays.SparseMatrixCSC{Int8, TI}
-    mrx::SparseArrays.SparseMatrixCSC{Int8, TI}
 
-    contingencies::Vector{Component}
+    contingencies::Vector{Pair{String, TI}}
 end
 
 """ Constructor for OPFsystem """
-function opfsystem(sys::System, voll::Vector{TR}, contingencies::Vector{<:Component}=Component[], prob::Vector{TR}=[],
-    ramp_mult::Real=1.0; check=false
+function opfsystem(sys::System, voll::Vector{TR}, contingencies::Vector{Pair{String, Int64}}=Pair{String, Int64}[], 
+    prob::Vector{TR}=[]; renew_cost::Real=0.0, check=false
 ) where {TR<:Real}
 
-    ctrl_generation = sort_components!(get_ctrl_generation(sys))
+    generation = sort_components!(get_generation(sys))
     branches = sort_components!(get_branches(sys))
     # arcs = sort_components!(get_arcs(sys))
     dc_branches = sort_components!(get_dc_branches(sys))
     nodes = sort_components!(get_nodes(sys))
     demands = sort_components!(get_demands(sys))
-    renewables = sort_components!(get_renewables(sys))
 
     idx = get_nodes_idx(nodes)
-    mgx = calc_connectivity(ctrl_generation, length(nodes), idx)
+    mgx = calc_connectivity(generation, length(nodes), idx)
     mbx = calc_A(branches, length(nodes), idx)
     mdcx = calc_A(dc_branches, length(nodes), idx)
     mdx = calc_connectivity(demands, length(nodes), idx)
-    mrx = calc_connectivity(renewables, length(nodes), idx)
 
-    cost_ctrl_gen = get_generator_cost(ctrl_generation, ramp_mult)
+    cost_gen = get_generator_cost(generation, renew_cost)
     cost_renewables = Vector{TR}() # Vector{Float64}([get_generator_cost(g)[2] for g in renewables])
 
     if check
-        check_values(getfield.(cost_ctrl_gen, :fix), ctrl_generation, "fixedcost")
-        check_values(getfield.(cost_ctrl_gen, :var), ctrl_generation, "varcost")
-        check_values(getfield.(cost_ctrl_gen, :ramp), ctrl_generation, "rampcost")
+        check_values(getfield.(cost_gen, :fix), generation, "fixedcost")
+        check_values(getfield.(cost_gen, :var), generation, "varcost")
         check_values(voll, demands, "voll")
-        check_values.(ctrl_generation)
+        check_values.(generation)
         check_values.(branches)
         check_values.(dc_branches)
     end
@@ -284,8 +288,7 @@ function opfsystem(sys::System, voll::Vector{TR}, contingencies::Vector{<:Compon
         @error "The system is separated into islands" islands
     end
 
-    return OPFsystem{TR, Int64}(cost_ctrl_gen, cost_renewables, voll, prob, idx, mgx, mdx, mbx, mdcx, mrx,
-        contingencies)
+    return OPFsystem{TR, Int64}(cost_gen, cost_renewables, voll, prob, idx, mgx, mdx, mbx, mdcx, contingencies)
 end
 
 """ Automatic constructor for OPFsystem where voll, prob, and contingencies are automatically computed. """
@@ -393,7 +396,6 @@ make_named_array(value_func, list) = JuMP.Containers.DenseAxisArray(
 
 find_in_model(m::Model, ::ThermalGen, name::String) = m[:pg0][name]
 find_in_model(m::Model, ::HydroGen, name::String) = m[:pg0][name]
-find_in_model(m::Model, ::RenewableGen, name::String) = m[:pr0][name]
 find_in_model(m::Model, ::StaticLoad, name::String) = m[:ls0][name]
 find_in_model(m::Model, ::DCBranch, name::String) = m[:pfdc0][name]
 
@@ -598,26 +600,26 @@ end
 """ Return the net power injected at each node. """
 get_net_Pᵢ(m::Model) = get_value(m, :p0)
 
-""" Return active power from renweables and demands at each node. """
+""" Return active power from demands at each node. """
 function get_Pd!(P::Vector{<:Real}, opf::OPFsystem, m::Model)
-    P .+= opf.mrx' * get_value(m, :pr) - opf.mdx' * get_value(m, :pd)
+    P .-= opf.mdx' * get_value(m, :pd)
     return P
 end
-get_Pd(opf::OPFsystem, m::Model) = get_Pd!(zeros(length(opf.nodes)), opf, m)
+get_Pd(opf::OPFsystem, m::Model) = get_Pd!(zeros(size(opf.mgx, 2)), opf, m)
 
-""" Return power shed from renewables and demands at each node. """
+""" Return power shed from demands at each node. """
 function get_Pshed!(P::Vector{<:Real}, opf::OPFsystem, m::Model)
-    P .+= opf.mdx' * get_value(m, :ls0) - opf.mrx' * get_value(m, :pr0)
+    P .+= opf.mdx' * get_value(m, :ls0)
     return P
 end
-get_Pshed(opf::OPFsystem, m::Model) = get_Pshed!(zeros(length(opf.nodes)), opf, m)
+get_Pshed(opf::OPFsystem, m::Model) = get_Pshed!(zeros(size(opf.mgx, 2)), opf, m)
 
 """ Return the power injected by controlled generation at each node. """
 function get_Pgen!(P::Vector{<:Real}, opf::OPFsystem, m::Model)
     P .+= opf.mgx' * get_value(m, :pg0) + opf.mdcx' * get_value(m, :pfdc0)
     return P
 end
-get_Pgen(opf::OPFsystem, m::Model) = get_Pgen!(zeros(length(opf.nodes)), opf, m)
+get_Pgen(opf::OPFsystem, m::Model) = get_Pgen!(zeros(size(opf.mgx, 2)), opf, m)
 
 " Return the controlled generation and power shedding at each node. "
 function get_controllable(opf::OPFsystem, m::Model)
