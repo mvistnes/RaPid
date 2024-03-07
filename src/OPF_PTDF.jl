@@ -109,8 +109,8 @@ function add_base_constraints!(type::OPF, opf::OPFsystem, oplim::Oplimits, m::Mo
         # demand curtailment variables
     end)
 
-    @objective(m, Min, sum(c.var * g for (c, g) in zip(opf.cost_ctrl_gen, pg0)) + sum(opf.voll' * ls0))
-    # @objective(m, Min, sum(c[1] * g^2 + c[2] * g for (c, g) in zip(opf.cost_ctrl_gen, pg0)) + sum(opf.voll' * ls0) 
+    @objective(m, Min, sum(c.var * g for (c, g) in zip(opf.cost_gen, pg0)) + sum(opf.voll' * ls0))
+    # @objective(m, Min, sum(c[1] * g^2 + c[2] * g for (c, g) in zip(opf.cost_gen, pg0)) + sum(opf.voll' * ls0) 
 
     JuMP.fix.(pd, oplim.pd_lim)
     if typeof(oplim.max_shed) <: Real
@@ -322,7 +322,7 @@ function init_P!(Pc::Dict{<:Integer,ExprC}, opf::OPFsystem, oplim::Oplimits, m::
 
     p_survive = 1.0 - oplim.p_failure
     add_to_expression!(obj, opf.prob[c], sum(opf.voll' * lsc))
-    for (cost, gu, gd) in zip(opf.cost_ctrl_gen, pgu, pgd)
+    for (cost, gu, gd) in zip(opf.cost_gen, pgu, pgd)
         add_to_expression!(obj, opf.prob[c] * p_survive * cost.var * oplim.ramp_mult, gu)
         add_to_expression!(obj, opf.prob[c] * p_survive * cost.var * oplim.ramp_mult, gd)
         # add_to_expression!.(obj, opf.prob[c], p_survive * oplim.ramp_mult * (cost[1] * g^2 + cost[2] * g))
@@ -389,12 +389,12 @@ function init_P!(Pcc::Dict{<:Integer,ExprCC}, opf::OPFsystem, oplim::Oplimits, m
     # Extend the objective with the corrective variables
     add_to_expression!.(obj, opf.prob[c],
         # (1.0 - p_failure) * (sum(opf.voll' * lscc) + sum(60 * (pgu + pgd)) # + # TODO: remove 60 and uncomment next lines for non-4-area analysis!!!!
-        p_survive * (sum(opf.voll' * lscc) # + sum(opf.cost_ctrl_gen' * ramp_mult * (pgu + pgd))
+        p_survive * (sum(opf.voll' * lscc) # + sum(opf.cost_gen' * ramp_mult * (pgu + pgd))
         # (sum(opf.voll' * lscc) +
-        # sum(opf.cost_ctrl_gen' * ramp_mult * pgu) # +
-        # sum(opf.cost_ctrl_gen' * pgd)
+        # sum(opf.cost_gen' * ramp_mult * pgu) # +
+        # sum(opf.cost_gen' * pgd)
         ))
-    for (cost, gu, gd) in zip(opf.cost_ctrl_gen, pgu, pgd)
+    for (cost, gu, gd) in zip(opf.cost_gen, pgu, pgd)
         add_to_expression!(obj, opf.prob[c] * p_survive * cost.var * oplim.ramp_mult, gu)
         add_to_expression!(obj, opf.prob[c] * p_survive * cost.var * oplim.ramp_mult, gd)
         # add_to_expression!.(obj, opf.prob[c], p_survive * oplim.ramp_mult * (cost[1] * gu^2 + cost[2] * gu))
@@ -522,9 +522,9 @@ end
 calc_cens(m::Model, opf::OPFsystem, var::AbstractVector{VariableRef}) = sum(opf.voll .* get_value(m, var))
 
 """ Calculate the cost of generation for the provided variables """
-calc_ctrl_cost(m::Model, opf::OPFsystem, var::AbstractVector{VariableRef}, symb=:var) =
-    sum(getproperty(c, symb) * g for (c, g) in zip(opf.cost_ctrl_gen, get_value(m, var)))
-# sum(c[1] * g^2 + c[2] * g for (c, g) in zip(opf.cost_ctrl_gen, get_value(m, var)))
+calc_cost(m::Model, opf::OPFsystem, var::AbstractVector{VariableRef}, symb=:var) =
+    sum(getproperty(c, symb) * g for (c, g) in zip(opf.cost_gen, get_value(m, var)))
+# sum(c[1] * g^2 + c[2] * g for (c, g) in zip(opf.cost_gen, get_value(m, var)))
 
 """ Calculate the cost of the modelled slack for all contingencies. """
 function calc_slack_cost(case::Case)
@@ -534,9 +534,9 @@ function calc_slack_cost(case::Case)
     costs = zeros(length(opf.contingencies))
     pg0 = get_value(m, :pg0)
     if isempty(case.oplim.dist_slack)
-        slack_cost = sum(getproperty.(opf.cost_ctrl_gen[opf.mgx[:,pf.slack].nzind], :var) * case.oplim.ramp_mult)
+        slack_cost = sum(getproperty.(opf.cost_gen[opf.mgx[:,pf.slack].nzind], :var) * case.oplim.ramp_mult)
     else
-        slack_cost = opf.mgx' * (getproperty.(opf.cost_ctrl_gen, :var) * case.oplim.ramp_mult .* case.oplim.dist_slack .* pg0)
+        slack_cost = opf.mgx' * (getproperty.(opf.cost_gen, :var) * case.oplim.ramp_mult .* case.oplim.dist_slack .* pg0)
     end
     pg0 = opf.mgx' * pg0
     pd = opf.mdx' * (get_value(m, :pd) - get_value(m, :ls0))
@@ -557,19 +557,19 @@ end
 
 """ Calculate the base case cost """
 calc_objective(m::Model, opf::OPFsystem) =
-    calc_ctrl_cost(m, opf, m[:pg0]) + calc_cens(m, opf, m[:ls0])
+    calc_cost(m, opf, m[:pg0]) + calc_cens(m, opf, m[:ls0])
 
 """ Calculate the short term state cost """
 calc_objective(m::Model, opf::OPFsystem, expr::ExprC, ramp_mult::Real) =
-    (calc_ctrl_cost(m, opf, expr.pgu, :var) + calc_ctrl_cost(m, opf, expr.pgd, :var)) * ramp_mult + calc_cens(m, opf, expr.lsc)
+    (calc_cost(m, opf, expr.pgu, :var) + calc_cost(m, opf, expr.pgd, :var)) * ramp_mult + calc_cens(m, opf, expr.lsc)
 
 """ Calculate the long term state cost """
 calc_objective(m::Model, opf::OPFsystem, expr::ExprCC, ramp_mult::Real) =
-    (calc_ctrl_cost(m, opf, expr.pgu, :var) + calc_ctrl_cost(m, opf, expr.pgd, :var)) * ramp_mult + calc_cens(m, opf, expr.lscc)
+    (calc_cost(m, opf, expr.pgu, :var) + calc_cost(m, opf, expr.pgd, :var)) * ramp_mult + calc_cens(m, opf, expr.lscc)
 
 """ Calculate the long term with corrective failure state cost """
 calc_objective(m::Model, opf::OPFsystem, expr::ExprCCX, ramp_mult::Real) =
-    60 * calc_ctrl_cost(m, opf, expr.pgdx, :var) * ramp_mult + calc_cens(m, opf, expr.lsccx)
+    60 * calc_cost(m, opf, expr.pgdx, :var) * ramp_mult + calc_cens(m, opf, expr.lsccx)
 
 """ Calculate a state cost """
 calc_objective(m::Model, opf::OPFsystem, P::Dict) =

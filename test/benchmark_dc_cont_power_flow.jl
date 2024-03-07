@@ -29,7 +29,7 @@ X = copy(pf.X)
 ϕ = copy(pf.ϕ)
 θ = copy(pf.θ)
 F = copy(pf.F)
-K = SCOPF.get_klu(B, pf.slack)
+K = copy(pf.K)
  
 # CONTAINERS FOR POWER FLOW
 flow1 = copy(pf.F)
