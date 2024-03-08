@@ -30,7 +30,7 @@ function run_benders(
     optimizer, 
     voll::Vector{<:Number}, 
     prob::Vector{<:Number}, 
-    contingencies::Vector{Pair{String, Int64}};
+    contingencies::Vector{Pair{String, Vector{Int64}}};
     dist_slack::Vector{<:Real}=Float64[],
     time_limit_sec::Number=600, 
     ramp_minutes::Number=10, 
@@ -111,15 +111,9 @@ function run_benders!(
     for (c, c_obj) in enumerate(opf.contingencies)
         c_i = c_obj.second
         if c_obj.first == "branch"
-            c_n = Tuple(opf.mbx[c_i,:].nzind)
+            c_n = [Tuple(opf.mbx[i,:].nzind) for i in c_i]
             if is_islanded(pf, c_n, c_i)
-                islands = island_detection_thread_safe(pf.B, c_n)
-                for (n,nodes) in enumerate(islands)
-                    if length(nodes) < 2
-                        deleteat!(islands, n)
-                    end
-                end
-                islands_b = [find_island_branches(island, pf.DA, c_i) for island in islands]
+                islands, islands_b = handle_islands(pf.B, pf.DA, c_n, c_i)
                 type.C1 && init_P!(Pc, opf, oplim, m, bd.obj, islands, c)
                 type.C2 && init_P!(Pcc, opf, oplim, m, bd.obj, islands, c)
                 type.C2F && init_P!(Pccx, opf, oplim, m, bd.obj, islands, c)
@@ -127,19 +121,24 @@ function run_benders!(
                 overload = []
                 if !isempty(islands)
                     for (island, island_b) in zip(islands, islands_b)
-                        calculate_line_flows!(pf.vb_tmp, pf, c_n, c_i, nodes=island, branches=island_b)
+                        if length(c_i) == 1
+                            calculate_line_flows!(pf.vb_tmp, pf, c_n[1], c_i[1], nodes=island, branches=island_b)
+                        else
+                            calculate_line_flows!(pf.vb_tmp, pf.mbn_tmp, pf.ϕ, bd.Pᵢ, island, island_b)
+                        end
                         push!(overload, filter_overload(pf.vb_tmp, brst))
                     end
                     overload = reduce(vcat, overload)
                 end
+            elseif length(c_i) == 1
+                calculate_line_flows!(pf.vb_tmp, pf, c_n[1], c_i[1])
+                overload = filter_overload(pf.vb_tmp, brst)
             else
-                calculate_line_flows!(pf.vb_tmp, pf, c_n, c_i)
-                flow = pf.vb_tmp
-                overload = filter_overload(flow, brst)
+                @error "Not implemented multi-contingency non-separation." c_obj
             end
             # PI[i] = maximum((flow ./ (brst)).^2)
         elseif c_obj.first == "gen"
-            c_n = opf.mgx[c_i,:].nzind[1]
+            c_n = [opf.mgx[i,:].nzind[1] for i in c_i]
             overload = calculate_contingency_overload!(brst, pf, c_n, c_i, islands[1], islands_b[1], atol)
         end
 
@@ -166,15 +165,9 @@ function run_benders!(
         for c in permutation
             c_obj = opf.contingencies[c]
             c_i = c_obj.second
-            c_n = c_obj.first == "branch" ? Tuple(opf.mbx[c_i,:].nzind) : opf.mgx[c_i,:].nzind[1]
+            c_n = c_obj.first == "branch" ? [Tuple(opf.mbx[i,:].nzind) for i in c_i] : [opf.mgx[i,:].nzind[1] for i in c_i]
             if is_islanded(pf, c_n, c_i)
-                islands = island_detection_thread_safe(pf.B, c_n)
-                for (n,nodes) in enumerate(islands)
-                    if length(nodes) < 2
-                        deleteat!(islands, n)
-                    end
-                end
-                islands_b = [find_island_branches(island, pf.DA, c_i) for island in islands]
+                islands, islands_b = handle_islands(pf.B, pf.DA, c_n, c_i)
             else
                 islands = [Vector{Int64}()]
                 islands_b = [Vector{Int64}()]
@@ -195,7 +188,8 @@ function run_benders!(
                 if is_islanded(pf, c_n, c_i)
                     ptdf = [calc_isf(pf, c_n, c_i, islands, n, ibranches) for (n, ibranches) in enumerate(islands_b)]
                 else
-                    ptdf = [calc_isf(pf, c_n, c_i)]
+                    @assert length(c_i) == 1
+                    ptdf = [calc_isf(pf, c_n[1], c_i[1])]
                     set_tol_zero!.(ptdf)
                 end
 
@@ -250,20 +244,21 @@ function update_model!(m::Model, pf::DCPowerFlow, oplim::Oplimits, brc_up::Dict{
     return total_solve_time
 end
 
-function calculate_contingency_line_flows!(pf::DCPowerFlow, c_n::Tuple{Real,Real}, c_i::Real,
+function calculate_contingency_line_flows!(pf::DCPowerFlow, c_n::Vector{<:Tuple{Real,Real}}, c_i::Vector{<:Real},
     island::Vector, island_b::Vector{<:Integer}
 )
-    calculate_line_flows!(pf.vb_tmp, pf, c_n, c_i, nodes=island, branches=island_b)
+    @assert length(c_i) == 1
+    calculate_line_flows!(pf.vb_tmp, pf, c_n[1], c_i[1], nodes=island, branches=island_b)
     return pf.vb_tmp
 end
 function calculate_contingency_line_flows!(
-    m::Model, pf::DCPowerFlow, Pᵢ::AbstractVector{<:Real}, c_n::Integer, c_i::Integer,
+    m::Model, pf::DCPowerFlow, Pᵢ::AbstractVector{<:Real}, c_n::Vector{<:Integer}, c_i::Vector{<:Integer},
     island::Vector, island_b::Vector{<:Integer}
 ) 
-    val = get_gen_ΔP(m, c_i)
-    Pᵢ[c_n] -= val
+    val = get_gen_ΔP.([m], c_i)
+    @. Pᵢ[c_n] -= val
     LinearAlgebra.mul!(pf.vb_tmp, pf.ϕ, Pᵢ)
-    Pᵢ[c_n] += val
+    @. Pᵢ[c_n] += val
     return pf.vb_tmp
 end
 
@@ -273,7 +268,7 @@ end
     Assummes that island-contingencies have active variables from the pre-procedure.
 """
 function calculate_contingency_line_flows!(ΔP::Vector{<:Real}, P::Dict{<:Integer, T}, opf::OPFsystem, 
-    m::Model, pf::DCPowerFlow, Pᵢ::AbstractVector{<:Real}, c_n::Tuple{Real,Real}, c_i::Real,
+    m::Model, pf::DCPowerFlow, Pᵢ::AbstractVector{<:Real}, c_n::Tuple{Integer,Integer}, c_i::Integer,
     c::Integer, island::Vector, island_b::Vector{<:Integer}
 ) where {T}
     if get(P, c, 0) == 0
@@ -289,14 +284,28 @@ function calculate_contingency_line_flows!(ΔP::Vector{<:Real}, P::Dict{<:Intege
     return pf.vb_tmp
 end
 function calculate_contingency_line_flows!(ΔP::Vector{<:Real}, P::Dict{<:Integer, T}, opf::OPFsystem, 
-    m::Model, pf::DCPowerFlow, Pᵢ::AbstractVector{<:Real}, c_n::Integer, c_i::Integer,
+    m::Model, pf::DCPowerFlow, Pᵢ::AbstractVector{<:Real}, c_n::Vector{<:Tuple{Integer,Integer}}, c_i::Vector{<:Integer},
+    c::Integer, island::Vector, island_b::Vector{<:Integer}
+) where {T}
+    if length(c_i) == 1
+        return calculate_contingency_line_flows!(ΔP, P, opf, m, pf, Pᵢ, c_n[1], c_i[1], c, island, island_b)
+    end
+    if get(P, c, 0) == 0
+        @error "Not implemented multi-contingency non-separation." c_i
+    end
+    ΔP = get_ΔP!(ΔP, m, opf, P, c)
+    calculate_line_flows!(pf.vb_tmp, pf.mbn_tmp, pf.ϕ, (Pᵢ .+ ΔP), island, island_b)
+    return pf.vb_tmp
+end
+function calculate_contingency_line_flows!(ΔP::Vector{<:Real}, P::Dict{<:Integer, T}, opf::OPFsystem, 
+    m::Model, pf::DCPowerFlow, Pᵢ::AbstractVector{<:Real}, c_n::Vector{<:Integer}, c_i::Vector{<:Integer},
     c::Integer, island::Vector, island_b::Vector{<:Integer}
 ) where {T}
     if get(P, c, 0) == 0
         return calculate_contingency_line_flows!(m, pf, Pᵢ, c_n, c_i)
     end
     ΔP = get_ΔP!(ΔP, m, opf, P, c)
-    ΔP[c_n] -= get_gen_ΔP(m, c_i, P, c)
+    ΔP[c_n] .-= get_gen_ΔP.([m], c_i, [P], [c])
     LinearAlgebra.mul!(pf.vb_tmp, pf.ϕ, (Pᵢ .+ ΔP))
     return pf.vb_tmp
 end
@@ -307,7 +316,7 @@ end
     c_i = contingecy index in it's component vector
 """
 function calculate_contingency_overload!(branch_rating::Vector{<:Real}, pf::DCPowerFlow, 
-    c_n::Union{Tuple{Integer,Integer}, Integer}, c_i::Integer, 
+    c_n, c_i, 
     island::Vector, island_b::Vector{<:Integer}, atol::Real=1e-6
 )
     flow = calculate_contingency_line_flows!(pf, c_n, c_i, island, island_b)
@@ -322,7 +331,7 @@ end
 """
 function calculate_contingency_overload!(ΔP::Vector{<:Real}, branch_rating::Vector{<:Real},
     Pc::Dict, opf::OPFsystem, m::Model, pf::DCPowerFlow, bd::Benders, 
-    c_n::Union{Tuple{Integer,Integer}, Integer}, c_i::Integer, c::Integer, 
+    c_n, c_i, c::Integer, 
     island::Vector, island_b::Vector{<:Integer}, atol::Real=1e-6
 )
     flow = calculate_contingency_line_flows!(ΔP, Pc, opf, m, pf, bd.Pᵢ, c_n, c_i, c, island, island_b)
@@ -377,9 +386,9 @@ end
 end
 
 function add_overload_expr!(m::Model, expr::JuMP.AbstractJuMPScalar, ol::Real, type::String, id::Integer,
-    c_obj::Pair{String, Int64}, i::Integer, atol::Real
+    c_obj::Pair{String, Vector{Int64}}, i::Integer, atol::Real
 )
-    @info @sprintf "%s %d: Contingency %s %d; overload on branch %d of %.6f" type id c_obj.first c_obj.second i ol
+    @info "$type $id: Contingency $(c_obj.first) $(c_obj.second); overload on branch $i of $ol"
     @debug "Cut added: $(sprint_expr(expr,atol))\n"
     if ol < 0
         JuMP.@constraint(m, expr <= ol)
@@ -389,7 +398,7 @@ function add_overload_expr!(m::Model, expr::JuMP.AbstractJuMPScalar, ol::Real, t
 end
 
 function add_cut(opf::OPFsystem, m::Model, bd::Benders, ptdf::AbstractMatrix{<:Real}, overloads::Vector{<:Tuple{Integer,Real}},
-    c_obj::Pair{String, Int64}, cut_added::Integer, atol::Real, id::Integer
+    c_obj::Pair{String, Vector{Int64}}, cut_added::Integer, atol::Real, id::Integer
 )
     for (i, ol) in overloads
         expr = AffExpr() + sum(ptdf[i, :] .* bd.Pᵢ)
@@ -407,7 +416,7 @@ end
 """ Finding and adding Benders cuts to mitigate overloads from one contingency """
 function add_cut(P::Dict{<:Integer, <:ContExpr}, opf::OPFsystem, oplim::Oplimits, m::Model, bd::Benders, ΔP::Vector{<:Real},
     ptdf::AbstractMatrix{<:Real}, overloads::Vector{<:Tuple{Integer,Real}}, islands::Vector,
-    c_obj::Pair{String, Int64}, c::Integer, cut_added::Integer, atol::Real, id::Integer
+    c_obj::Pair{String, Vector{Int64}}, c::Integer, cut_added::Integer, atol::Real, id::Integer
 )
     p = get(P, c, 0)
     if p == 0  # If the contingency is not run before, a set of corrective variables is added

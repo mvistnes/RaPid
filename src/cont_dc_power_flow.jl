@@ -160,13 +160,13 @@ function calc_isf!(ϕ::AbstractMatrix{<:Real}, ϕ₀::AbstractMatrix{<:Real},
     return ϕ
 end
 
-function calc_isf(pf::DCPowerFlow, cont::Tuple{Real,Real}, c::Integer, islands::Vector, 
-    island::Integer, island_b::Vector{<:Integer}
+function calc_isf(pf::DCPowerFlow, island::Vector{<:Integer}, island_b::Vector{<:Integer}
 )
-    calc_isf!(pf.mbn_tmp, pf.ϕ, islands[island], island_b)
+    calc_isf!(pf.mbn_tmp, pf.ϕ, island, island_b)
     return pf.mbn_tmp
 end
 
+""" Return small isf-matrices for each island """
 function calc_isf(pf::DCPowerFlow, islands::Vector{Vector{Int64}}, island_b::Vector{Vector{Int64}})
     @assert length(islands) == length(island_b)
     return copy.(getindex.([pf.ϕ],island_b, islands))

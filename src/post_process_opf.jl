@@ -72,11 +72,11 @@ function print_results(opf::OPFsystem, m::Model)
 end
 
 function print_contingency_results(opf::OPFsystem, Pc::Dict{<:Integer, ExprC}, 
-    contingencies::AbstractVector{<:Component}, c::Integer
+    c::Integer
 )
     x = get(Pc, c, 0)
     if x != 0
-        println("Contingency ", contingencies[c].name)
+        println("Contingency ", c)
         print_corrective_values(opf.generation, x.pgu, :pguc)
         print_corrective_values(opf.generation, x.pgd, :pgdc)
         print_corrective_values(opf.demands, x.lsc, :lsc)
@@ -84,11 +84,11 @@ function print_contingency_results(opf::OPFsystem, Pc::Dict{<:Integer, ExprC},
 end
 
 function print_contingency_results(opf::OPFsystem, Pcc::Dict{<:Integer, ExprCC}, 
-    contingencies::AbstractVector{<:Component}, c::Integer
+    c::Integer
 )
     x = get(Pcc, c, 0)
     if x != 0
-        println("Contingency ", contingencies[c].name)
+        println("Contingency ", c)
         print_corrective_values(opf.generation, x.pgu, :pgucc)
         print_corrective_values(opf.generation, x.pgd, :pgdcc)
         print_corrective_values(opf.dc_branches, x.pfdccc, :pfdccc)
@@ -97,20 +97,20 @@ function print_contingency_results(opf::OPFsystem, Pcc::Dict{<:Integer, ExprCC},
 end
 
 function print_contingency_results(opf::OPFsystem, Pccx::Dict{<:Integer, ExprCCX}, 
-    contingencies::AbstractVector{<:Component}, c::Integer
+    c::Integer
 )
     x = get(Pccx, c, 0)
     if x != 0
-        println("Contingency ", contingencies[c].name)
+        println("Contingency ", c)
         print_corrective_values(opf.generation, x.pgdx, :pgdx)
         print_corrective_values(opf.demands, x.lsccx, :lsccx)
     end
 end
 
 function print_contingency_results(case::Case)
-    print_contingency_results.([case.opf], [case.Pc], [case.opf.contingencies], keys(case.Pc))
-    print_contingency_results.([case.opf], [case.Pcc], [case.opf.contingencies], keys(case.Pcc))
-    print_contingency_results.([case.opf], [case.Pcc], [case.opf.contingencies], keys(case.Pccx))
+    print_contingency_results.([case.opf], [case.Pc], keys(case.Pc))
+    print_contingency_results.([case.opf], [case.Pcc], keys(case.Pcc))
+    print_contingency_results.([case.opf], [case.Pcc], keys(case.Pccx))
     return
 end
 
@@ -335,34 +335,32 @@ end
 
 
 function print_benders_results(case::Case, system::System, lim::Real=1e-14)
-    function print_c(itr, symb::String, x::Int, lim::Real)
+    function print_c(itr, symb::String, x::Int)
         for (i, c_obj) in enumerate(case.opf.contingencies)
-            c_i = c_obj.second
-            c_n = Tuple(case.opf.mbx[c_i,:].nzind)
             c = get(itr, i, 0)
             if c != 0 && JuMP.value(getfield(c, Symbol(symb))[x]) > lim
-                @printf("          c %5d-%5d: %s: %.3f\n", c_n[1], c_n[2], symb, JuMP.value(getfield(c, Symbol(symb))[x]))
+                @printf("          c %5d: %s: %.3f\n", i, symb, JuMP.value(getfield(c, Symbol(symb))[x]))
             end
         end
     end
 
     for (x, g) in enumerate(sort_components!(get_generation(system)))
         @printf("%12s: %5.3f (%.3f)\n", g.name, JuMP.value(case.model[:pg0][x]), case.oplim.pg_lim_max[x])
-        print_c(case.Pc, "pgu", x, lim)
-        print_c(case.Pc, "pgd", x, lim)
-        print_c(case.Pcc, "pgu", x, lim)
-        print_c(case.Pcc, "pgd", x, lim)
-        print_c(case.Pccx, "pgdx", x, lim)
+        print_c(case.Pc, "pgu", x)
+        print_c(case.Pc, "pgd", x)
+        print_c(case.Pcc, "pgu", x)
+        print_c(case.Pcc, "pgd", x)
+        print_c(case.Pccx, "pgdx", x)
     end
     for (x, g) in enumerate(sort_components!(get_dc_branches(system)))
         @printf("%12s: %5.3f (%.3f)\n", g.name, JuMP.value(case.model[:pfdc0][x]), case.oplim.dc_lim_max[x])
-        print_c(case.Pcc, "pfdccc", x, lim)
+        print_c(case.Pcc, "pfdccc", x)
     end
     for (x, g) in enumerate(sort_components!(get_demands(system)))
         @printf("%12s: %5.3f (%.3f)\n", g.name, JuMP.value(case.model[:ls0][x]), case.oplim.pd_lim[x])
-        print_c(case.Pc, "lsc", x, lim)
-        print_c(case.Pcc, "lscc", x, lim)
-        print_c(case.Pccx, "lsccx", x, lim)
+        print_c(case.Pc, "lsc", x)
+        print_c(case.Pcc, "lscc", x)
+        print_c(case.Pccx, "lsccx", x)
     end
 end
 

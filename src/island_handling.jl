@@ -16,6 +16,8 @@ is_islanded(pf::DCPowerFlow, cont::Tuple{Integer,Integer}, branch::Integer; atol
     is_islanded(pf.DA, pf.B, pf.X, cont, branch, atol=atol)
 
 is_islanded(pf::DCPowerFlow, cont::Integer, branch::Integer; atol::Real=1e-14) = false
+is_islanded(pf::DCPowerFlow, cont::Vector, branch::Vector; atol::Real=1e-14) = 
+    length(island_detection_thread_safe(pf.B, cont)) > 1
 
 " Find nodes connected to a node "
 function find_connected(branches::AbstractVector{<:Branch}, node::Bus)
@@ -158,16 +160,20 @@ function handle_islands(B::AbstractMatrix, DA::AbstractMatrix, contingency::Tupl
     return Vector{Vector{Int64}}(undef, 0), 0, Vector{Int64}(undef, 0)
 end
 
-function handle_islands(B::AbstractMatrix, DA::AbstractMatrix, contingencies::AbstractVector{<:Tuple{Integer,Integer}}, branch::Integer, slack::Integer)
+function handle_islands(B::AbstractMatrix, DA::AbstractMatrix, contingencies::AbstractVector{<:Tuple{Integer,Integer}}, branches::Vector{<:Integer})
     islands = island_detection_thread_safe(B, contingencies)
-    island = find_ref_island(islands, slack)
-    island_b = [find_island_branches(i, DA, branch) for i in islands]
+    for (n,nodes) in enumerate(islands)
+        if length(nodes) < 2
+            deleteat!(islands, n)
+        end
+    end
+    island_b = [find_island_branches(i, DA, branches) for i in islands]
 
     # Need at least one node to make a valid system
-    if length(islands[island]) > 0
-        return islands, island, island_b
+    if length(islands[1]) > 0
+        return islands, island_b
     end
-    return Vector{Vector{Int64}}(undef, 0), 0, Vector{Vector{Int64}}(undef, 0)
+    return Vector{Vector{Int64}}(undef, 0), Vector{Vector{Int64}}(undef, 0)
 end
 
 function handle_islands(B::AbstractMatrix, contingency::Tuple{Integer,Integer}, slack::Integer)

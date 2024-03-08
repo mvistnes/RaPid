@@ -31,7 +31,7 @@ end
 
 function setup(system::System, prob_min=0.1, prob_max=0.4)
     voll = make_voll(system)
-    contingencies = ["branch"] .=> 1:length(get_branches(system))
+    contingencies = ["branch" => [i] for i in 1:length(get_branches(system))]
     prob = make_prob(contingencies, prob_min, prob_max)
     return voll, prob, contingencies
 end
@@ -40,7 +40,7 @@ function fix_generation_cost!(sys::System)
     # set_operation_cost!.(get_renewables(sys), make_cost_renewables(sys))
     cost = [get_generator_cost(g)[2] for g in get_gens_t(sys)]
     c_mean = mean(cost)
-    set_operation_cost!.(get_ctrl_generation(sys),
+    set_operation_cost!.(get_generation(sys),
         [[iszero(c) ? c_mean * (rand() + 0.5) : c for c in cost]
             [c_mean * (rand() + 0.1) for _ in get_gens_h(sys)]])
 end
@@ -82,13 +82,11 @@ function set_ramp_limit!(gen::Generator, ramp::Real)
     PowerSystems.set_ramp_limits!(gen, (up=(p_lim.max * ramp), down=(p_lim.max * ramp)))
 end
 
-set_ramp_limit!(gen::ThermalStandard) = set_ramp_limits!(gen, fueldict[get_fuel(gen)])
+set_ramp_limit!(gen::ThermalStandard) = set_ramp_limit!(gen, fueldict[get_fuel(gen)])
 set_ramp_limit!(gen::HydroDispatch) = set_ramp_limit!(gen, 0.2)
-set_ramp_limit!(gen::RenewableGen) = set_ramp_limit!(gen, 1.0)
+set_ramp_limit!(gen::RenewableGen) = nothing # set_ramp_limit!(gen, 1.0)
 
-function set_ramp_limits!(system::System, ramp_mult::Real=0.01)
-    set_ramp_limit!.(get_ctrl_generation(system), ramp_mult)
-end
+set_ramp_limits!(system::System) = set_ramp_limit!.(get_generation(system))
 
 PowerSystems.get_active_power_limits(gen::RenewableGen) = (min=get_active_power(gen), max=get_active_power(gen))
 PowerSystems.get_ramp_limits(gen::RenewableGen) = get_active_power_limits(gen)
@@ -97,9 +95,9 @@ get_generator_cost(gen::Generator) = get_operation_cost(gen) |> get_variable |> 
 _get_g_value(x::AbstractVector{<:Tuple{Real,Real}}) = x[1]
 _get_g_value(x::Tuple{<:Real,<:Real}) = x
 
-function get_generator_cost(ctrl_generation::AbstractVector{<:Generator}, renew_cost::Real)
-    cost = Vector{NamedTuple{(:fix, :var)}}(undef, length(ctrl_generation))
-    for (i,g) in enumerate(ctrl_generation)
+function get_generator_cost(generation::AbstractVector{<:Generator}, renew_cost::Real)
+    cost = Vector{NamedTuple{(:fix, :var)}}(undef, length(generation))
+    for (i,g) in enumerate(generation)
         if typeof(g) <: RenewableGen
             cost[i] = (fix=0.0, var=renew_cost)
         else
@@ -238,7 +236,7 @@ filter_active!(list::AbstractVector{<:Component}) = filter(comp -> comp.availabl
 
 """ OPF system type """
 mutable struct OPFsystem{TR<:Real,TI<:Integer}
-    cost_ctrl_gen::Vector{NamedTuple{(:fix, :var), Tuple{TR, TR}}}
+    cost_gen::Vector{NamedTuple{(:fix, :var), Tuple{TR, TR}}}
     cost_renewables::Vector{TR}
     voll::Vector{TR}
     prob::Vector{TR}
@@ -249,11 +247,11 @@ mutable struct OPFsystem{TR<:Real,TI<:Integer}
     mbx::SparseArrays.SparseMatrixCSC{Int8, TI}
     mdcx::SparseArrays.SparseMatrixCSC{Int8, TI}
 
-    contingencies::Vector{Pair{String, TI}}
+    contingencies::Vector{Pair{String, Vector{TI}}}
 end
 
 """ Constructor for OPFsystem """
-function opfsystem(sys::System, voll::Vector{TR}, contingencies::Vector{Pair{String, Int64}}=Pair{String, Int64}[], 
+function opfsystem(sys::System, voll::Vector{TR}, contingencies::Vector{Pair{String, Vector{Int64}}}=Pair{String, Int64}[], 
     prob::Vector{TR}=[]; renew_cost::Real=0.0, check=false
 ) where {TR<:Real}
 
@@ -298,7 +296,7 @@ function opfsystem(sys::System)
     return opfsystem(sys, voll, contingencies, prob)
 end
 
-get_cost_ctrl_gen(opf::OPFsystem) = opf.cost_ctrl_gen
+get_cost_gen(opf::OPFsystem) = opf.cost_gen
 get_cost_renewables(opf::OPFsystem) = opf.cost_renewables
 get_voll(opf::OPFsystem) = opf.voll
 get_prob(opf::OPFsystem) = opf.prob
@@ -368,7 +366,7 @@ function find_component(val::Component, list::AbstractVector{<:Component})
 end
 
 typesort_component(val::Generator, opf::OPFsystem) =
-    (find_component(val, get_ctrl_generation(opf)), get_bus_idx(val, opf.idx))
+    (find_component(val, get_generation(opf)), get_bus_idx(val, opf.idx))
 
 typesort_component(val::StaticLoad, opf::OPFsystem) =
     (find_component(val, get_demands(opf)), get_bus_idx(val, opf.idx))

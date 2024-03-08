@@ -16,7 +16,7 @@ voll = [4304., 5098., 5245., 5419., 4834., 5585., 5785., 5192., 4575., 5244., 44
 branches = SCOPF.sort_components!(SCOPF.get_branches(system));
 generation = SCOPF.sort_components!(SCOPF.get_generation(system));
 # c = [7,12,13,21,22,23,27]
-contingencies = ["branch"] .=> 1:length(branches)
+contingencies = ["branch" => [i] for i in 1:length(branches)]
 # contingencies = vcat(branches, generation)
 prob =
     [ # spesified for the RTS-96

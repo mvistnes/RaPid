@@ -64,7 +64,7 @@ end
 function opf_base(type::OPF, system::System, optimizer;
     voll::Vector{<:Number}=Float64[],
     prob::Vector{<:Number}=Float64[],
-    contingencies::Vector{Pair{String, Int64}}=Pair{String,Int64}[],
+    contingencies::Vector{Pair{String, Vector{Int64}}}=Pair{String,Vector{Int64}}[],
     dist_slack::Vector{<:Real}=Float64[],
     time_limit_sec::Int64=600,
     ramp_minutes::Real=10.0,
@@ -208,20 +208,16 @@ function add_all_contingencies!(type::OPF, opf::OPFsystem, oplim::Oplimits, m::M
     !isempty(oplim.dist_slack) && set_dist_slack!(pf.ϕ, opf.mgx, oplim.dist_slack)
     for (c, c_obj) in enumerate(opf.contingencies)
         c_i = c_obj.second
-        c_n = c_obj.first == "branch" ? Tuple(opf.mbx[c_i,:].nzind) : opf.mgx[c_i,:].nzind[1]
+        c_n = c_obj.first == "branch" ? [Tuple(opf.mbx[i,:].nzind) for i in c_i] : [opf.mgx[i,:].nzind[1] for i in c_i]
         if is_islanded(pf, c_n, c_i)
-            islands = island_detection_thread_safe(pf.B, c_n)
-            for (n,nodes) in enumerate(islands)
-                if length(nodes) < 2
-                    deleteat!(islands, n)
-                end
-            end
-            islands_b = [find_island_branches(island, pf.DA, c_i) for island in islands]
-            ptdf = [calc_isf(pf, c_n, c_i, islands, n, ibranches) for (n, ibranches) in enumerate(islands_b)]
-        else
+            islands, islands_b = handle_islands(pf.B, pf.DA, c_n, c_i)
+            ptdf = [calc_isf(pf, inodes, ibranches) for (inodes, ibranches) in zip(islands, islands_b)]
+        elseif length(c_i) == 1
             islands = [Vector{Int64}()]
-            ptdf = [calc_isf(pf, c_n, c_i)]
+            ptdf = [calc_isf(pf, c_n[1], c_i[1])]
             set_tol_zero!.(ptdf)
+        else
+            @error "Not implemented multi-contingency non-separation." c_obj
         end
         type.P && add_contingency!(opf, oplim, m, brc_up, brc_down, ptdf, c)
         type.C1 && add_contingency!(Pc, opf, oplim, m, brc_up, brc_down, obj, islands, ptdf, c)
