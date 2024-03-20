@@ -1,6 +1,8 @@
 abstract type PowerFlow end
 
 mutable struct DCPowerFlow{T1<:Real,T2<:Integer} <: PowerFlow
+    A::SparseArrays.SparseMatrixCSC{T1,T2} # The connectivity matrix
+    D::LinearAlgebra.Diagonal{T1,Vector{T1}} # Diagonal admittance matrix
     DA::SparseArrays.SparseMatrixCSC{T1,T2} # Diagonal admittance matrix times the connectivity matrix
     B::SparseArrays.SparseMatrixCSC{T1,T2} # The admittance matrix
     K::KLU.KLUFactorization{T1, T2} # A factorization of the admittance matrix
@@ -21,13 +23,14 @@ end
 function DCPowerFlow(branches::AbstractVector{<:Tuple{T2,T2}}, susceptance::AbstractVector{T1}, numnodes::Integer, slack::Integer
 ) where {T1<:Real,T2<:Integer}
     A = calc_A(branches, numnodes)
-    DA = calc_DA(A, susceptance)
+    D = calc_D(susceptance)
+    DA = D*A
     B = calc_B(A, DA)
     K = calc_klu(B, slack)
     ϕ = calc_isf(K, DA, slack)
     set_tol_zero!(ϕ)
     X = calc_X(K, slack)
-    return DCPowerFlow{T1,T2}(DA, B, K, X, ϕ, zeros(T1, numnodes), zeros(T1, length(branches)), slack,
+    return DCPowerFlow{T1,T2}(A, D, DA, B, K, X, ϕ, zeros(T1, numnodes), zeros(T1, length(branches)), slack,
         zeros(T1, size(DA)), calc_klu(B, slack), zeros(T1, size(X)), zeros(T1, size(ϕ)), zeros(T1, numnodes), zeros(T1, length(branches)))
 end
 DCPowerFlow(nodes::AbstractVector{<:Bus}, branches::AbstractVector{<:Branch}, idx::Dict{<:Int,<:Int}) =
@@ -93,7 +96,6 @@ end
 
 """ Distributed slack """
 function set_dist_slack!(ϕ::AbstractMatrix{<:Real}, mgx::AbstractMatrix{<:Real}, dist_slack::AbstractVector{<:Real})
-    @assert !iszero(sum(dist_slack))
     slack_array = dist_slack / sum(dist_slack)
     ϕ = ϕ .- ((slack_array' * mgx) * ϕ')'
 end
@@ -296,6 +298,8 @@ _calc_θ!(θ::AbstractVector{T}, B::SparseArrays.SparseMatrixCSC{T,<:Integer}, P
     _calc_θ!(θ, calc_klu(B, slack), P, slack)
 calc_θ!(B::AbstractMatrix{T}, P::AbstractVector{T}, slack::Integer) where {T<:Real} =
     _calc_θ!(Vector{T}(undef, length(P)), B, P, slack)
+calc_θ!(pf::DCPowerFlow, Pᵢ::AbstractVector{<:Real}) = 
+    _calc_θ!(pf.θ, pf.K, Pᵢ, pf.slack)
 
 """ Calculate the power flow on the lines from the voltage angles """
 function calc_Pline(branches::AbstractVector{<:Branch}, θ::AbstractVector{<:Real}, idx::Dict{<:Int,<:Int})
@@ -318,24 +322,8 @@ calc_Pline!(pf::DCPowerFlow) = LinearAlgebra.mul!(pf.F, pf.DA, pf.θ)
 calculate_line_flows(isf::AbstractMatrix{<:Real}, Pᵢ::AbstractVector{<:Real}) = isf * Pᵢ
 calculate_line_flows!(pf::DCPowerFlow, Pᵢ::AbstractVector{<:Real}) = LinearAlgebra.mul!(pf.F, pf.ϕ, Pᵢ)
 
-""" DC power flow calculation using the Admittance matrix factorization and Power Injection vector returning the bus angles """
-function run_pf!(θ::AbstractVector{<:Real}, K::KLU.KLUFactorization, P::AbstractVector{<:Real}, slack::Integer)
-    copy!(θ, P)
-    KLU.solve!(K, θ)
-    θ[slack] = 0.0
-    return θ
-end
-run_pf(K::KLU.KLUFactorization, P::AbstractVector{<:Real}, slack::Integer) = run_pf!(similar(P), K, P, slack)
-function run_pf!(pf::DCPowerFlow, Pᵢ::AbstractVector{<:Real})
-    copy!(pf.θ, Pᵢ)
-    KLU.solve!(pf.K, pf.θ)
-    pf.θ[pf.slack] = 0.0
-    return pf.θ
-end
-
 """ DC power flow calculation using the inverse Admittance matrix and Power Injection vector returning the bus angles """
 calc_θ(X::AbstractMatrix{<:Real}, P::AbstractVector{<:Real}) = X * P
-calc_θ!(pf::DCPowerFlow, Pᵢ::AbstractVector{<:Real}) = LinearAlgebra.mul!(pf.θ, pf.X, Pᵢ)
 
 """ Active Power Injection vector calculation using the Admittance matrix and the bus angles """
 calc_Pᵢ(B::AbstractMatrix{<:Real}, θ::AbstractVector{<:Real}) = B * θ

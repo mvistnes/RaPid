@@ -15,9 +15,22 @@ end
 is_islanded(pf::DCPowerFlow, cont::Tuple{Integer,Integer}, branch::Integer; atol::Real=1e-14) =
     is_islanded(pf.DA, pf.B, pf.X, cont, branch, atol=atol)
 
+function is_islanded(X::AbstractMatrix{T}, A::AbstractMatrix{<:Real}, D::AbstractMatrix{<:Real}, 
+    cont::AbstractVector{<:Tuple{Integer,Integer}}, branches::AbstractVector{<:Integer}; atol::Real=1e-10
+) where {T<:Real}
+    return isapprox(LinearAlgebra.det(inv(D[branches, branches]) - 
+        A[branches,:]*(X*A[branches,:]')), zero(T), atol=atol)
+end
+function is_islanded(pf::DCPowerFlow, cont::AbstractVector{<:Tuple{Integer,Integer}}, branches::AbstractVector{<:Integer}; atol::Real=1e-14)
+    if length(cont) < 2
+        val = is_islanded(pf, cont[1], branches[1])
+    else
+        val = is_islanded(pf.X, pf.A, pf.D, cont, branches, atol=atol)
+    end
+    return val
+end
+
 is_islanded(pf::DCPowerFlow, cont::Integer, branch::Integer; atol::Real=1e-14) = false
-is_islanded(pf::DCPowerFlow, cont::Vector, branch::Vector; atol::Real=1e-14) = 
-    length(island_detection_thread_safe(pf.B, cont)) > 1
 
 " Find nodes connected to a node "
 function find_connected(branches::AbstractVector{<:Branch}, node::Bus)
@@ -148,18 +161,6 @@ function find_island_branches(island::Vector{<:Integer}, DA::SparseArrays.Sparse
     return res
 end
 
-function handle_islands(B::AbstractMatrix, DA::AbstractMatrix, contingency::Tuple{Integer,Integer}, branch::Integer, slack::Integer)
-    islands = island_detection_thread_safe(B, contingency)
-    island = find_ref_island(islands, slack)
-    island_b = find_island_branches(islands[island], DA, branch)
-
-    # Need at least one node to make a valid system
-    if length(islands[island]) > 0
-        return islands, island, island_b
-    end
-    return Vector{Vector{Int64}}(undef, 0), 0, Vector{Int64}(undef, 0)
-end
-
 function handle_islands(B::AbstractMatrix, DA::AbstractMatrix, contingencies::AbstractVector{<:Tuple{Integer,Integer}}, branches::Vector{<:Integer})
     islands = island_detection_thread_safe(B, contingencies)
     for (n,nodes) in enumerate(islands)
@@ -176,19 +177,15 @@ function handle_islands(B::AbstractMatrix, DA::AbstractMatrix, contingencies::Ab
     return Vector{Vector{Int64}}(undef, 0), Vector{Vector{Int64}}(undef, 0)
 end
 
-function handle_islands(B::AbstractMatrix, contingency::Tuple{Integer,Integer}, slack::Integer)
-    islands = island_detection_thread_safe(B, contingency)
-    island = find_ref_island(islands, slack)
-    return length(islands[island]) > 0 ? (islands, islands) : Vector{Vector{Int64}}(undef, 0), 0
-    # Need at least one node to make a valid system
-end
+handle_islands(B::AbstractMatrix, DA::AbstractMatrix, contingency::Tuple{Integer,Integer}, branch::Integer) =
+    handle_islands(B, DA, [contingency], [branch])
 
 " Get all islands with the reference bus from all bx contingencies "
 function get_all_islands(B::AbstractMatrix, bx::Vector{<:Tuple{Integer,Integer}}, slack::Integer)
     res = Vector{Vector{Int64}}(undef, length(bx))
     Threads.@threads for i in eachindex(bx)
-        islands. island = handle_islands(B, bx[i], slack)
-        res[i] = islands[island]
+        islands = island_detection_thread_safe(B, bx[i])
+        res[i] = islands
     end
     return res
 end

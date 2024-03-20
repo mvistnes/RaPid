@@ -1,27 +1,56 @@
-""" Primitive IMML """
-calc_power_flow_change(F::AbstractVector{<:Real}, ϕ::AbstractMatrix{<:Real}, A::AbstractMatrix{<:Integer}, branch::Integer) =
-    F .+ calc_change(ϕ, A, branch) * F[branch]
-
-function calc_change(ϕ::AbstractMatrix{<:Real}, A::AbstractMatrix{<:Integer}, branch::Integer; atol::Real=1e-10)
-    x = LinearAlgebra.I - ϕ[branch, :]' * A[branch, :]
-    if isapprox(x, zero(typeof(x)); atol=atol)
-        return zeros(typeof(x), size(x))
-    end
-    return ϕ * A[branch, :] * inv(x)
-end
-
-function calc_change(X::AbstractMatrix{<:Real}, A::AbstractMatrix{<:Integer}, br_x::Real, branch::Integer; atol::Real=1e-10)
+""" Sherman Morrison """
+function calc_X(X::AbstractMatrix{<:Real}, A::AbstractMatrix{<:Integer}, br_x::Real, branch::Integer; atol::Real=1e-10)
     u = A[branch,:]
     v = -u
     mx = X - (br_x * X * u * v' * X) / (1 + br_x * v' * X * u)
-    set_tol_zero!(mx)
+    set_tol_zero!(mx, atol)
     return mx
 end
 
-function calc_ptdf_vec(Xf::AbstractVector{<:Real}, Xt::AbstractVector{<:Real}, Xk::AbstractVector{<:Real}, Xl::AbstractVector{<:Real}, 
-    x_c::Real, x_l::Real, fbus::Integer, tbus::Integer, kbus::Integer, lbus::Integer; atol::Real=1e-10
+""" Sherman Morrison Woodbury """
+function calc_X(X::AbstractMatrix{T}, A::AbstractMatrix{<:Real}, D::AbstractMatrix{<:Real}, 
+    branches::AbstractVector{<:Integer}; atol::Real=1e-10
+) where {T<:Real}
+    H = A[branches,:]
+    G = D[branches, branches]
+    XF = X * H'
+    cinv = inv(G) - H * XF
+    if isapprox(cinv, zero(T); atol=atol)
+        return throw(DivideError())
+    end
+    mx = X + XF * inv(cinv) * XF'
+    set_tol_zero!(mx, atol)
+    return mx
+end
+
+""" Get the isf-matrix after a line outage using Sherman Morrison Woodbury. """
+function calc_isf(
+    pf::DCPowerFlow,
+    cont::AbstractVector{<:Tuple{Integer,Integer}},
+    branch::AbstractVector{<:Integer}
 )
+    if length(cont) < 2
+        calc_isf!(pf.mbn_tmp, pf.mnn_tmp, pf.X, pf.B, pf.DA, cont[1], branch[1])
+    else
+        X = calc_X(pf.X, pf.A, pf.D, branch)
+        calc_isf!(pf.mbn_tmp, pf.DA, X)
+        pf.mbn_tmp[branch, :] .= 0.0
+        set_tol_zero!(pf.mbn_tmp)
+    end
+    return pf.mbn_tmp
+end
+
+function calc_isf(pf::DCPowerFlow, cont::AbstractVector{<:Real}, c::AbstractVector{<:Integer})
+    return pf.ϕ
+end
+
+function calc_ptdf_vec(Xf::AbstractVector{T}, Xt::AbstractVector{T}, Xk::AbstractVector{T}, Xl::AbstractVector{T}, 
+    x_c::Real, x_l::Real, fbus::Integer, tbus::Integer, kbus::Integer, lbus::Integer; atol::Real=1e-10
+) where {T<:Real}
     cinv = 1 + x_c * (Xf[tbus] - Xf[fbus] + Xt[fbus] - Xt[tbus])
+    if isapprox(cinv, zero(T); atol=atol)
+        return throw(DivideError())
+    end
     xft = -Xf[kbus] + Xt[kbus] + Xf[lbus] - Xt[lbus]
     vec = x_l * ((Xk .- Xl) .- x_c * xft / cinv * (Xf .- Xt))
     # set_tol_zero!(vec)
@@ -40,109 +69,6 @@ function calc_ptdf_vec(B::AbstractMatrix{<:Real}, K::KLU.KLUFactorization{T,<:In
     Xk = calc_X_vec!(Vector{T}(undef, n), K, kbus, slack)
     Xl = calc_X_vec!(Vector{T}(undef, n), K, lbus, slack)
     return calc_ptdf_vec(Xf, Xt, Xk, Xl, -B[fbus, tbus], -B[kbus, lbus], fbus, tbus, kbus, lbus, atol=atol)
-end
-
-""" Multi contingency Woodbury """
-@views function calc_changed_X!(
-    X::AbstractMatrix{T},
-    X₀::AbstractMatrix{T},
-    B::AbstractMatrix{T},
-    DA::AbstractMatrix{T},
-    bx::AbstractVector{<:Tuple{Integer, Integer}},
-    branches::AbstractVector{<:Integer};
-    atol::Real=1e-10
-) where {T<:Real}
-    iE = X₀
-    F = X₀[:, last.(bx[branches])]
-    iG = inv(B[first.(bx[branches]), last.(bx[branches])])
-    H = F'
-    X = iE - iE*F*inv(iG + H*iE*F)*H*iE
-end
-
-"""
-Calculation of voltage angles in a contingency case using IMML
-
-Input:
-    - X: The inverse admittance matrix
-    - B: Suseptance matrix
-    - DA: Diagonal suseptance matrix times the connectivity matrix
-    - θ₀: Inital voltage angles
-    - from_bus: From bus index
-    - to_bus: To bus index
-"""
-@views function calc_changed_angles!(
-    θ::AbstractVector{T},
-    X::AbstractMatrix{T},
-    B::AbstractMatrix{T},
-    DA::AbstractMatrix{T},
-    θ₀::AbstractVector{T},
-    from_bus::Integer,
-    to_bus::Integer,
-    branch::Integer;
-    atol::Real=1e-10
-) where {T<:Real}
-    change = DA[branch, to_bus] / B[from_bus, to_bus]
-    # x = change * (X[:, from_bus] - X[:, to_bus])
-    c⁻¹ = inv(B[from_bus, to_bus]) + change * (X[from_bus, from_bus] - X[from_bus, to_bus] - X[to_bus, from_bus] + X[to_bus, to_bus])
-    if isapprox(c⁻¹, zero(T); atol=atol)
-        if size(SparseArrays.getindex(B,from_bus,:).nzind, 1) <= 2 # Assummes only one islanded bus
-            c⁻¹ = inv(B[from_bus, to_bus]) + change * (- X[from_bus, to_bus] + X[to_bus, to_bus])
-            delta = inv(c⁻¹) * (θ₀[from_bus] - θ₀[to_bus])
-            @. θ = θ₀ - (- X[:, to_bus]) * delta * change
-        elseif size(SparseArrays.getindex(B,to_bus,:).nzind, 1) <= 2
-            c⁻¹ = inv(B[from_bus, to_bus]) + change * (X[from_bus, from_bus] - X[to_bus, from_bus])
-            delta = inv(c⁻¹) * (θ₀[from_bus] - θ₀[to_bus])
-            @. θ = θ₀ - (X[:, from_bus]) * delta * change
-        else
-            return throw(DivideError())
-        end
-    else
-        delta = inv(c⁻¹) * (θ₀[from_bus] - θ₀[to_bus])
-        @. θ = θ₀ - (X[:, from_bus] - X[:, to_bus]) * delta * change
-    end
-    return θ
-end
-
-""" 
-Calculate the power flow on the lines from the connectivity 
-and the diagonal admittance matrices and the voltage angles
-in a contingency of the branch number.
-"""
-function calc_Pline!(
-    F::AbstractVector{<:Real},
-    θ::AbstractVector{<:Real},
-    X::AbstractMatrix{<:Real},
-    B::AbstractMatrix{<:Real},
-    DA::AbstractMatrix{<:Real},
-    θ₀::AbstractVector{<:Real},
-    cont::Tuple{Integer,Integer},
-    branch::Integer
-)
-    calc_changed_angles!(θ, X, B, DA, θ₀, cont[1], cont[2], branch)
-    LinearAlgebra.mul!(F, DA, θ)
-    F[branch] = 0.0
-    return F
-end
-function calc_Pline(pf::DCPowerFlow, cont::Tuple{Integer,Integer}, branch::Integer)
-    θ = similar(pf.θ)
-    F = similar(pf.F)
-    calc_Pline!(F, θ, pf.X, pf.B, pf.DA, pf.θ, cont, branch)
-    return F
-end
-
-function calc_Pline!(
-    F::AbstractVector{<:Real},
-    θ::AbstractVector{<:Real},
-    X::AbstractMatrix{<:Real},
-    B::AbstractMatrix{<:Real},
-    DA::AbstractMatrix{<:Real},
-    θ₀::AbstractVector{<:Real},
-    Pᵢ::AbstractVector{<:Real},
-    cont::Tuple{Integer,Integer},
-    branch::Integer
-)
-    θ₂ = calc_θ(X, Pᵢ)
-    return calc_Pline!(F, θ, X, B, DA, θ₂, cont, branch)
 end
 
 """
@@ -173,25 +99,10 @@ Input:
     x = X₀[:, from_bus] - X₀[:, to_bus]
     c⁻¹ = inv(B[to_bus, from_bus]) + change * (x[from_bus] - x[to_bus])
     if isapprox(c⁻¹, zero(T); atol=atol)
-        if size(SparseArrays.getindex(B,from_bus,:).nzind, 1) <= 2 # Assummes only one islanded bus
-            c⁻¹ = inv(B[to_bus, from_bus]) + change * (- x[to_bus])
-            copy!(X, X₀)
-            X[:,from_bus] .= zero(T)
-            X[from_bus,:] .= zero(T)
-            X[from_bus,from_bus] = one(T)
-        elseif size(SparseArrays.getindex(B,to_bus,:).nzind, 1) <= 2
-            c⁻¹ = inv(B[to_bus, from_bus]) + change * (x[from_bus])
-            copy!(X, X₀)
-            X[:,to_bus] .= zero(T)
-            X[to_bus,:] .= zero(T)
-            X[to_bus,to_bus] = one(T)
-        else
-            throw(DivideError())
-        end
-    else
-        # delta = 1/c⁻¹ * x
-        copy!(X, X₀)
+        throw(DivideError())
     end
+    # delta = 1/c⁻¹ * x
+    copy!(X, X₀)
     LinearAlgebra.mul!(X, x, x', -change * inv(c⁻¹), true) # mul!(C, A, B, α, β) -> C == $A B α + C β$
 end
 
@@ -210,7 +121,7 @@ function calc_isf!(
     calc_isf!(isf, DA, X)
     isf[branch, :] .= 0.0
     set_tol_zero!(isf)
-    nothing
+    return isf
 end
 
 """ Get the isf-matrix after a line outage using IMML. 
@@ -250,7 +161,8 @@ Input:
     ptdf::AbstractMatrix{T},
     B::AbstractMatrix{T},
     DA::AbstractMatrix{T},
-    X::AbstractMatrix{T},
+    Xf::AbstractVector{T},
+    Xt::AbstractVector{T},
     θ::AbstractVector{T},
     from_bus::Integer,
     to_bus::Integer,
@@ -259,120 +171,115 @@ Input:
 ) where {T<:Real}
     change = DA[branch, to_bus] / B[from_bus, to_bus]
     # x = change * (X[:,from_bus] - X[:,to_bus])
-    c⁻¹ = inv(B[from_bus, to_bus]) + change * (X[from_bus, from_bus] - X[from_bus, to_bus] - X[to_bus, from_bus] + X[to_bus, to_bus])
+    c⁻¹ = inv(B[from_bus, to_bus]) + change * (Xf[from_bus] - Xf[to_bus] - Xt[from_bus] + Xt[to_bus])
     if isapprox(c⁻¹, zero(T); atol=atol)
         return throw(DivideError())
     end
     delta = inv(c⁻¹) * (θ[from_bus] - θ[to_bus])
     @. Pl = Pl0 - (ptdf[:, from_bus] - ptdf[:, to_bus]) * change * delta
-    Pl[branch] = 0.0
-    return nothing
+    Pl[branch] = zero(T)
+    return Pl
 end
-@views function calculate_line_flows!(
-    Pl::AbstractVector{T},
-    Pl0::AbstractVector{T},
-    ptdf::AbstractMatrix{T},
-    B::AbstractMatrix{T},
-    DA::AbstractMatrix{T},
-    X::AbstractMatrix{T},
-    θ::AbstractVector{T},
-    from_bus::Integer,
-    to_bus::Integer,
-    branch::Integer,
-    ::Val{1}; # from_bus is not connected to the system
-    atol::Real=1e-10
-) where {T<:Real}
-    change = DA[branch, to_bus] / B[from_bus, to_bus]
-    c⁻¹ = inv(B[from_bus, to_bus]) + change * (- X[from_bus, to_bus] + X[to_bus, to_bus])
-    if isapprox(c⁻¹, zero(T); atol=atol)
-        return throw(DivideError())
-    end
-    delta = inv(c⁻¹) * (θ[from_bus] - θ[to_bus])
-    @. Pl = Pl0 - (- ptdf[:, to_bus]) * change * delta
-    Pl[branch] = 0.0
-    return nothing
-end
-@views function calculate_line_flows!(
-    Pl::AbstractVector{T},
-    Pl0::AbstractVector{T},
-    ptdf::AbstractMatrix{T},
-    B::AbstractMatrix{T},
-    DA::AbstractMatrix{T},
-    X::AbstractMatrix{T},
-    θ::AbstractVector{T},
-    from_bus::Integer,
-    to_bus::Integer,
-    branch::Integer,
-    ::Val{2}; # to_bus is not connected to the system
-    atol::Real=1e-10
-) where {T<:Real}
-    change = DA[branch, to_bus] / B[from_bus, to_bus]
-    c⁻¹ = inv(B[from_bus, to_bus]) + change * (X[from_bus, from_bus] - X[to_bus, from_bus])
-    if isapprox(c⁻¹, zero(T); atol=atol)
-        return throw(DivideError())
-    end
-    delta = inv(c⁻¹) * (θ[from_bus] - θ[to_bus])
-    @. Pl = Pl0 - (ptdf[:, from_bus]) * change * delta
-    Pl[branch] = 0.0
-    return nothing
-end
-
 function calculate_line_flows!(
     Pl::AbstractVector{<:Real},
     pf::DCPowerFlow,
     cont::Tuple{Integer,Integer},
-    branch::Integer;
-    Pᵢ::AbstractVector{<:Real} = Float64[],
-    nodes::AbstractVector{<:Integer} = Int[],
-    branches::AbstractVector{<:Integer} = Int[]
+    branch::Integer,
+    nodes::AbstractVector{<:Integer} = Int64[],
+    branches::AbstractVector{<:Integer} = Int64[]
 )
-    if !isempty(Pᵢ)
-        θ = run_pf!(pf.vn_tmp, pf.K, Pᵢ, pf.slack)
-        F = LinearAlgebra.mul!(pf.vb_tmp, pf.DA, pf.vn_tmp)
-    else
-        θ = pf.θ
-        F = pf.F
-    end
-    if !isempty(nodes)
-        island = not_insorted_nodes(cont[1], cont[2], nodes)
-        calculate_line_flows!(Pl, F, pf.ϕ, pf.B, pf.DA, pf.X, θ, cont[1], cont[2], branch, Val(island))
+    if isempty(nodes) || size(pf.B, 1) == length(nodes)
+        calculate_line_flows!(Pl, pf.F, pf.ϕ, pf.B, pf.DA, view(pf.X,:,cont[1]), view(pf.X,:,cont[2]), pf.θ, cont[1], cont[2], branch)
+    elseif insorted(cont[1], nodes)
+        calculate_line_flows!(Pl, pf.F, pf.ϕ, pf.B, pf.DA, view(pf.X,:,cont[1]), zeros(size(pf.X,1)), pf.θ, cont[1], cont[2], branch)
+        zero_not_in_array!(Pl, branches)
+    elseif insorted(cont[2], nodes)
+        calculate_line_flows!(Pl, pf.F, pf.ϕ, pf.B, pf.DA, zeros(size(pf.X,1)), view(pf.X,:,cont[2]), pf.θ, cont[1], cont[2], branch)
         zero_not_in_array!(Pl, branches)
     else
-        calculate_line_flows!(Pl, F, pf.ϕ, pf.B, pf.DA, pf.X, θ, cont[1], cont[2], branch)
+        throw(DivideError())
     end
-    return nothing
-end
-function calculate_line_flows(
-    pf::DCPowerFlow,
-    cont::Tuple{Integer,Integer},
-    branch::Integer
-)
-    Pl = similar(pf.F)
-    calculate_line_flows!(Pl, pf, cont, branch)
     return Pl
 end
 
-""" 
-LODF value for a contingency at line l_mn change in line k_pq 
-    From the book Optimization of power system operation 
-"""
-@views calc_lodf(x_l::Real, m::Integer, n::Integer, x_k::Real, p::Integer, q::Integer, X::AbstractMatrix) =
-    (x_l / x_k) * (X[p, m] - X[q, m] - X[p, n] + X[q, n]) /
-    (x_l - (X[m, m] + X[n, n] - 2 * X[m, n]))
-@views calc_lodf(x_l::Real, m::Integer, n::Integer, x_k::AbstractVector{<:Real}, A::AbstractMatrix, X::AbstractMatrix) =
-    (x_l ./ x_k) .* A * (X[:, m] - X[:, n]) ./
-    (x_l - (X[m, m] + X[n, n] - 2 * X[m, n]))
+@views function calculate_line_flows!(
+    Pl::AbstractVector{T},
+    ϕ::AbstractMatrix{T},
+    B::AbstractMatrix{T},
+    DA::AbstractMatrix{T},
+    Xf::AbstractVector{T},
+    Xt::AbstractVector{T},
+    Pᵢ::AbstractVector{T},
+    from_bus::Integer,
+    to_bus::Integer,
+    branch::Integer;
+    atol::Real=1e-10
+) where {T<:Real}
+    change = DA[branch, to_bus] / B[from_bus, to_bus]
+    x = Xf - Xt
+    c⁻¹ = inv(B[from_bus, to_bus]) + change * (x[from_bus] - x[to_bus])
+    if isapprox(c⁻¹, zero(T); atol=atol)
+        return throw(DivideError())
+    end
+    delta = change * inv(c⁻¹) * LinearAlgebra.dot(x, Pᵢ)
+    LinearAlgebra.mul!(Pl, DA, x) # mul!(C, A, B) -> C == $A B$
+    LinearAlgebra.mul!(Pl, ϕ, Pᵢ, true, -delta) # mul!(C, A, B, α, β) -> C == $A B α + C β$
+    Pl[branch] = zero(T)
+    return Pl
+end
+function calculate_line_flows!(
+    Pl::AbstractVector{<:Real},
+    pf::DCPowerFlow,
+    cont::Tuple{Integer,Integer},
+    branch::Integer,
+    Pᵢ::AbstractVector{<:Real}
+)
+    calculate_line_flows!(Pl, pf.ϕ, pf.B, pf.DA, view(pf.X,:,cont[1]), view(pf.X,:,cont[2]), Pᵢ, cont[1], cont[2], branch) 
+    return Pl
+end
 
-function calc_lodf(branch_l::Branch, branch_k::Branch, X::AbstractMatrix, idx::Dict{<:Any,<:Int})
-    (m, n) = calc_bus_idx(branch_l, idx)
-    (p, q) = calc_bus_idx(branch_k, idx)
-    return calc_lodf(get_x(branch_l), m, n, get_x(branch_k), p, q, X)
+function calculate_line_flows!(
+    Pl::AbstractVector{T},
+    ϕ::AbstractMatrix{T},
+    B::AbstractMatrix{T},
+    A::AbstractMatrix{T},
+    DA::AbstractMatrix{T},
+    X::AbstractMatrix{T},
+    Pᵢ::AbstractVector{T},
+    fnodes::AbstractVector{<:Integer},
+    tnodes::AbstractVector{<:Integer},
+    branches::AbstractVector{<:Integer};
+    atol::Real=1e-10
+) where {T<:Real}
+    change = LinearAlgebra.Diagonal(getindex.([DA],branches, tnodes) .* inv.(getindex.([B], fnodes, tnodes)))
+    Ab = A[branches,:]
+    XF = X * Ab' * change
+    c⁻¹ = LinearAlgebra.Diagonal(inv.(getindex.([DA], branches, fnodes))) - Ab * XF
+    if isapprox(LinearAlgebra.det(c⁻¹), zero(T); atol=atol)
+        return throw(DivideError())
+    end
+    LinearAlgebra.mul!(Pl, ϕ, (Pᵢ .+ Ab'inv(c⁻¹) * XF'Pᵢ))
+    Pl[branches] .= zero(T)
+    return Pl
 end
-function calc_lodf(branch_l::Branch, branches::AbstractVector{<:Branch}, A::AbstractMatrix, X::AbstractMatrix, idx::Dict{<:Any,<:Int})
-    (m, n) = get_bus_idx(branch_l, idx)
-    return calc_lodf(get_x(branch_l), m, n, get_x.(branches), A, X)
+function calculate_line_flows!(
+    Pl::AbstractVector{<:Real},
+    pf::DCPowerFlow,
+    conts::AbstractVector{<:Tuple{Integer,Integer}},
+    branches::AbstractVector{<:Integer},
+    Pᵢ::AbstractVector{<:Real}
+)
+    calculate_line_flows!(Pl, pf.ϕ, pf.B, pf.A, pf.DA, pf.X, Pᵢ, first.(conts), last.(conts), branches) 
+    return Pl
 end
-function calc_lodf(from_bus, to_bus, x::AbstractVector{<:Real}, A::AbstractMatrix, X::AbstractMatrix)
-    mx = reshape(reduce(vcat, calc_lodf.(x, from_bus, to_bus, [x], [A], [X])), (length(x), length(x)))
-    return mx - LinearAlgebra.Diagonal(mx) - LinearAlgebra.I
+
+function calculate_line_flows(
+    pf::DCPowerFlow,
+    cont,
+    branch,
+    Pᵢ::AbstractVector{<:Real},
+)
+    Pl = similar(pf.F)
+    calculate_line_flows!(Pl, pf, cont, branch, Pᵢ)
+    return Pl
 end

@@ -107,7 +107,7 @@ end
 function run_benders_type!(result, i, c, type, goal, optimizer, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long; p_failure=0.00, time_limit_sec=600)
     case = Case(opf_base(type, sys, optimizer, voll=voll, contingencies=cont, prob=prob, max_shed=max_shed,
         ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, time_limit_sec=time_limit_sec)...);
-    tot_t = constrain_branches!(case.model, case.pf, case.oplim, 0.0)
+    tot_t = constrain_branches!(case, 0.0)
     MOI.get(case.model, MOI.ResultCount()) < 1 && return
     if type != goal
         fix_base_case!(case.model)

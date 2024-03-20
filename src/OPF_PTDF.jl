@@ -212,12 +212,10 @@ function add_all_contingencies!(type::OPF, opf::OPFsystem, oplim::Oplimits, m::M
         if is_islanded(pf, c_n, c_i)
             islands, islands_b = handle_islands(pf.B, pf.DA, c_n, c_i)
             ptdf = [calc_isf(pf, inodes, ibranches) for (inodes, ibranches) in zip(islands, islands_b)]
-        elseif length(c_i) == 1
-            islands = [Vector{Int64}()]
-            ptdf = [calc_isf(pf, c_n[1], c_i[1])]
-            set_tol_zero!.(ptdf)
         else
-            @error "Not implemented multi-contingency non-separation." c_obj
+            islands = [Vector{Int64}()]
+            ptdf = [calc_isf(pf, c_n, c_i)]
+            set_tol_zero!.(ptdf)
         end
         type.P && add_contingency!(opf, oplim, m, brc_up, brc_down, ptdf, c)
         type.C1 && add_contingency!(Pc, opf, oplim, m, brc_up, brc_down, obj, islands, ptdf, c)

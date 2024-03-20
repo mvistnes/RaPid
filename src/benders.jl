@@ -121,20 +121,14 @@ function run_benders!(
                 overload = []
                 if !isempty(islands)
                     for (island, island_b) in zip(islands, islands_b)
-                        if length(c_i) == 1
-                            calculate_line_flows!(pf.vb_tmp, pf, c_n[1], c_i[1], nodes=island, branches=island_b)
-                        else
-                            calculate_line_flows!(pf.vb_tmp, pf.mbn_tmp, pf.ϕ, bd.Pᵢ, island, island_b)
-                        end
+                        calculate_line_flows!(pf.vb_tmp, pf.mbn_tmp, pf.ϕ, bd.Pᵢ, island, island_b)
                         push!(overload, filter_overload(pf.vb_tmp, brst))
                     end
                     overload = reduce(vcat, overload)
                 end
-            elseif length(c_i) == 1
-                calculate_line_flows!(pf.vb_tmp, pf, c_n[1], c_i[1])
-                overload = filter_overload(pf.vb_tmp, brst)
             else
-                @error "Not implemented multi-contingency non-separation." c_obj
+                calculate_line_flows!(pf.vb_tmp, pf, c_n, c_i, bd.Pᵢ)
+                overload = filter_overload(pf.vb_tmp, brst)
             end
             # PI[i] = maximum((flow ./ (brst)).^2)
         elseif c_obj.first == "gen"
@@ -174,7 +168,7 @@ function run_benders!(
             end
 
             if type.P
-                olc = [calculate_contingency_overload!(brst, pf, c_n, c_i, inodes, ibranches, atol) for (inodes, ibranches) in zip(islands, islands_b)]
+                olc = [calculate_contingency_overload!(brst, pf, bd.Pᵢ, c_n, c_i, inodes, ibranches, atol) for (inodes, ibranches) in zip(islands, islands_b)]
             elseif type.C1
                 olc = [calculate_contingency_overload!(ΔPc, brst, Pc, opf, m, pf, bd, c_n, c_i, c, inodes, ibranches, atol) for (inodes, ibranches) in zip(islands, islands_b)]
             end
@@ -186,7 +180,7 @@ function run_benders!(
             end
             if sum(.!isempty.(olc)) + sum(.!isempty.(olcc)) + sum(.!isempty.(olccx)) > 0 # ptdf calculation is more computational expensive than line flow
                 if is_islanded(pf, c_n, c_i)
-                    ptdf = [calc_isf(pf, c_n, c_i, islands, n, ibranches) for (n, ibranches) in enumerate(islands_b)]
+                    ptdf = [calc_isf(pf, inodes, ibranches) for (inodes, ibranches) in zip(islands, islands_b)]
                 else
                     @assert length(c_i) == 1
                     ptdf = [calc_isf(pf, c_n[1], c_i[1])]
@@ -248,12 +242,11 @@ function calculate_contingency_line_flows!(pf::DCPowerFlow, c_n::Vector{<:Tuple{
     island::Vector, island_b::Vector{<:Integer}
 )
     @assert length(c_i) == 1
-    calculate_line_flows!(pf.vb_tmp, pf, c_n[1], c_i[1], nodes=island, branches=island_b)
+    calculate_line_flows!(pf.vb_tmp, pf, c_n[1], c_i[1], island, island_b)
     return pf.vb_tmp
 end
 function calculate_contingency_line_flows!(
-    m::Model, pf::DCPowerFlow, Pᵢ::AbstractVector{<:Real}, c_n::Vector{<:Integer}, c_i::Vector{<:Integer},
-    island::Vector, island_b::Vector{<:Integer}
+    m::Model, pf::DCPowerFlow, Pᵢ::AbstractVector{<:Real}, c_n::Vector{<:Integer}, c_i::Vector{<:Integer}
 ) 
     val = get_gen_ΔP.([m], c_i)
     @. Pᵢ[c_n] -= val
@@ -276,10 +269,10 @@ function calculate_contingency_line_flows!(ΔP::Vector{<:Real}, P::Dict{<:Intege
         return pf.vb_tmp
     end
     ΔP = get_ΔP!(ΔP, m, opf, P, c)
-    if iszero(ΔP)
-        calculate_line_flows!(pf.vb_tmp, pf, c_n, c_i, nodes=island, branches=island_b)
+    if isempty(island)
+        calculate_line_flows!(pf.vb_tmp, pf, c_n, c_i, (Pᵢ .+ ΔP))
     else
-        calculate_line_flows!(pf.vb_tmp, pf, c_n, c_i, Pᵢ=(Pᵢ .+ ΔP), nodes=island, branches=island_b)
+        calculate_line_flows!(pf.vb_tmp, pf.mbn_tmp, pf.ϕ, (Pᵢ .+ ΔP), island, island_b)
     end
     return pf.vb_tmp
 end
@@ -289,12 +282,12 @@ function calculate_contingency_line_flows!(ΔP::Vector{<:Real}, P::Dict{<:Intege
 ) where {T}
     if length(c_i) == 1
         return calculate_contingency_line_flows!(ΔP, P, opf, m, pf, Pᵢ, c_n[1], c_i[1], c, island, island_b)
+    elseif get(P, c, 0) == 0
+        calculate_line_flows!(pf.vb_tmp, pf.mbn_tmp, pf.ϕ, Pᵢ, island, island_b)
+    else
+        ΔP = get_ΔP!(ΔP, m, opf, P, c)
+        calculate_line_flows!(pf.vb_tmp, pf.mbn_tmp, pf.ϕ, (Pᵢ .+ ΔP), island, island_b)
     end
-    if get(P, c, 0) == 0
-        @error "Not implemented multi-contingency non-separation." c_i
-    end
-    ΔP = get_ΔP!(ΔP, m, opf, P, c)
-    calculate_line_flows!(pf.vb_tmp, pf.mbn_tmp, pf.ϕ, (Pᵢ .+ ΔP), island, island_b)
     return pf.vb_tmp
 end
 function calculate_contingency_line_flows!(ΔP::Vector{<:Real}, P::Dict{<:Integer, T}, opf::OPFsystem, 
@@ -316,7 +309,7 @@ end
     c_i = contingecy index in it's component vector
 """
 function calculate_contingency_overload!(branch_rating::Vector{<:Real}, pf::DCPowerFlow, 
-    c_n, c_i, 
+    Pᵢ::AbstractVector{<:Real}, c_n, c_i, 
     island::Vector, island_b::Vector{<:Integer}, atol::Real=1e-6
 )
     flow = calculate_contingency_line_flows!(pf, c_n, c_i, island, island_b)

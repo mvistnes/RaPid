@@ -104,7 +104,7 @@ function run_test_benders()
     # push!(systems, setup_system(joinpath("data","matpower","case_ACTIVSg10k.m")))
 
     types = [SCOPF.Base_SCOPF, SCOPF.P_SCOPF, SCOPF.OPF(true, false, true, false, false), SCOPF.PC2_SCOPF]
-    results1 = run_all_benders(systems, optimizer, types)
+    results1 = run_all(systems, optimizer, types, SCOPF.run_benders_types!)
     # results2 = run_all_contingency_select(systems, optimizer, types);
     results3 = run_all(systems, optimizer, types)
     println("Benders")
