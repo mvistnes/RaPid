@@ -82,7 +82,7 @@ function set_ramp_limit!(gen::Generator, ramp::Real)
     PowerSystems.set_ramp_limits!(gen, (up=(p_lim.max * ramp), down=(p_lim.max * ramp)))
 end
 
-set_ramp_limit!(gen::ThermalStandard) = set_ramp_limit!(gen, fueldict[get_fuel(gen)])
+set_ramp_limit!(gen::ThermalGen) = set_ramp_limit!(gen, fueldict[get_fuel(gen)])
 set_ramp_limit!(gen::HydroDispatch) = set_ramp_limit!(gen, 0.2)
 set_ramp_limit!(gen::RenewableGen) = nothing # set_ramp_limit!(gen, 1.0)
 
@@ -92,7 +92,7 @@ PowerSystems.get_active_power_limits(gen::RenewableGen) = (min=get_active_power(
 PowerSystems.get_ramp_limits(gen::RenewableGen) = get_active_power_limits(gen)
 
 get_generator_cost(gen::Generator) = get_operation_cost(gen) |> get_variable |> get_cost |> _get_g_value
-_get_g_value(x::AbstractVector{<:Tuple{Real,Real}}) = x[1]
+_get_g_value(x::AbstractVector{<:Tuple{Real,Real}}) = mean([y[1] for y in x if y[1] != 0.0]), mean([y[2] for y in x if y[2] != 0.0])
 _get_g_value(x::Tuple{<:Real,<:Real}) = x
 
 function get_generator_cost(generation::AbstractVector{<:Generator}, renew_cost::Real)
@@ -409,6 +409,17 @@ function find_slack(nodes::AbstractVector{ACBus})
 end
 find_slack(sys::System) = find_slack(sort_components!(get_nodes(sys)))
 
+function find_slack(nodes::AbstractVector{<:Integer}, slack::Integer, pg_lim_max::AbstractVector{<:Real}, mgx::AbstractMatrix{<:Real})
+    s = searchsorted(nodes, slack)
+    if length(s) == 0
+        gens = reduce(vcat, [mgx[:,i].nzind for i in nodes]) # generators in island
+        _, sg = findmax(pg_lim_max[gens]) # slack generator (biggest in island)
+        si = mgx[gens[sg], :].nzind[1] # slack node
+        s = searchsorted(nodes, si)
+    end
+    return first(s)
+end
+
 """ Run optimizer to solve the model and check for optimality """
 function solve_model!(model::Model)
     optimize!(model)
@@ -445,8 +456,6 @@ end
 uniqueidx(v::AbstractVector{<:Branch}) = unique(i -> v[i].arc, eachindex(v))
 uniqueidx(v) = unique(i -> v[i], eachindex(v))
 
-# TODO: remove the need for idx in most functions, use array
-
 " Get the bus number of the from-bus and to-bus from a branch "
 get_bus_id(branch::Branch) = (branch.arc.from.number, branch.arc.to.number)
 
@@ -454,6 +463,8 @@ get_bus_id(branch::Branch) = (branch.arc.from.number, branch.arc.to.number)
 get_bus_idx(branch::Branch, idx::Dict{<:Int,<:Int}) = get_bus_idx(branch.arc, idx)
 get_bus_idx(arc::Arc, idx::Dict{<:Int,T}) where {T<:Int} =
     (idx[arc.from.number]::T, idx[arc.to.number]::T)
+get_bus_idx(branch::SparseArrays.SparseVector{<:Integer, T}) where {T<:Integer} = 
+    first(branch.nzval) < 0 ? (last(branch.nzind), first(branch.nzind)) : (first(branch.nzind), last(branch.nzind))
 
 get_bus_idx(val::StaticInjection, idx::Dict{<:Int,T}) where {T<:Int} =
     idx[val.bus.number]::T
@@ -668,4 +679,20 @@ function print_cuts(type::OPF, pre, corr1, corr2, corr2f)
     type.C2 && print(" corr2=", corr2)
     type.C2F && print(" corr2f=", corr2f)
     println("")
+end
+
+function countmemb(itr::AbstractVector{T}) where {T<:Real}
+    d = Dict{T, Int}()
+    for val in itr
+        d[val] = get(d, val, 0) + 1
+    end
+    return d
+end
+
+function sumvals(itr::AbstractVector{T1}, vals::AbstractVector{T2}) where {T1<:Real, T2<:Real}
+    d = Dict{T1, T2}()
+    for (i,val) in enumerate(itr)
+        d[val] = get(d, val, 0) + vals[i]
+    end
+    return d
 end

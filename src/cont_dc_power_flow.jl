@@ -41,16 +41,25 @@ function calc_cont_B(DA::AbstractMatrix{<:Real}, B0::AbstractMatrix{<:Real}, con
 )
     B = copy(view(B0, nodes, nodes))
     for ((fbus, tbus), branch) in zip(cont, cont_branch)
-        c = ifelse(insorted(fbus, nodes), fbus, tbus)
-        i = searchsortedfirst(nodes, c)
-        B[i, i] -= DA[branch, fbus] # Only value of the contingency left inside nodes
+        f = insorted(fbus, nodes)
+        t = insorted(tbus, nodes)
+        if f && t
+            neutralize_line!(B, searchsortedfirst(nodes, fbus), searchsortedfirst(nodes, tbus), DA[branch,fbus])
+        else
+            c = ifelse(f, fbus, ifelse(t, tbus, 0))
+            if c != 0
+                i = searchsortedfirst(nodes, c)
+                B[i, i] -= DA[branch, fbus] # Only value of the contingency left inside nodes
+            end
+        end
     end
     return B
 end
 
 """ 
     Calculate the inverse of the admittance matrix after a line outage which splits the system. 
-    cont[1] (from_bus), cont[2] (to_bus), cont_branch branch number, and island is sorted index numbers 
+    cont[1] (from_bus), cont[2] (to_bus), cont_branch branch number, and island is sorted index numbers.
+    slack needs to be in the Vector island
 """
 function calc_X(DA::AbstractMatrix{<:Real}, B::AbstractMatrix{<:Real}, cont::AbstractVector{<:Tuple{Integer,Integer}}, 
     cont_branch::AbstractVector{<:Integer}, slack::Integer, island::AbstractVector{<:Integer}
@@ -61,7 +70,7 @@ function calc_X(DA::AbstractMatrix{<:Real}, B::AbstractMatrix{<:Real}, cont::Abs
         i = searchsortedfirst(island, c)
         X[i, i] -= DA[branch, fbus]
     end
-    _calc_X!(X, searchsortedfirst(island, slack))
+    _calc_X!(X, slack)
     return X
 end
 function calc_X!(X::AbstractMatrix{<:Real}, X₀::AbstractMatrix{<:Real}, cont::AbstractVector{<:Tuple{Integer,Integer}},
@@ -79,7 +88,8 @@ end
 
 """ 
     Find voltage angles after a line outage using base case D*A and B. 
-    cont[1] (from_bus), cont[2] (to_bus), and cont_branch are index numbers 
+    cont[1] (from_bus), cont[2] (to_bus), and cont_branch are index numbers.
+    slack needs to be in the Vector island.
 """
 function calc_θ!(θ::AbstractVector{<:Real}, B::AbstractMatrix{<:Real}, DA::AbstractMatrix{<:Real}, 
     B0::AbstractMatrix{<:Real}, P::AbstractVector{<:Real}, 
@@ -106,14 +116,15 @@ end
 
 """ 
     Find voltage angles after a line outage, which splits the system, using base case B. 
-    cont[1] (from_bus), cont[2] (to_bus), and cont_branch are index numbers 
+    cont[1] (from_bus), cont[2] (to_bus), and cont_branch are index numbers.
+    slack needs to be in the Vector island.
 """
 function calc_θ(DA::AbstractMatrix{<:Real}, B0::AbstractMatrix{<:Real}, P::AbstractVector{<:Real}, 
     cont::AbstractVector{<:Tuple{Integer,Integer}}, cont_branch::AbstractVector{<:Integer}, slack::Integer, 
     nodes::AbstractVector{<:Integer}
 )
     B = calc_cont_B(DA, B0, cont, cont_branch, nodes)
-    θ = calc_θ!(B, view(P, nodes), searchsortedfirst(nodes, slack))
+    θ = calc_θ!(B, view(P, nodes), slack)
     return θ
 end
 
@@ -129,7 +140,8 @@ end
 
 """ 
     Make the isf-matrix after a line outage using base case D*A and B. 
-    cont[1] (from_bus), cont[2] (to_bus), and cont_branch are index numbers 
+    cont[1] (from_bus), cont[2] (to_bus), and cont_branch are index numbers.
+    slack needs to be in the Vector island.
 """
 function calc_isf!(ϕ::AbstractMatrix{<:Real}, DA::AbstractMatrix{<:Real}, B0::AbstractMatrix{<:Real}, 
     cont::AbstractVector{<:Tuple{Integer,Integer}}, cont_branch::AbstractVector{<:Integer}, slack::Integer
@@ -147,7 +159,8 @@ calc_isf(DA::AbstractMatrix{T}, B::AbstractMatrix{<:Real}, cont::AbstractVector{
 
 """ 
     Make the isf-matrix after a line outage, which splits the system, using base case D*A and B. 
-    cont[1] (from_bus), cont[2] (to_bus), and cont_branch are index numbers 
+    cont[1] (from_bus), cont[2] (to_bus), and cont_branch are index numbers.
+    slack needs to be in the Vector island.
 """
 function calc_isf!(ϕ::AbstractMatrix{T}, DA::AbstractMatrix{<:Real}, B0::AbstractMatrix{<:Real}, cont::AbstractVector{<:Tuple{Integer,Integer}}, 
     cont_branch::AbstractVector{<:Integer}, slack::Integer, nodes::AbstractVector{<:Integer}, branches::AbstractVector{<:Integer}
@@ -155,7 +168,7 @@ function calc_isf!(ϕ::AbstractMatrix{T}, DA::AbstractMatrix{<:Real}, B0::Abstra
     B = calc_cont_B(DA, B0, cont, cont_branch, nodes)
     # ϕ[sorted_missing(branches, size(ϕ,1)), sorted_missing(nodes, size(ϕ,2))] .= zero(T)
     fill!(ϕ, zero(T))
-    ϕ[branches, nodes] = calc_isf!(B, view(DA, branches, nodes), searchsortedfirst(nodes, slack))
+    ϕ[branches, nodes] = calc_isf!(B, view(DA, branches, nodes), slack)
     return ϕ
 end
 calc_isf(DA::AbstractMatrix{T}, B0::AbstractMatrix{<:Real}, cont::AbstractVector{<:Tuple{Integer,Integer}}, 

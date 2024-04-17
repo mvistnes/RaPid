@@ -29,19 +29,16 @@ function calc_isf(
     cont::AbstractVector{<:Tuple{Integer,Integer}},
     branch::AbstractVector{<:Integer}
 )
+    ϕ = similar(pf.ϕ)
     if length(cont) < 2
-        calc_isf!(pf.mbn_tmp, pf.mnn_tmp, pf.X, pf.B, pf.DA, cont[1], branch[1])
+        calc_isf!(ϕ, pf.mnn_tmp, pf.X, pf.B, pf.DA, cont[1], branch[1])
     else
         X = calc_X(pf.X, pf.A, pf.D, branch)
-        calc_isf!(pf.mbn_tmp, pf.DA, X)
-        pf.mbn_tmp[branch, :] .= 0.0
-        set_tol_zero!(pf.mbn_tmp)
+        calc_isf!(ϕ, pf.DA, X)
+        ϕ[branch, :] .= 0.0
+        set_tol_zero!(ϕ)
     end
-    return pf.mbn_tmp
-end
-
-function calc_isf(pf::DCPowerFlow, cont::AbstractVector{<:Real}, c::AbstractVector{<:Integer})
-    return pf.ϕ
+    return ϕ
 end
 
 function calc_ptdf_vec(Xf::AbstractVector{T}, Xt::AbstractVector{T}, Xk::AbstractVector{T}, Xl::AbstractVector{T}, 

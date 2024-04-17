@@ -38,6 +38,11 @@ function oplimits(
 
     branch_rating::Vector{TR} = get_rate.(branches)
     (pg_lim_min::Vector{TR}, pg_lim_max::Vector{TR}) = split_pair(get_active_power_limits.(generation))
+    for i in axes(pg_lim_min,1) # Renewable generators needs to have a min not equal to max
+        if pg_lim_min[i] > 0.0 && pg_lim_min[i] == pg_lim_max[i]
+            pg_lim_min[i] = 0.0
+        end
+    end
     (rampup::Vector{TR}, rampdown::Vector{TR}) = split_pair(get_ramp_limits.(generation))
     (dc_lim_min::Vector{TR}, dc_lim_max::Vector{TR}) = split_pair(get_active_power_limits_from.(dc_branches))
     pd_lim::Vector{TR} = get_active_power.(demands)
@@ -85,18 +90,21 @@ function opf_base(type::OPF, system::System, optimizer;
     opf = isempty(voll) ? opfsystem(system) : opfsystem(system, voll, contingencies, prob; renew_cost=renew_cost)
     pf = DCPowerFlow(system)
     oplim = oplimits(system, max_shed, max_curtail, dist_slack, ramp_mult, ramp_minutes, p_failure, short_term_multi, long_term_multi)
+    m, opf, pf, oplim = add_base_constraints!(opf, oplim, m, pf)
 
-    return add_base_constraints!(type, opf, oplim, m, pf)
-end
-
-function add_base_constraints!(type::OPF, opf::OPFsystem, oplim::Oplimits, m::Model, pf::DCPowerFlow)
     brc_up = Dict{Int64,ConstraintRef}()
     brc_down = Dict{Int64,ConstraintRef}()
     Pc = Dict{Int64,ExprC}()
     Pcc = Dict{Int64,ExprCC}()
     Pccx = Dict{Int64,ExprCCX}()
+    if any([type.P, type.C1, type.C2, type.C2F]) && !isempty(contingencies)
+        return add_all_contingencies!(type, opf, oplim, m, pf, brc_up, brc_down, Pc, Pcc, Pccx)
+    else
+        return m, opf, pf, oplim, brc_up, brc_down, Pc, Pcc, Pccx
+    end
+end
 
-
+function add_base_constraints!(opf::OPFsystem, oplim::Oplimits, m::Model, pf::DCPowerFlow)
     @variables(m, begin
         p0[n in 1:size(opf.mgx, 2)]
         # active power injection on each node
@@ -128,10 +136,7 @@ function add_base_constraints!(type::OPF, opf::OPFsystem, oplim::Oplimits, m::Mo
     add_to_expression!.(balance, ls0)
     @constraint(m, power_balance, balance == 0.0)
 
-    if any([type.P, type.C1, type.C2, type.C2F])
-        return add_all_contingencies!(type, opf, oplim, m, pf, brc_up, brc_down, Pc, Pcc, Pccx)
-    end
-    return m, opf, pf, oplim, brc_up, brc_down, Pc, Pcc, Pccx
+    return m, opf, pf, oplim
 end
 
 " Add all constraints to the model "
@@ -208,10 +213,15 @@ function add_all_contingencies!(type::OPF, opf::OPFsystem, oplim::Oplimits, m::M
     !isempty(oplim.dist_slack) && set_dist_slack!(pf.ϕ, opf.mgx, oplim.dist_slack)
     for (c, c_obj) in enumerate(opf.contingencies)
         c_i = c_obj.second
-        c_n = c_obj.first == "branch" ? [Tuple(opf.mbx[i,:].nzind) for i in c_i] : [opf.mgx[i,:].nzind[1] for i in c_i]
+        length(c_i) == 0 && continue
+        c_n = c_obj.first == "branch" ? [get_bus_idx(opf.mbx[i,:]) for i in c_i] : [opf.mgx[i,:].nzind[1] for i in c_i]
         if is_islanded(pf, c_n, c_i)
             islands, islands_b = handle_islands(pf.B, pf.DA, c_n, c_i)
-            ptdf = [calc_isf(pf, inodes, ibranches) for (inodes, ibranches) in zip(islands, islands_b)]
+            ptdf = Matrix{Float64}[]
+            for (inodes, ibranches) in zip(islands, islands_b)
+                s = find_slack(inodes, pf.slack, oplim.pg_lim_max, opf.mgx)
+                push!(ptdf, calc_isf(pf.DA, pf.B, c_n, c_i, s, inodes, ibranches))
+            end
         else
             islands = [Vector{Int64}()]
             ptdf = [calc_isf(pf, c_n, c_i)]
@@ -520,6 +530,29 @@ calc_cost(m::Model, opf::OPFsystem, var::AbstractVector{VariableRef}, symb=:var)
     sum(getproperty(c, symb) * g for (c, g) in zip(opf.cost_gen, get_value(m, var)))
 # sum(c[1] * g^2 + c[2] * g for (c, g) in zip(opf.cost_gen, get_value(m, var)))
 
+function get_slack_cost(case::Case)
+    opf = case.opf
+    pf = case.pf
+    if isempty(case.oplim.dist_slack)
+        slack_cost = sum(getproperty.(opf.cost_gen[opf.mgx[:,pf.slack].nzind], :var) * case.oplim.ramp_mult)
+    else
+        slack_cost = opf.mgx' * (getproperty.(opf.cost_gen, :var) * case.oplim.ramp_mult .* case.oplim.dist_slack .* pg0)
+    end
+    return slack_cost
+end
+
+function get_slack_cost(case::Case, island::AbstractVector)
+    opf = case.opf
+    pf = case.pf
+    if isempty(case.oplim.dist_slack)
+        slack = find_slack(island, pf.slack, case.oplim.pg_lim_max, case.opf.mgx)
+        slack_cost = sum(getproperty.(opf.cost_gen[opf.mgx[:,slack].nzind], :var) * case.oplim.ramp_mult)
+    else
+        slack_cost = opf.mgx[:,island]' * (getproperty.(opf.cost_gen, :var) * case.oplim.ramp_mult .* case.oplim.dist_slack .* pg0)
+    end
+    return slack_cost
+end
+
 """ Calculate the cost of the modelled slack for all contingencies. """
 function calc_slack_cost(case::Case)
     m = case.model
@@ -527,23 +560,26 @@ function calc_slack_cost(case::Case)
     pf = case.pf
     costs = zeros(length(opf.contingencies))
     pg0 = get_value(m, :pg0)
-    if isempty(case.oplim.dist_slack)
-        slack_cost = sum(getproperty.(opf.cost_gen[opf.mgx[:,pf.slack].nzind], :var) * case.oplim.ramp_mult)
-    else
-        slack_cost = opf.mgx' * (getproperty.(opf.cost_gen, :var) * case.oplim.ramp_mult .* case.oplim.dist_slack .* pg0)
-    end
     pg0 = opf.mgx' * pg0
     pd = opf.mdx' * (get_value(m, :pd) - get_value(m, :ls0))
     ls_cost = opf.mdx' * (opf.voll' * (get_value(m, :pd) - get_value(m, :ls0)))
     for (i, c_obj) in enumerate(opf.contingencies)
-        cont = typesort_component(c_obj, opf)
-        if is_islanded(pf, cont[2], cont[1])
-            islands, island, island_b = handle_islands(pf.B, pf.DA, cont[2], cont[1], pf.slack)
-            nodes = reduce(vcat, islands[1:end.!=island], init=[])
-            ΔP = sum(pg0[nodes]) - sum(pd[nodes])
-            costs[i] = sum(slack_cost * abs(ΔP)) + sum(ls_cost[nodes])
-        elseif typeof(c_obj) <: StaticInjection
-            costs[i] = sum(slack_cost * value(m[:pg0][cont[1]]))
+        c_i = c_obj.second
+        length(c_i) == 0 && continue
+        if c_obj.first == "branch"
+            c_n = [get_bus_idx(opf.mbx[i,:]) for i in c_i]
+            if is_islanded(pf, c_n, c_i)
+                islands, islands_b = handle_islands(pf.B, pf.DA, c_n, c_i)
+                nodes = setdiff(1:length(opf.idx), reduce(vcat, islands, init=[]))
+                costs[i] = sum(ls_cost[nodes])
+                for island in islands
+                    ΔP = sum(pg0[island]) - sum(pd[island])
+                    costs[i] += sum(get_slack_cost(case, island) * abs(ΔP))
+                end
+            end
+        else
+            c_n = [opf.mgx[i,:].nzind[1] for i in c_i]
+            costs[i] = sum(get_slack_cost(case) * value(m[:pg0][c_n]))
         end
     end
     return costs

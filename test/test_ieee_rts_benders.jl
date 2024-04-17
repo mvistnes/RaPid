@@ -41,10 +41,10 @@ function test_benders(system, optimizer, voll, contingencies, prob, max_shed,ram
         p_failure = ifelse(type.C2F, 0.10, 0.00)
         println(type)
         println("Start PTDF")
-        mod, opf, pf, oplim, brc_up, brc_down, Pc, Pcc, Pccx = SCOPF.opf_base(type, system, HiGHS.Optimizer(), voll=voll, contingencies=contingencies, prob=prob, max_shed=max_shed,
+        model, opf, pf, oplim, brc_up, brc_down, Pc, Pcc, Pccx = SCOPF.opf_base(type, system, HiGHS.Optimizer(), voll=voll, contingencies=contingencies, prob=prob, max_shed=max_shed,
             ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=p_failure);
-        SCOPF.add_branch_constraints!(mod, pf.ϕ, mod[:p0], brc_up, brc_down, oplim.branch_rating)
-        SCOPF.solve_model!(mod);
+        SCOPF.add_branch_constraints!(model, pf.ϕ, model[:p0], brc_up, brc_down, oplim.branch_rating)
+        SCOPF.solve_model!(model);
 
         # println("Start Contingency select")
         # case_cont, tot_t = SCOPF.run_contingency_select(type, system, HiGHS.Optimizer(), voll, prob, contingencies, 
@@ -55,7 +55,7 @@ function test_benders(system, optimizer, voll, contingencies, prob, max_shed,ram
             ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=p_failure);
 
         # @test JuMP.objective_value(mod) ≈ JuMP.objective_value(case_cont.model)
-        @test JuMP.objective_value(mod) ≈ JuMP.objective_value(case.model)
+        @test JuMP.objective_value(model) ≈ JuMP.objective_value(case.model)
     end
     return
 end

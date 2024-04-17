@@ -94,11 +94,16 @@ function calc_Pᵢ_from_flow(branches::AbstractVector{<:Branch}, F::AbstractVect
     return P
 end
 
-""" Distributed slack """
 function set_dist_slack!(ϕ::AbstractMatrix{<:Real}, mgx::AbstractMatrix{<:Real}, dist_slack::AbstractVector{<:Real})
-    slack_array = dist_slack / sum(dist_slack)
-    ϕ = ϕ .- ((slack_array' * mgx) * ϕ')'
+    ϕ .-= ϕ*calc_dist_slack(mgx, dist_slack)
 end
+
+""" dist_slack slack is normalized such that sum(dist_slack) = 1.0 """
+function calc_dist_slack(mgx::AbstractMatrix{<:Real}, dist_slack::AbstractVector{<:Real})
+    slack_array = dist_slack / sum(dist_slack)
+    return mgx'slack_array
+end
+
 
 """ Make the component connectivity matrix """
 function calc_connectivity(vals::AbstractVector{<:StaticInjection}, numnodes::Integer, idx::Dict{<:Int,<:Integer})
