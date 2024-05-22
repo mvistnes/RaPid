@@ -57,6 +57,14 @@ function set_renewable_prod!(system::System, ratio::Real=0.5)
     end
 end
 
+function set_renewable_prod!(system::System, t::Dates.DateTime)
+    for g in get_renewables(system)
+        v = get_time_series_values(SingleTimeSeries, g, "max_active_power", 
+            start_time = t, len=1)
+        set_active_power!(g, get_max_active_power(g) * v)
+    end
+end
+
 """ Set the active power demand """
 function set_active_power_demand!(system::System, demands=get_max_active_power.(get_demands(system)))
     set_active_power!.(get_demands(system), demands)
@@ -95,14 +103,14 @@ get_generator_cost(gen::Generator) = get_operation_cost(gen) |> get_variable |> 
 _get_g_value(x::AbstractVector{<:Tuple{Real,Real}}) = mean([y[1] for y in x if y[1] != 0.0]), mean([y[2] for y in x if y[2] != 0.0])
 _get_g_value(x::Tuple{<:Real,<:Real}) = x
 
-function get_generator_cost(generation::AbstractVector{<:Generator}, renew_cost::Real)
-    cost = Vector{NamedTuple{(:fix, :var)}}(undef, length(generation))
+function get_generator_cost(generation::AbstractVector{<:Generator}, ramp_mult::Real, renew_cost::Real, renew_ramp::Real)
+    cost = Vector{NamedTuple{(:fix, :var, :ramp)}}(undef, length(generation))
     for (i,g) in enumerate(generation)
         if typeof(g) <: RenewableGen
-            cost[i] = (fix=0.0, var=renew_cost)
+            cost[i] = (fix=0.0, var=renew_cost, ramp=renew_ramp)
         else
             c = get_generator_cost(g)
-            cost[i] = (fix=c[1], var=c[2])
+            cost[i] = (fix=c[1], var=c[2], ramp=c[2]*ramp_mult)
         end
     end
     return cost
@@ -236,7 +244,7 @@ filter_active!(list::AbstractVector{<:Component}) = filter(comp -> comp.availabl
 
 """ OPF system type """
 mutable struct OPFsystem{TR<:Real,TI<:Integer}
-    cost_gen::Vector{NamedTuple{(:fix, :var), Tuple{TR, TR}}}
+    cost_gen::Vector{NamedTuple{(:fix, :var, :ramp), Tuple{TR, TR, TR}}}
     cost_renewables::Vector{TR}
     voll::Vector{TR}
     prob::Vector{TR}
@@ -252,7 +260,7 @@ end
 
 """ Constructor for OPFsystem """
 function opfsystem(sys::System, voll::Vector{TR}, contingencies::Vector{Pair{String, Vector{Int64}}}=Pair{String, Int64}[], 
-    prob::Vector{TR}=[]; renew_cost::Real=0.0, check=false
+    prob::Vector{TR}=[]; ramp_mult::Real=1.0, renew_cost::Real=0.0, renew_ramp::Real=0.0, check=false
 ) where {TR<:Real}
 
     generation = sort_components!(get_generation(sys))
@@ -268,7 +276,7 @@ function opfsystem(sys::System, voll::Vector{TR}, contingencies::Vector{Pair{Str
     mdcx = calc_A(dc_branches, length(nodes), idx)
     mdx = calc_connectivity(demands, length(nodes), idx)
 
-    cost_gen = get_generator_cost(generation, renew_cost)
+    cost_gen = get_generator_cost(generation, ramp_mult, renew_cost, renew_ramp)
     cost_renewables = Vector{TR}() # Vector{Float64}([get_generator_cost(g)[2] for g in renewables])
 
     if check
@@ -423,7 +431,7 @@ end
 """ Run optimizer to solve the model and check for optimality """
 function solve_model!(model::Model)
     optimize!(model)
-    if !has_values(model)
+    if !is_solved_and_feasible(model)
         @warn "Model not optimally solved with status $(termination_status(model))!"
     else
         @info @sprintf "Model solved in %.6fs with objective value %.10f" MOI.get(model, MOI.SolveTimeSec()) objective_value(model)
@@ -672,8 +680,8 @@ sprint_expr(expr::AbstractJuMPScalar, lim=1e-14) =
     Printf.@sprintf("<= %s%.2f", (expr.constant > 0 ? "-" : " "), abs(expr.constant)
     )
 
-function print_cuts(type::OPF, pre, corr1, corr2, corr2f)
-    print("Cuts added:")
+function print_cuts(iterations::Integer, type::OPF, pre::Integer, corr1::Integer, corr2::Integer, corr2f::Integer)
+    print(iterations, " iterations with cuts added:")
     type.P && print(" pre=", pre)
     type.C1 && print(" corr1=", corr1)
     type.C2 && print(" corr2=", corr2)

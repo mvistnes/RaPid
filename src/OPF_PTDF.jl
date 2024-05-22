@@ -1,6 +1,5 @@
 """ Operational limits type """
 struct Oplimits{TR<:Real}
-    ramp_mult::TR
     ramp_minutes::TR
     p_failure::TR
 
@@ -25,7 +24,6 @@ function oplimits(
     max_shed::Union{TR,Vector{TR}},
     max_curtail::Union{TR,Vector{TR}},
     dist_slack::Vector{TR},
-    ramp_mult::TR,
     ramp_minutes::TR,
     p_failure::TR,
     short_term_multi::Union{TR,Vector{TR}},
@@ -38,19 +36,19 @@ function oplimits(
 
     branch_rating::Vector{TR} = get_rate.(branches)
     (pg_lim_min::Vector{TR}, pg_lim_max::Vector{TR}) = split_pair(get_active_power_limits.(generation))
-    for i in axes(pg_lim_min,1) # Renewable generators needs to have a min not equal to max
-        if pg_lim_min[i] > 0.0 && pg_lim_min[i] == pg_lim_max[i]
-            pg_lim_min[i] = 0.0
-        end
-    end
+    # for i in axes(pg_lim_min,1) # Renewable generators needs to have a min not equal to max
+    #     if pg_lim_min[i] > 0.0 && pg_lim_min[i] == pg_lim_max[i]
+    #         pg_lim_min[i] = 0.0
+    #     end
+    # end
     (rampup::Vector{TR}, rampdown::Vector{TR}) = split_pair(get_ramp_limits.(generation))
     (dc_lim_min::Vector{TR}, dc_lim_max::Vector{TR}) = split_pair(get_active_power_limits_from.(dc_branches))
     pd_lim::Vector{TR} = get_active_power.(demands)
     if !isempty(dist_slack)
         dist_slack = dist_slack / sum(dist_slack)
     end
-    return Oplimits{TR}(ramp_mult, ramp_minutes, p_failure, branch_rating, short_term_multi, long_term_multi, 
-        pg_lim_min, pg_lim_max, rampup, rampdown, dist_slack, max_curtail, dc_lim_min, dc_lim_max, pd_lim, max_shed)
+    return Oplimits{TR}(ramp_minutes, p_failure, branch_rating, short_term_multi, long_term_multi, 
+        zeros(length(pg_lim_min)), pg_lim_max, rampup, rampdown, dist_slack, max_curtail, dc_lim_min, dc_lim_max, pd_lim, max_shed)
 end
 
 mutable struct Case{TR<:Real,TI<:Integer}
@@ -75,6 +73,7 @@ function opf_base(type::OPF, system::System, optimizer;
     ramp_minutes::Real=10.0,
     ramp_mult::Real=10.0,
     renew_cost::Number=0.0,
+    renew_ramp::Number=1000.0,
     max_shed=1.0,
     max_curtail=1.0,
     short_term_multi=1.5,
@@ -87,9 +86,9 @@ function opf_base(type::OPF, system::System, optimizer;
     assert(type)
     @assert !type.C2F | !iszero(p_failure)
     m = create_model(optimizer, time_limit_sec=time_limit_sec, silent=silent, debug=debug)
-    opf = isempty(voll) ? opfsystem(system) : opfsystem(system, voll, contingencies, prob; renew_cost=renew_cost)
+    opf = isempty(voll) ? opfsystem(system) : opfsystem(system, voll, contingencies, prob; ramp_mult=ramp_mult, renew_cost=renew_cost, renew_ramp=renew_ramp)
     pf = DCPowerFlow(system)
-    oplim = oplimits(system, max_shed, max_curtail, dist_slack, ramp_mult, ramp_minutes, p_failure, short_term_multi, long_term_multi)
+    oplim = oplimits(system, max_shed, max_curtail, dist_slack, ramp_minutes, p_failure, short_term_multi, long_term_multi)
     m, opf, pf, oplim = add_base_constraints!(opf, oplim, m, pf)
 
     brc_up = Dict{Int64,ConstraintRef}()
@@ -109,6 +108,9 @@ function add_base_constraints!(opf::OPFsystem, oplim::Oplimits, m::Model, pf::DC
         p0[n in 1:size(opf.mgx, 2)]
         # active power injection on each node
         oplim.pg_lim_min[i] <= pg0[i in 1:size(opf.mgx, 1)] <= oplim.pg_lim_max[i]
+        # common corrective ramp limit for all contingencies
+        0.0 <= pgru[i in 1:size(opf.mgx, 1)] <= (opf.cost_gen[i].ramp > 0.0 ? oplim.pg_lim_max[i] : 0.0)
+        0.0 <= pgrd[i in 1:size(opf.mgx, 1)] <= oplim.pg_lim_max[i]
         # active power variables for the generators
         oplim.dc_lim_min[i] <= pfdc0[i in 1:size(opf.mdcx, 1)] <= oplim.dc_lim_max[i]
         # power flow on DC branches
@@ -117,7 +119,8 @@ function add_base_constraints!(opf::OPFsystem, oplim::Oplimits, m::Model, pf::DC
         # demand curtailment variables
     end)
 
-    @objective(m, Min, sum(c.var * g for (c, g) in zip(opf.cost_gen, pg0)) + sum(opf.voll' * ls0))
+    # @objective(m, Min, sum(c.var * (g + ru + rd) for (c, g, ru, rd) in zip(opf.cost_gen, pg0, pgru, pgrd)) + sum(opf.voll' * ls0))
+    @objective(m, Min, sum((c.var * g + c.ramp * (ru + rd)) for (c, g, ru, rd) in zip(opf.cost_gen, pg0, pgru, pgrd)) + sum(opf.voll' * ls0))
     # @objective(m, Min, sum(c[1] * g^2 + c[2] * g for (c, g) in zip(opf.cost_gen, pg0)) + sum(opf.voll' * ls0) 
 
     JuMP.fix.(pd, oplim.pd_lim)
@@ -156,33 +159,36 @@ function add_branch_constraints!(m::Model, ptdf::AbstractMatrix{<:Real}, p::Abst
 end
 
 " Add a branch constraint for branch to the model "
-function add_branch_constraint!(m::Model, pf::DCPowerFlow, p::AbstractVector{VariableRef}, 
+function add_branch_constraint!(m::Model, ptdf_vec::AbstractVector{<:Real}, p::AbstractVector{VariableRef}, 
     brc_up::Dict{<:Integer, ConstraintRef}, brc_down::Dict{<:Integer, ConstraintRef}, branch::Integer, rating::Real
 )
     # ptdf = calc_isf_vec(pf, branch)
-    ptdf = view(pf.ϕ, branch, :)
+    # ptdf = view(pf.ϕ, branch, :)
     # ptdf0 = GenericAffExpr(0.0, Pair.(p, ptdf[i,:])) 
     ptdf0 = @expression(m, AffExpr())
-    for (i,j) in zip(ptdf, p)
+    for (i,j) in zip(ptdf_vec, p)
         add_to_expression!(ptdf0, i, j)
     end
     brc_down[branch] = @constraint(m, ptdf0 + rating >= 0.0)
     brc_up[branch] = @constraint(m, ptdf0 - rating <= 0.0)
     return m
 end
+add_branch_constraint!(m::Model, pf::DCPowerFlow, p::AbstractVector{VariableRef}, 
+    brc_up::Dict{<:Integer, ConstraintRef}, brc_down::Dict{<:Integer, ConstraintRef}, branch::Integer, rating::Real
+) = add_branch_constraint!(m, view(pf.ϕ, branch, :), p, brc_up, brc_down, branch, rating)
 
 " Add branch limits to overloaded branches "
 function constrain_branches!(m::Model, pf::DCPowerFlow, oplim::Oplimits, brc_up::Dict{<:Integer, ConstraintRef}, brc_down::Dict{<:Integer, ConstraintRef}, 
     total_solve_time::Real, atol::Real=1e-6
 )
-    # if !has_values(m)
+    # if !is_solved_and_feasible(m)
         # Note: While using a direct_model, this check fails after the model is modified for some solvers
         total_solve_time = update_model!(m, pf, total_solve_time)
     # end
     while true
         ol_br = find_overloaded_branches(pf.F, oplim.branch_rating, atol)
         isempty(ol_br) && break 
-        termination_status(m) != JuMP.OPTIMAL && break
+        !is_solved_and_feasible(m) && break
         for br in ol_br
             add_branch_constraint!(m, pf, m[:p0], brc_up, brc_down, br, oplim.branch_rating[br])
             @info "Branch $br added"
@@ -315,7 +321,7 @@ function init_P!(Pc::Dict{<:Integer,ExprC}, opf::OPFsystem, oplim::Oplimits, m::
     islands::Vector, c::Integer
 )
     pgu = @variable(m, [g in 1:length(m[:pg0])], base_name = "pguc"*string(c),
-        lower_bound = 0.0, upper_bound = oplim.rampup[g] * 0.0)
+        lower_bound = 0.0, upper_bound = oplim.rampup[g] * oplim.ramp_minutes)
     # active power variables for the generators in contingencies ramp up 
     pgd = @variable(m, [g in 1:length(m[:pg0])], base_name = "pgdc"*string(c),
         lower_bound = 0.0) #, upper_bound = rampdown[g] * 0.0)
@@ -326,11 +332,11 @@ function init_P!(Pc::Dict{<:Integer,ExprC}, opf::OPFsystem, oplim::Oplimits, m::
 
     p_survive = 1.0 - oplim.p_failure
     add_to_expression!(obj, opf.prob[c], sum(opf.voll' * lsc))
-    for (cost, gu, gd) in zip(opf.cost_gen, pgu, pgd)
-        add_to_expression!(obj, opf.prob[c] * p_survive * cost.var * oplim.ramp_mult, gu)
-        add_to_expression!(obj, opf.prob[c] * p_survive * cost.var * oplim.ramp_mult, gd)
-        # add_to_expression!.(obj, opf.prob[c], p_survive * oplim.ramp_mult * (cost[1] * g^2 + cost[2] * g))
-    end
+    # for (cost, gu, gd) in zip(opf.cost_gen, pgu, pgd)
+    #     add_to_expression!(obj, opf.prob[c] * p_survive * cost.ramp, gu)
+    #     add_to_expression!(obj, opf.prob[c] * p_survive * cost.ramp, gd)
+    #     # add_to_expression!.(obj, opf.prob[c], p_survive * oplim.ramp_mult * (cost[1] * g^2 + cost[2] * g))
+    # end
 
     # Add new constraints that limit the corrective variables within operating limits
     balance_pc = @expression(m, sum(lsc))
@@ -339,7 +345,9 @@ function init_P!(Pc::Dict{<:Integer,ExprC}, opf::OPFsystem, oplim::Oplimits, m::
     @constraint(m, balance_pc == 0.0)
     if isempty(islands[1])
         @constraint(m, m[:pg0] .+ pgu .- pgd .>= oplim.pg_lim_min)
-        # @constraint(m, m[:pg0] .+ pgu .- pgd .<= oplim.pg_lim_max)
+        @constraint(m, m[:pg0] .+ pgu .- pgd .<= oplim.pg_lim_max)
+        @constraint(m, m[:pgru] .>= pgu)
+        @constraint(m, m[:pgrd] .>= pgd)
         if typeof(oplim.max_shed) <: Real
             @constraint(m, sum(lsc) <= oplim.max_shed)
         end
@@ -347,7 +355,9 @@ function init_P!(Pc::Dict{<:Integer,ExprC}, opf::OPFsystem, oplim::Oplimits, m::
         for itr in islands, n in itr, g = opf.mgx[:,n].nzind
             @constraints(m, begin
                 m[:pg0][g] + pgu[g] - pgd[g] >= oplim.pg_lim_min[g]
-                # m[:pg0][g] + pgu[g] - pgd[g] <= oplim.pg_lim_max[g]
+                m[:pg0][g] + pgu[g] - pgd[g] <= oplim.pg_lim_max[g]
+                m[:pgru][g] >= pgu[g]
+                m[:pgrd][g] >= pgd[g]
             end)
         end
         if typeof(oplim.max_shed) <: Real
@@ -399,8 +409,8 @@ function init_P!(Pcc::Dict{<:Integer,ExprCC}, opf::OPFsystem, oplim::Oplimits, m
         # sum(opf.cost_gen' * pgd)
         ))
     for (cost, gu, gd) in zip(opf.cost_gen, pgu, pgd)
-        add_to_expression!(obj, opf.prob[c] * p_survive * cost.var * oplim.ramp_mult, gu)
-        add_to_expression!(obj, opf.prob[c] * p_survive * cost.var * oplim.ramp_mult, gd)
+        add_to_expression!(obj, opf.prob[c] * p_survive * cost.ramp, gu)
+        add_to_expression!(obj, opf.prob[c] * p_survive * cost.ramp, gd)
         # add_to_expression!.(obj, opf.prob[c], p_survive * oplim.ramp_mult * (cost[1] * gu^2 + cost[2] * gu))
         # add_to_expression!.(obj, opf.prob[c], p_survive * oplim.ramp_mult * (cost[1] * gd^2 + cost[2] * gd))
     end
@@ -523,20 +533,20 @@ function fix_contingencies!(m::Model, P::Dict{<:Integer,<:ContExpr})
 end
 
 """ Calculate the cost of VOLL for the provided variables """
-calc_cens(m::Model, opf::OPFsystem, var::AbstractVector{VariableRef}) = sum(opf.voll .* get_value(m, var))
+calc_cens(m::Model, opf::OPFsystem, vals::AbstractVector{VariableRef}) = sum(opf.voll' * get_value(m, vals))
 
 """ Calculate the cost of generation for the provided variables """
-calc_cost(m::Model, opf::OPFsystem, var::AbstractVector{VariableRef}, symb=:var) =
-    sum(getproperty(c, symb) * g for (c, g) in zip(opf.cost_gen, get_value(m, var)))
-# sum(c[1] * g^2 + c[2] * g for (c, g) in zip(opf.cost_gen, get_value(m, var)))
+calc_cost(m::Model, opf::OPFsystem, vals::AbstractVector{VariableRef}, symb=:var) =
+    sum(getproperty(c, symb) * g for (c, g) in zip(opf.cost_gen, get_value(m, vals)))
+# sum(c[1] * g^2 + c[2] * g for (c, g) in zip(opf.cost_gen, get_value(m, vals)))
 
 function get_slack_cost(case::Case)
     opf = case.opf
     pf = case.pf
     if isempty(case.oplim.dist_slack)
-        slack_cost = sum(getproperty.(opf.cost_gen[opf.mgx[:,pf.slack].nzind], :var) * case.oplim.ramp_mult)
+        slack_cost = sum(getproperty.(opf.cost_gen[opf.mgx[:,pf.slack].nzind], :ramp))
     else
-        slack_cost = opf.mgx' * (getproperty.(opf.cost_gen, :var) * case.oplim.ramp_mult .* case.oplim.dist_slack .* pg0)
+        slack_cost = opf.mgx' * (getproperty.(opf.cost_gen, :ramp) .* case.oplim.dist_slack .* pg0)
     end
     return slack_cost
 end
@@ -546,9 +556,9 @@ function get_slack_cost(case::Case, island::AbstractVector)
     pf = case.pf
     if isempty(case.oplim.dist_slack)
         slack = find_slack(island, pf.slack, case.oplim.pg_lim_max, case.opf.mgx)
-        slack_cost = sum(getproperty.(opf.cost_gen[opf.mgx[:,slack].nzind], :var) * case.oplim.ramp_mult)
+        slack_cost = sum(getproperty.(opf.cost_gen[opf.mgx[:,slack].nzind], :ramp))
     else
-        slack_cost = opf.mgx[:,island]' * (getproperty.(opf.cost_gen, :var) * case.oplim.ramp_mult .* case.oplim.dist_slack .* pg0)
+        slack_cost = opf.mgx[:,island]' * (getproperty.(opf.cost_gen, :ramp) .* case.oplim.dist_slack .* pg0)
     end
     return slack_cost
 end
@@ -589,17 +599,21 @@ end
 calc_objective(m::Model, opf::OPFsystem) =
     calc_cost(m, opf, m[:pg0]) + calc_cens(m, opf, m[:ls0])
 
+calc_reserves(m::Model, opf::OPFsystem) =
+    calc_cost(m, opf, m[:pgru], :ramp) + calc_cost(m, opf, m[:pgrd], :ramp)
+
 """ Calculate the short term state cost """
-calc_objective(m::Model, opf::OPFsystem, expr::ExprC, ramp_mult::Real) =
-    (calc_cost(m, opf, expr.pgu, :var) + calc_cost(m, opf, expr.pgd, :var)) * ramp_mult + calc_cens(m, opf, expr.lsc)
+calc_objective(m::Model, opf::OPFsystem, expr::ExprC) =
+    calc_cens(m, opf, expr.lsc)
+    # (calc_cost(m, opf, expr.pgu, :ramp) + calc_cost(m, opf, expr.pgd, :ramp)) + calc_cens(m, opf, expr.lsc)
 
 """ Calculate the long term state cost """
-calc_objective(m::Model, opf::OPFsystem, expr::ExprCC, ramp_mult::Real) =
-    (calc_cost(m, opf, expr.pgu, :var) + calc_cost(m, opf, expr.pgd, :var)) * ramp_mult + calc_cens(m, opf, expr.lscc)
+calc_objective(m::Model, opf::OPFsystem, expr::ExprCC) =
+    (calc_cost(m, opf, expr.pgu, :ramp) + calc_cost(m, opf, expr.pgd, :ramp)) + calc_cens(m, opf, expr.lscc)
 
 """ Calculate the long term with corrective failure state cost """
-calc_objective(m::Model, opf::OPFsystem, expr::ExprCCX, ramp_mult::Real) =
-    60 * calc_cost(m, opf, expr.pgdx, :var) * ramp_mult + calc_cens(m, opf, expr.lsccx)
+calc_objective(m::Model, opf::OPFsystem, expr::ExprCCX) =
+    60 * calc_cost(m, opf, expr.pgdx, :var) + calc_cens(m, opf, expr.lsccx)
 
 """ Calculate a state cost """
 calc_objective(m::Model, opf::OPFsystem, P::Dict) =
@@ -607,9 +621,9 @@ calc_objective(m::Model, opf::OPFsystem, P::Dict) =
 
 """ Calculate the total cost """
 calc_objective(m::Model, opf::OPFsystem, Pc::Dict{<:Integer,ExprC},
-    Pcc::Dict{<:Integer,ExprCC}, Pccx::Dict{<:Integer,ExprCCX}, ramp_mult::Real
-) = calc_objective(m, opf) + calc_objective(m, opf, Pc, ramp_mult) +
-    calc_objective(m, opf, Pcc, ramp_mult) + calc_objective(m, opf, Pccx, ramp_mult)
+    Pcc::Dict{<:Integer,ExprCC}, Pccx::Dict{<:Integer,ExprCCX}
+) = calc_objective(m, opf) + calc_reserves(m, opf) + calc_objective(m, opf, Pc) +
+    calc_objective(m, opf, Pcc) + calc_objective(m, opf, Pccx)
 
 function print_costs(case::Case)
     base_cost = calc_objective(case.model, case.opf)
@@ -621,17 +635,18 @@ function print_costs(case::Case)
 end
 
 function get_costs(case::Case)
-    costs = SparseArrays.spzeros(length(case.opf.contingencies), 5)
+    costs = SparseArrays.spzeros(length(case.opf.contingencies), 6)
     costs[:,1] .= calc_objective(case.model, case.opf)
-    for c in keys(case.Pc)
-        costs[c,2] = calc_objective(case.model, case.opf, case.Pc[c], case.oplim.ramp_mult)
+    costs[:,2] .= calc_reserves(case.model, case.opf)
+    for (i,c) in case.Pc
+        costs[i,3] = calc_objective(case.model, case.opf, c)
     end
-    for c in keys(case.Pcc)
-        costs[c,3] = calc_objective(case.model, case.opf, case.Pcc[c], case.oplim.ramp_mult)
+    for (i,c) in case.Pcc
+        costs[i,4] = calc_objective(case.model, case.opf, c)
     end
-    for c in keys(case.Pccx)
-        costs[c,4] = calc_objective(case.model, case.opf, case.Pccx[c], case.oplim.ramp_mult)
+    for (i,c) in case.Pccx
+        costs[i,5] = calc_objective(case.model, case.opf, c)
     end
-    costs[:,5] = calc_slack_cost(case)
-    return costs, [:Base, :Pc, :Pcc, :Pccx, :distslack]
+    costs[:,6] = calc_slack_cost(case)
+    return costs, [:Base, :r, :Pc, :Pcc, :Pccx, :distslack]
 end

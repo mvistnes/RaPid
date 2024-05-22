@@ -13,7 +13,7 @@ function benders(opf::OPFsystem, m::Model)
     Pᵢ = get_value(m, :p0)
     Pg = get_controllable(opf, m)
     Pd = get_Pd(opf, m) # Fixed injection
-    @assert isapprox(Pg, (Pᵢ - Pd); atol=1e-14) string(Pg - (Pᵢ - Pd))
+    @assert isapprox(Pg, (Pᵢ - Pd); atol=1e-10) string(Pg - (Pᵢ - Pd))
     return Benders{Float64}(obj, Pᵢ, Pg, Pd)
 end
 
@@ -36,6 +36,7 @@ function run_benders(
     ramp_minutes::Number=10, 
     ramp_mult::Number=10, 
     renew_cost::Number=0.0,
+    renew_ramp::Number=1000.0,
     max_shed::Number=1.0, 
     max_curtail::Number=1.0, 
     atol::Number=1e-6,
@@ -48,8 +49,8 @@ function run_benders(
 )
     case = Case(opf_base(OPF(true, false, false, false, false), system, optimizer, voll=voll, contingencies=contingencies, prob=prob,
         dist_slack=dist_slack, time_limit_sec=time_limit_sec, ramp_minutes=ramp_minutes, ramp_mult=ramp_mult, renew_cost=renew_cost, 
-        max_shed=max_shed, max_curtail=max_curtail, short_term_multi=short_term_multi, long_term_multi=long_term_multi, p_failure=p_failure, 
-        silent=silent, debug=debug)...)
+        renew_ramp=renew_ramp, max_shed=max_shed, max_curtail=max_curtail, short_term_multi=short_term_multi, long_term_multi=long_term_multi, 
+        p_failure=p_failure, silent=silent, debug=debug)...)
 
     total_solve_time = constrain_branches!(case, 0.0)
     if !type.P & !type.C1 & !type.C2 & !type.C2F
@@ -79,12 +80,12 @@ function run_benders!(
     max_itr::Integer=10
 )
     assert(type)
-    @assert !type.C1 || isempty(Pc)
-    @assert !type.C2 || isempty(Pcc)
-    @assert !type.C2F || isempty(Pccx)
+    # @assert !type.C1 || isempty(Pc)
+    # @assert !type.C2 || isempty(Pcc)
+    # @assert !type.C2F || isempty(Pccx)
     
     total_solve_time = solve_time(m)
-    !has_values(m) && return Case(m, opf, pf, oplim, brc_up, brc_down, Pc, Pcc, Pccx), total_solve_time
+    !is_solved_and_feasible(m) && return Case(m, opf, pf, oplim, brc_up, brc_down, Pc, Pcc, Pccx), total_solve_time
     @debug "lower_bound = $(objective_value(m))"
 
     # Set variables
@@ -146,16 +147,18 @@ function run_benders!(
     end
 
     total_solve_time = update_model!(m, pf, oplim, brc_up, brc_down, bd, total_solve_time)
-    !has_values(m) && return Case(m, opf, pf, oplim, brc_up, brc_down, Pc, Pcc, Pccx), total_solve_time
+    !is_solved_and_feasible(m) && return Case(m, opf, pf, oplim, brc_up, brc_down, Pc, Pcc, Pccx), total_solve_time
 
     permutation = sortperm(overloads, rev=true)
     # permutation = sortperm(PI, rev=true)
     obj_val = Inf
     cut_added = []
     for iterations in 1:max_itr
+        total_solve_time = update_model!(m, pf, oplim, brc_up, brc_down, bd, total_solve_time)
+        !is_solved_and_feasible(m) && return Case(m, opf, pf, oplim, brc_up, brc_down, Pc, Pcc, Pccx), total_solve_time
         if obj_val == JuMP.objective_value(m) # loops until no new cuts are added for the contingencies
             # @printf "\nEND: Total solve time %.4f.\n" total_solve_time
-            print_cuts(type, pre, corr1, corr2, corr2f)
+            print_cuts(iterations, type, pre, corr1, corr2, corr2f)
             return Case(m, opf, pf, oplim, brc_up, brc_down, Pc, Pcc, Pccx), total_solve_time
         end
         obj_val = JuMP.objective_value(m)
@@ -206,35 +209,35 @@ function run_benders!(
             if sum(.!isempty.(olc)) > 0
                 if type.P
                     for (j,ol) in enumerate(olc)
-                        pre = add_cut(opf, m, bd, ptdf[j], ol, c_obj, cut_added, atol, pre)
+                        pre = add_cut(opf, m, brst, ptdf[j], ol, c_obj, cut_added, atol, pre)
                     end
                 elseif type.C1
                     for (j,ol) in enumerate(olc)
-                        corr1 = add_cut(Pc, opf, oplim, m, bd, ΔPc, ptdf[j], ol, islands, c_obj, c, cut_added, atol, corr1)
+                        corr1 = add_cut(Pc, opf, oplim, m, bd, brst, ΔPc, ptdf[j], ol, islands, c_obj, c, cut_added, atol, corr1)
                     end
                 end
             end
             if sum(.!isempty.(olcc)) > 0
                 for (j,ol) in enumerate(olcc)
-                    corr2 = add_cut(Pcc, opf, oplim, m, bd, ΔPcc, ptdf[j], ol, islands, c_obj, c, cut_added, atol, corr2)
+                    corr2 = add_cut(Pcc, opf, oplim, m, bd, brlt, ΔPcc, ptdf[j], ol, islands, c_obj, c, cut_added, atol, corr2)
                 end
             end
             if sum(.!isempty.(olccx)) > 0
                 for (j,ol) in enumerate(olccx)
-                    corr2f = add_cut(Pccx, opf, oplim, m, bd, ΔPccx, ptdf[j], ol, islands, c_obj, c, cut_added, atol, corr2f)
+                    corr2f = add_cut(Pccx, opf, oplim, m, bd, brlt, ΔPccx, ptdf[j], ol, islands, c_obj, c, cut_added, atol, corr2f)
                 end
             end
-            if !isempty(cut_added)
-                total_solve_time = update_model!(m, pf, oplim, brc_up, brc_down, bd, total_solve_time)
-                if !has_values(m)
-                    @warn "Infeasible solution for Contingency $(c_obj.first) $(c_obj.second). Deleting latest cuts!"
-                    delete.([m], cut_added)
-                    total_solve_time = update_model!(m, pf, oplim, brc_up, brc_down, bd, total_solve_time)
-                    !has_values(m) && return Case(m, opf, pf, oplim, brc_up, brc_down, Pc, Pcc, Pccx), total_solve_time
-                end
-                cut_added = []
-            end
-            !has_values(m) && return Case(m, opf, pf, oplim, brc_up, brc_down, Pc, Pcc, Pccx), total_solve_time
+            # if !isempty(cut_added)
+            #     total_solve_time = update_model!(m, pf, oplim, brc_up, brc_down, bd, total_solve_time)
+            #     if !is_solved_and_feasible(m)
+            #         @warn "Infeasible solution for Contingency $(c_obj.first) $(c_obj.second). Deleting latest cuts!"
+            #         delete.([m], cut_added)
+            #         total_solve_time = update_model!(m, pf, oplim, brc_up, brc_down, bd, total_solve_time)
+            #         !is_solved_and_feasible(m) && return Case(m, opf, pf, oplim, brc_up, brc_down, Pc, Pcc, Pccx), total_solve_time
+            #     end
+            #     cut_added = []
+            # end
+            # !is_solved_and_feasible(m) && return Case(m, opf, pf, oplim, brc_up, brc_down, Pc, Pcc, Pccx), total_solve_time
         end
 
     end
@@ -410,35 +413,35 @@ end
     return -opf.mgx' * get_value(m, pccx.pgdx) + opf.mdx' * get_value(m, pccx.lsccx)
 end
 
-function add_overload_expr!(m::Model, expr::JuMP.AbstractJuMPScalar, ol::Real, type::String, id::Integer,
+function add_overload_expr!(m::Model, expr::JuMP.AbstractJuMPScalar, ol::Real, rate::Real, type::String, id::Integer,
     c_obj::Pair{String, Vector{Int64}}, i::Integer, atol::Real
 )
     @info "$type $id: C $(c_obj.first) $(c_obj.second); ol br $i of $(abs(ol))"
     @debug "Cut added: $(sprint_expr(expr,atol))\n"
     if ol < 0
-        return JuMP.@constraint(m, expr <= ol)
+        return JuMP.@constraint(m, expr >= -rate)
     else
-        return JuMP.@constraint(m, expr >= ol)
+        return JuMP.@constraint(m, expr <= rate)
     end
 end
 
-function add_cut(opf::OPFsystem, m::Model, bd::Benders, ptdf::AbstractMatrix{<:Real}, overloads::Vector{<:Tuple{Integer,Real}},
+function add_cut(opf::OPFsystem, m::Model, rate::Vector{<:Real}, ptdf::AbstractMatrix{<:Real}, overloads::Vector{<:Tuple{Integer,Real}},
     c_obj::Pair{String, Vector{Int64}}, cut_added::Vector, atol::Real, id::Integer
 )
     for (i, ol) in overloads
-        expr = AffExpr() + sum(ptdf[i, :] .* bd.Pᵢ)
+        expr = AffExpr() #+ sum(ptdf[i, :] .* bd.Pᵢ)
         for j in axes(ptdf,2)
-            add_to_expression!(expr, -ptdf[i, j], m[:inj_p0][j])
+            add_to_expression!(expr, ptdf[i, j], m[:inj_p0][j])
         end
 
         id += 1
-        push!(cut_added, add_overload_expr!(m, expr, ol, "Pre", id, c_obj, i, atol))
+        push!(cut_added, add_overload_expr!(m, expr, ol, rate[i], "Pre", id, c_obj, i, atol))
     end
     return id
 end
 
 """ Finding and adding Benders cuts to mitigate overloads from one contingency """
-function add_cut(P::Dict{<:Integer, <:ContExpr}, opf::OPFsystem, oplim::Oplimits, m::Model, bd::Benders, ΔP::Vector{<:Real},
+function add_cut(P::Dict{<:Integer, <:ContExpr}, opf::OPFsystem, oplim::Oplimits, m::Model, bd::Benders, rate::Vector{<:Real}, ΔP::Vector{<:Real},
     ptdf::AbstractMatrix{<:Real}, overloads::Vector{<:Tuple{Integer,Real}}, islands::Vector,
     c_obj::Pair{String, Vector{Int64}}, c::Integer, cut_added::Vector, atol::Real, id::Integer
 )
@@ -449,33 +452,33 @@ function add_cut(P::Dict{<:Integer, <:ContExpr}, opf::OPFsystem, oplim::Oplimits
     end
     for (i, ol) in overloads
         expr = make_cut(p, opf, m)
-        add_to_expression!.(expr, bd.Pᵢ + ΔP)
+        # add_to_expression!.(expr, bd.Pᵢ + ΔP)
         expr2 = JuMP.@expression(m, sum((ptdf[i, :] .* expr)))
 
         id += 1
-        push!(cut_added, add_overload_expr!(m, expr2, ol, get_name(p), id, c_obj, i, atol))
+        push!(cut_added, add_overload_expr!(m, expr2, ol, rate[i], get_name(p), id, c_obj, i, atol))
     end
     return id
 end
 
 function make_cut(pc::ExprC, opf::OPFsystem, m::Model)
-    expr = JuMP.@expression(m, -opf.mgx' * (m[:pg0] + pc.pgu - pc.pgd))
-    add_to_expression!.(expr, -opf.mdcx' * m[:pfdc0])
-    add_to_expression!.(expr, -opf.mdx' * (pc.lsc - m[:pd]))
+    expr = JuMP.@expression(m, opf.mgx' * (m[:pg0] + pc.pgu - pc.pgd))
+    add_to_expression!.(expr, opf.mdcx' * m[:pfdc0])
+    add_to_expression!.(expr, opf.mdx' * (pc.lsc - m[:pd]))
     return expr
 end
 
 function make_cut(pcc::ExprCC, opf::OPFsystem, m::Model)
-    expr = JuMP.@expression(m, -opf.mgx' * (m[:pg0] + pcc.pgu - pcc.pgd))
-    add_to_expression!.(expr, -opf.mdcx' * pcc.pfdccc)
-    add_to_expression!.(expr, -opf.mdx' * (pcc.lscc - m[:pd]))
+    expr = JuMP.@expression(m, opf.mgx' * (m[:pg0] + pcc.pgu - pcc.pgd))
+    add_to_expression!.(expr, opf.mdcx' * pcc.pfdccc)
+    add_to_expression!.(expr, opf.mdx' * (pcc.lscc - m[:pd]))
     return expr
 end
 
 function make_cut(pccx::ExprCCX, opf::OPFsystem, m::Model)
-    expr = JuMP.@expression(m, -opf.mgx' * (m[:pg0] - pccx.pgdx))
-    add_to_expression!.(expr, -opf.mdcx' * m[:pfdc0])
-    add_to_expression!.(expr, -opf.mdx' * (pccx.lsccx - m[:pd]))
+    expr = JuMP.@expression(m, opf.mgx' * (m[:pg0] - pccx.pgdx))
+    add_to_expression!.(expr, opf.mdcx' * m[:pfdc0])
+    add_to_expression!.(expr, opf.mdx' * (pccx.lsccx - m[:pd]))
     return expr
 end
 

@@ -98,5 +98,14 @@ SCOPF.calc_isf!(ϕ, pf.ϕ, islands[1], island_b[1]); LinearAlgebra.mul!(flow3, �
 SCOPF.calculate_line_flows!(flow4, ϕ, pf.ϕ, (Pᵢ .+ ΔPc), islands[1], island_b[1]); # hack2
 @test flow3 ≈ flow4 broken=true
 
+# CONTINGENCY WITH POWER INJECTION CHANGE, ISLANDING, AND DISTRIBUTED SLACK
+SCOPF.set_dist_slack!(pf.ϕ, opf.mgx, oplim.pg_lim_max)
+SCOPF.calculate_line_flows!(flow1, pf, cont1[1], c1[1], (Pᵢ .+ ΔPc)) # IMML flow
+SCOPF.calculate_line_flows!(flow2, θ, B, pf.DA, pf.B, (Pᵢ .+ ΔPc), cont1, c1, pf.slack) # inverse with theta
+@test flow1 ≈ flow2 broken=true
+SCOPF.calc_isf!(ϕ, X, pf.X, pf.B, pf.DA, cont1[1], c1[1]); LinearAlgebra.mul!(flow3, ϕ, (Pᵢ .+ ΔPc)); # IMML ptdf
+@test flow2 ≈ flow3
+SCOPF.calc_isf!(ϕ, pf.DA, pf.B, cont1, c1, pf.slack); LinearAlgebra.mul!(flow4, ϕ, (Pᵢ .+ ΔPc)); # inverse with ptdf
+@test flow3 ≈ flow4
 
 end

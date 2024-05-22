@@ -1,118 +1,264 @@
-import Dates, DataFrames, CSV, Plots, StatsPlots
+import Dates, DataFrames, CSV, Plots, StatsPlots, Gurobi, Printf, FileIO, JLD2
 Random.seed!(53715)
 
+## Run this line in REPL
 # system = include("data/RTS_GMLC/config.jl")
-# system, voll, contingencies, prob, short, long, ramp_minutes, ramp_mult, max_shed, time_limit_sec = setup_system(joinpath("data","matpower","RTS_GMLC.m"));
 
 df = DataFrames.DataFrame(CSV.File("data/RTS_GMLC/branch.csv"))
-voll, _, contingencies = SCOPF.setup(system, 100.0, 400.0)
-SCOPF.set_ramp_limits!(system)
-SCOPF.set_renewable_prod!(system, 0.5)
-SCOPF.set_operation_cost!.(SCOPF.get_gens_h(system), rand(20) .* (55 - 45) .+ 45)
-SCOPF.set_rate!.(SCOPF.get_branches(system), SCOPF.get_rate.(SCOPF.get_branches(system)) * 0.8);
-short = 1.2
-long = 1.0
-ramp_minutes = 10.0
-max_shed = 1.5
-ramp_mult = 2.0
-renew_cost = 0.00
-time_limit_sec = length(contingencies)^2 + 10
-
 branches = SCOPF.sort_components!(SCOPF.get_branches(system));
 ia_br = SCOPF.get_interarea(branches)
 brc = reduce(vcat, [ia_br, branches[findall(x->x.name ∈ ["A30", "A21", "B30", "B21", "C30", "C21"], branches)]])
 
 prob = reduce(vcat, [[df[!,"Perm OutRate"][i] for i in 1:length(branches) if x == branches[i].name] for x in df.UID])
-w = [branches[i] ∈ ia_br ? Storm(x/8760, 0.03*(0.8+rand()*0.4), rand(20:25), rand(1:3), rand(10:14), rand(10:14)) : storm() for (i,x) in enumerate(prob)];
-p = generate_p_from_weather(prob/8760, 60, w);
-scenarioes = generate_contingency_probabilities(p, 5, 100000);
-Plots.plot([last(sort(x[2])) for x in scenarioes])
+w = [branches[i] ∈ brc ? Storm(x/100/8760, 0.02*(0.5+rand()), rand(20:25), rand(1:3), rand(10:14), rand(10:14)) : storm() for (i,x) in enumerate(prob)]
+w2 = [branches[i] ∈ brc ? Storm(x/100/8760, 0.02*(0.5+rand()), rand(25:30), rand(1:3), rand(10:14), rand(10:14)) : storm() for (i,x) in enumerate(prob)]
+p = generate_p_from_weather(prob/8760, 60, w)
+p2 = generate_p_from_weather(prob/8760, 60, w2)
+scenarioes = generate_contingency_probabilities(p, 5, 10000)
+scenarioes2 = generate_contingency_probabilities(p2, 5, 10000)
+
+style = Plots.supported_styles()[2:end]
+style = reshape(style, 1, length(style))
+bnames = first.(sort(get_name.(branches) .=> w, by=x->x[2].max)[1:11])
+Plots.plot([[last(sort(x[2])) for x in scenarioes] [last(sort(x[2])) for x in scenarioes2]], labels=[])
+Plots.plot(reduce(hcat, generate_weather.([60], sort(w, by=x->x.max)[1:11])), label=permutedims(bnames), 
+    xlabel="Time", ylabel="Probability", palette = Plots.palette(:seaborn_colorblind6))
+Plots.boxplot(reduce(hcat, generate_weather.([60], sort(w, by=x->x.max)[1:11]))', 
+    xlabel="Time", ylabel="Probability", palette = Plots.palette([:lightgrey],1), leg=:none)
 
 vals = [collect(values(sort(SCOPF.sumvals(length.(last.(x[1])), x[2]), by=i->i[1]))) for x in scenarioes]
 c_size = maximum(length.(vals))
 outs = zeros(60,c_size);
 for (i,x) in enumerate(vals)
     for (j,y) in enumerate(x)
-        outs[i,c_size-j+1] = y
+        outs[i,j] = y
     end
 end
-StatsPlots.groupedbar(outs, bar_position = :stack, palette = Plots.palette(:rainbow))
+StatsPlots.groupedbar([sum(outs[:,1:3], dims=2) outs[:,4:end]], bar_position = :stack, xlabel="Time", ylabel="Probability", 
+    palette = Plots.palette(:seaborn_colorblind6, rev=true), labels=["N-k > 3" "N-3" "N-2" "N-1" "N-0"], leg=:bottomright)
+Plots.plot(cumsum([outs[:,1:4] sum(outs[:,5:end], dims=2)], dims = 2)[:,end:-1:1], fill=0, lc=:black, legend=:none, 
+    xlabel="Time", ylabel="Probability", palette = Plots.palette(:seaborn_colorblind6, rev=true), leg=:bottomright, 
+    annotation=[(27, 0.2, ("N-0", 10)), (27, 0.6, ("N-1", 10)), (27, 0.83, ("N-2", 10)), (27, 0.96, ("N-3", 10)), (27, 1.03, ("N-k > 3", 10))])
 Plots.plot([collect(values(sort(SCOPF.countmemb(length.(last.(x[1]))), by=i->i[1]))) for x in scenarioes])
 Plots.plot([collect(values(sort(SCOPF.sumvals(length.(last.(x[1])), x[2]), by=i->i[1]))) for x in scenarioes])
 
-function extract_results(case::SCOPF.Case)
-    costs = DataFrames.DataFrame(SCOPF.get_costs(case)...)
-    pg0 = SCOPF.get_value(case.model, :pg0)
-    ls0 = SCOPF.get_value(case.model, :ls0)
-    Pc = [SCOPF.get_value(case.model, x) for (i,x) in case.Pc]
-    Pcc = [SCOPF.get_value(case.model, x) for (i,x) in case.Pcc]
-    obj_val = JuMP.objective_value(case.model)
-    return costs, pg0, ls0, Pc, Pcc, obj_val
-end
-
-res = [@time case, tot_t = SCOPF.run_benders(SCOPF.PC2_SCOPF, system, Gurobi.Optimizer(), voll, s[2], s[1], max_shed=max_shed, ramp_mult=ramp_mult, renew_cost=renew_cost, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=0.00, max_itr=10) 
-    for s in scenarioes];
-res_rob = [@time case, tot_t = SCOPF.run_benders(SCOPF.P_SCOPF, system, Gurobi.Optimizer(), voll, s[2], s[1], max_shed=max_shed, ramp_mult=ramp_mult, renew_cost=renew_cost, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=0.00, max_itr=10) 
-    for s in scenarioes];
-res_rob_n1 = @time case, tot_t = SCOPF.run_benders(SCOPF.P_SCOPF, system, Gurobi.Optimizer(), voll, prob/8760, contingencies, max_shed=max_shed, ramp_mult=ramp_mult, renew_cost=renew_cost, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=0.00, max_itr=10);
-Plots.plot(JuMP.objective_value.(getproperty.(first.(res),:model))) 
-
-scenarioes_n1 = deepcopy(scenarioes);
-for (i,x) in enumerate(scenarioes)
-    diff = setdiff(1:120, reduce(vcat, [x for x in getindex.(x[1], 2) if length(x) == 1]))
-    for c in diff
-        push!(scenarioes_n1[i][1], "branch" => [c])
-        push!(scenarioes_n1[i][2], prob[c]/8760)
-    end
-end
-res_sn1 = [@time case, tot_t = SCOPF.run_benders(SCOPF.PC2_SCOPF, system, Gurobi.Optimizer(), voll, s[2], s[1], max_shed=max_shed, ramp_mult=ramp_mult, renew_cost=renew_cost, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=0.00, max_itr=10) 
-    for s in scenarioes_n1];
-res_rob_sn1 = [@time case, tot_t = SCOPF.run_benders(SCOPF.P_SCOPF, system, Gurobi.Optimizer(), voll, s[2], s[1], max_shed=max_shed, ramp_mult=ramp_mult, renew_cost=renew_cost, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=0.00, max_itr=10) 
-    for s in scenarioes_n1];
-
-df = [DataFrames.DataFrame(SCOPF.get_costs(x[1])...) for x in res];
-df_rob = [DataFrames.DataFrame(SCOPF.get_costs(x[1])...) for x in res_rob];
-df_sn1 = [DataFrames.DataFrame(SCOPF.get_costs(x[1])...) for x in res_sn1];
-df_rob_sn1 = [DataFrames.DataFrame(SCOPF.get_costs(x[1])...) for x in res_rob_sn1];
-style = Plots.supported_styles()[2:end]
-style = reshape(style, 1, length(style))
-Plots.plot([[x[1,:Base] for x in df_rob] [x[1,:Base] for x in df]], label=["Scenario Robust" "Scenario Prob"], line=style)
-Plots.plot([[x[1,:Base] for x in df_sn1] [x[1,:Base] for x in df_rob_sn1]], label=["Scenario Robust N-1" "Scenario Prob N-1"], line=style)
-
-function get_type_prod(system::System, case::SCOPF.Case)
-    gens = SCOPF.sort_components!(SCOPF.get_generation(system))
-    type_prod = zeros(3)
-    for (i,g) in enumerate(gens)
-        type = typeof(g)
-        val = JuMP.value(case.model[:pg0][i])
-        if type <: ThermalGen 
-            type_prod[1] += val
-        elseif type <: HydroGen 
-            type_prod[2] += val
-        elseif type <: RenewableGen
-            type_prod[3] += val
-        else
-            @error "Unknown generation type"
+function scenario_plus_n1(scenarioes)
+    scenarioes_n1 = deepcopy(scenarioes)
+    for (i,x) in enumerate(scenarioes)
+        diff = setdiff(1:120, reduce(vcat, [x for x in getindex.(x[1], 2) if length(x) == 1]))
+        for c in diff
+            push!(scenarioes_n1[i][1], "branch" => [c])
+            push!(scenarioes_n1[i][2], prob[c]/8760)
         end
     end
-    return [ThermalGen, HydroGen, RenewableGen] .=> type_prod
+    return scenarioes_n1
+end
+scenarioes_n1 = scenario_plus_n1(scenarioes)
+scenarioes2_n1 = scenario_plus_n1(scenarioes2)
+
+contingencies = ["branch" => [i] for i in 1:length(get_branches(system))]
+demands = SCOPF.sort_components!(SCOPF.get_demands(system))
+base_voll = [6.20 4.89 5.30 5.62 6.11 5.50 5.41 5.40 2.30 4.14 5.39 3.41 3.01 3.54 3.75 2.29 3.64]
+voll = vec([base_voll... base_voll... base_voll...] * 100)
+SCOPF.set_ramp_limits!(system)
+demands = SCOPF.sort_components!((SCOPF.get_demands(system)))
+renewables = SCOPF.sort_components!((SCOPF.get_renewables(system)))
+gen = SCOPF.sort_components!(SCOPF.get_generation(system))
+SCOPF.set_operation_cost!.(SCOPF.get_gens_h(system), rand(20) .* (55 - 45) .+ 45)
+# SCOPF.set_rate!.(SCOPF.get_branches(system), SCOPF.get_rate.(SCOPF.get_branches(system)) * 0.8);
+short = 1.2
+long = 1.0
+n = "long"
+prev_lim = 1.0
+ramp_minutes = 10.0
+max_shed = 1.5
+ramp_mult = 2.0
+renew_mult = 2.0
+renew_cost = 0.00
+renew_ramp = 0
+i = 9
+time_limit_sec = length(contingencies)^2 + 10
+for (n, prev_lim) in zip(["short", "long"], [short, long]), max_shed in [1.5, 3.0], renew_mult in [1.0, 2.0], renew_ramp in [0.0, 100.0]# , i in [2,9,17]
+# for renew_ramp in [0.0, 1.0, 10.0, 100.0, 1000.0]
+    name = Printf.@sprintf "prev-%s_ls%d_pd150_pr%dramp%d_time%d" n max_shed*100 renew_mult*100 renew_ramp i
+    println("\n\n"*name*"\n")
+    t = Dates.DateTime("2020-01-01T"*string(i)*":00:00")
+    set_time_series_value!(demands, t)
+    set_active_power!.(demands, get_active_power.(demands)*1.5)
+    set_time_series_value!(renewables, t)
+    set_active_power!.(renewables, get_active_power.(renewables)*renew_mult)
+    res, res_prev, res_prev_n1, res_n1, res_base = run_cases(system, scenarioes_n1[[30]], voll, prob, contingencies, max_shed, ramp_mult, renew_cost, renew_ramp, ramp_minutes, short, long, prev_lim);
+
+    base_costs = [[isnan(x[:obj_val]) ? NaN : x[:costs][1,:Base] for x in r] for r in [res_prev, res, res_prev_n1, res_n1, res_base]]
+    corrective_costs = [[isnan(x[:obj_val]) ? NaN : (x[:costs][1,:r] + sum(p[2] .* (x[:costs][:,:Pc] + x[:costs][:,:Pcc]))) for (x,p) in zip(r,scenarioes_n1[[30]])] for r in [res_prev,res,res_prev_n1,res_n1,res_base]]
+    
+    CSV.write("results/"*name*"_base_cost.csv", DataFrames.DataFrame((base_costs, 
+        ["Scen_Prev", "Scen_Prob", "N-1_Prev", "N-1_Prob", "N-0"])...))
+    CSV.write("results/"*name*"_corrective_cost.csv", DataFrames.DataFrame((corrective_costs, 
+        ["Scen_Prev", "Scen_Prob", "N-1_Prev", "N-1_Prob", "N-0"])...)) 
+    FileIO.save("results/"*name*".jld2", "Scen_Prev", res_prev, "Scen_Prob", res, "N-1_Prev", res_prev_n1, "N-1_Prob", res_n1, "N-0", res_base)
+
+    labels = ["Scen. Prev." "Scen. Prob." "N-1 Prev." "N-1 Prob." "N-0"]
+    Plots.savefig(Plots.plot(base_costs, labels=labels, 
+        line=:steppre, xlabel="Time", ylabel="Cost", palette = Plots.palette(:seaborn_colorblind6), thickness_scaling=1.2),
+        "results/"*name*"_base_cost.pdf")
+
+    Plots.savefig(Plots.plot(corrective_costs,labels=labels, 
+        line=:steppre, xlabel="Time", ylabel="Cost", palette = Plots.palette(:seaborn_colorblind6), thickness_scaling=1.2),
+        "results/"*name*"_corrective_cost.pdf")
+
+    Plots.savefig(Plots.plot(base_costs + corrective_costs,  labels=labels, 
+        line=:steppre, xlabel="Time", ylabel="Cost", palette = Plots.palette(:seaborn_colorblind6), thickness_scaling=1.2),
+        "results/"*name*"_objective.pdf")
+
+    max_renewable = sum(get_active_power(g) for g in gen if typeof(g) <: RenewableGen)
+    Plots.savefig(Plots.plot([[SCOPF.get_all_type_prod(system, r)[3,:] for r in [res_prev, res, res_prev_n1, res_n1, res_base]]... fill(max_renewable, size(scenarioes_n1[[30]],1))], 
+        label=[labels... "Max renewable"], 
+        line=:steppre, xlabel="Time", ylabel="Amount", palette = Plots.palette(:seaborn_colorblind6), leg=:topright, thickness_scaling=1.2),
+        "results/"*name*"_renewable.pdf")
+    # xguidefont=fsize, yguidefont=fsize, xtickfont=fsize, ytickfont=fsize, legendfont=fsize
+
+    # res2 = []
+    # for (i,(r, s)) in enumerate(zip(res, scenarioes2_n1))
+    #     println("\nScen.2 ", i, " prob")
+    #     case, tot_t = SCOPF.run_benders(SCOPF.Base_SCOPF, system, Gurobi.Optimizer(), voll, s[2], s[1], max_shed=max_shed, ramp_mult=ramp_mult, renew_cost=renew_cost, renew_ramp=renew_ramp, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=0.00, max_itr=10)
+    #     push!(res2, run_corrective_with_base(case, r))
+    # end
+    # res2_prev = []
+    # for (i,(r, s)) in enumerate(zip(res_prev, scenarioes2_n1))
+    #     println("\nScen.2 ", i, " preventive")
+    #     case, tot_t = SCOPF.run_benders(SCOPF.Base_SCOPF, system, Gurobi.Optimizer(), voll, s[2], s[1], max_shed=max_shed, ramp_mult=ramp_mult, renew_cost=renew_cost, renew_ramp=renew_ramp, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=0.00, max_itr=10)
+    #     push!(res2_prev, run_corrective_with_base(case, r))
+    # end
+    # _, _, res2_prev_n1, res2_n1, res2_base = run_cases(system, scenarioes2_n1, voll, prob, contingencies, max_shed, ramp_mult, renew_cost, renew_ramp, ramp_minutes, short, long, prev_lim);
+    # base_costs2 = [[isnan(x[:obj_val]) ? NaN : x[:costs][1,:Base] for x in r] for r in [res2_prev, res2, res2_prev_n1, res2_n1, res2_base]]
+    # corrective_costs2 = [[isnan(x[:obj_val]) ? NaN : (x[:costs][1,:r] + sum(p[2] .* (x[:costs][:,:Pc] + x[:costs][:,:Pcc]))) for (x,p) in zip(r,scenarioes2_n1)] for r in [res2_prev,res2,res2_prev_n1,res2_n1,res2_base]]    
+
+    # Plots.plot(corrective_costs, labels=labels, line=(:steppre, :dash), alpha=0.5, xlabel="Time", ylabel="Cost", palette = Plots.palette(:seaborn_colorblind6)[1:5])
+    # Plots.plot!(corrective_costs2, labels=labels.*" S2", line=:steppre, xlabel="Time", ylabel="Cost", palette = Plots.palette(:seaborn_colorblind6)[1:5], leg=:outertopright)
+    # Plots.savefig("results/"*name*"_corrective_cost_s2.pdf")
+
+    # Plots.plot(base_costs + corrective_costs, labels=labels, line=(:steppre, :dash), alpha=0.5, xlabel="Time", ylabel="Cost", palette = Plots.palette(:seaborn_colorblind6)[1:5])
+    # Plots.plot!(base_costs2 + corrective_costs2, labels=labels.*" S2", line=:steppre, xlabel="Time", ylabel="Cost", palette = Plots.palette(:seaborn_colorblind6)[1:5], leg=:outertopright)
+    # Plots.savefig("results/"*name*"_objective_s2.pdf")
+    
+    # CSV.write("results/"*name*"_base_cost.csv", DataFrames.DataFrame(([base_costs... base_costs2...], 
+    #     ["Scen_Prev", "Scen_Prob", "N-1_Prev", "N-1_Prob", "N-0", "Scen_Prev_S2", "Scen_Prob_S2", "N-1_Prev_S2", "N-1_Prob_S2", "N-0_S2"])...))
+    # CSV.write("results/"*name*"_corrective_cost.csv", DataFrames.DataFrame(([corrective_costs... corrective_costs2...], 
+    #     ["Scen_Prev", "Scen_Prob", "N-1_Prev", "N-1_Prob", "N-0", "Scen_Prev_S2", "Scen_Prob_S2", "N-1_Prev_S2", "N-1_Prob_S2", "N-0_S2"])...)) 
+    # FileIO.save("results/"*name*".jld2", "Scen_Prev", res_prev, "Scen_Prob", res, "N-1_Prev", res_prev_n1, "N-1_Prob", res_n1, "N-0", res_base, "Scen_Prev_S2", res2_prev_n1, "Scen_Prob_S2", res2, "N-1_Prev_S2", res2_prev, "N-1_Prob_S2", res2_n1, "N-0_S2", res2_base)
+    
 end
 
-function get_all_type_prod(system::System, cases::Vector{<:SCOPF.Case})
-    return reduce(hcat, [getindex.(get_type_prod(system, x), 2) for x in cases])
+sensitivity = []
+# itr = 0.5:5.0 # max_shed
+# itr = 0.5:0.5:2.5 # renew_mult
+itr = 0.6:0.2:2.2 # prev_lim
+itr = [0.0, 1.0, 10.0, 100.0, 1000.0] # renew_ramp
+for renew_ramp in itr
+    name = Printf.@sprintf "prev-%s_ls%d_pd150_pr%dramp%d_time%d" n max_shed*100 renew_mult*100 renew_ramp i
+    # println("\n\n"*name*"\n")
+    # t = Dates.DateTime("2020-01-01T"*string(i)*":00:00")
+    # set_time_series_value!(demands, t)
+    # set_active_power!.(demands, get_active_power.(demands)*1.5)
+    # set_time_series_value!(renewables, t)
+    # set_active_power!.(renewables, get_active_power.(renewables)*renew_mult)
+    # res, res_prev, res_prev_n1, res_n1, res_base = run_cases(system, scenarioes_n1[[30]], voll, prob, contingencies, max_shed, ramp_mult, renew_cost, renew_ramp, ramp_minutes, short, long, prev_lim);
+    res_prev, res, res_prev_n1, res_n1, res_base = FileIO.load("results/"*name*".jld2", "Scen_Prev", "Scen_Prob","N-1_Prev", "N-1_Prob", "N-0");
+
+    base_costs = [[isnan(x[:obj_val]) ? NaN : x[:costs][1,:Base] for x in r[[30]]] for r in [res_prev, res, res_prev_n1, res_n1, res_base]]
+    corrective_costs = [[isnan(x[:obj_val]) ? NaN : (x[:costs][1,:r] + sum(p[2] .* (x[:costs][:,:Pc] + x[:costs][:,:Pcc]))) for (x,p) in zip(r[[30]],scenarioes_n1[[30]])] for r in [res_prev,res,res_prev_n1,res_n1,res_base]]
+    push!(sensitivity, renew_ramp => Dict(:base_costs => base_costs, :corrective_costs => corrective_costs))
+end
+Plots.plot(reduce(hcat, [reduce(vcat, x[2][:base_costs]) for x in sensitivity])',labels=labels, xticks=(1:length(itr), itr), xlabel="Renewable corrective cost", ylabel="Cost", palette = Plots.palette(:seaborn_colorblind6), thickness_scaling=1.2)
+Plots.plot(reduce(hcat, [reduce(vcat, x[2][:corrective_costs]) for x in sensitivity])',labels=labels, xticks=(1:length(itr), itr), xlabel="Renewable corrective cost", ylabel="Cost", palette = Plots.palette(:seaborn_colorblind6), thickness_scaling=1.2)
+Plots.plot(reduce(hcat, [reduce(vcat, x[2][:base_costs] .+ x[2][:corrective_costs]) for x in sensitivity])',labels=labels, xticks=(1:length(itr), itr), xlabel="Renewable corrective cost", ylabel="Cost", palette = Plots.palette(:seaborn_colorblind6), thickness_scaling=1.2, leg=:right)
+
+ty = [["short", "long"], [0.5, 5.0], [1.5, 1.0], [0.0, 1000.0]]
+choose(ty, i, c) = c == i ? ty[i][2] : ty[i][1]
+for c in 1:length(ty)
+    name = Printf.@sprintf "prev-%s_ls%d_pd150_pr%dramp%d_time%d" choose(ty,1,c) choose(ty,2,c)*100 choose(ty,3,c)*100 choose(ty,4,c) i
+    res_prev, res, res_prev_n1, res_n1, res_base = FileIO.load("results/"*name*".jld2", "Scen_Prev", "Scen_Prob","N-1_Prev", "N-1_Prob", "N-0");
+    base_costs = [[isnan(x[:obj_val]) ? NaN : x[:costs][1,:Base] for x in r] for r in [res_prev, res, res_prev_n1, res_n1, res_base]]
+    corrective_costs = [[isnan(x[:obj_val]) ? NaN : (x[:costs][1,:r] + sum(p[2] .* (x[:costs][:,:Pc] + x[:costs][:,:Pcc]))) for (x,p) in zip(r,scenarioes_n1)] for r in [res_prev,res,res_prev_n1,res_n1,res_base]]
+    Plots.plot(results_base_costs + results_corrective_costs, labels=labels, line=(:steppre, :dash), alpha=0.5, xlabel="Time", ylabel="Cost", palette = Plots.palette(:seaborn_colorblind6)[1:5])
+    Plots.plot!(base_costs + corrective_costs, labels=labels.*" 2", line=:steppre, xlabel="Time", ylabel="Cost", palette = Plots.palette(:seaborn_colorblind6)[1:5], leg=:topright)
+    Plots.savefig("results/"*name*"_objective_2.pdf")
 end
 
-slack = SCOPF.find_slack(islands[2], pf.slack, case.oplim.pg_lim_max, case.opf.mgx)
-ptdf = SCOPF.calc_isf(case.pf.DA, case.pf.B, bx[c_i], c_i, slack, islands[2], islands_b[2])
-flow = ptdf * JuMP.value.(res[40][1].model[:p0])
-(SCOPF.calc_Pᵢ_from_flow(branches, flow, length(nodes), case.opf.idx) .- p0)[islands[2]]
+vals30 = DataFrames.DataFrame(prev_lim=String[], max_shed=Float64[], renew_mult=Float64[], renew_ramp=Float64[], i=Int64[], Scen_Prev_B=Float64[], Scen_Prob_B=Float64[], N_1_Prev_B=Float64[], N_1_Prob_B=Float64[], N_0_B=Float64[], Scen_Prev_C=Float64[], Scen_Prob_C=Float64[], N_1_Prev_C=Float64[], N_1_Prob_C=Float64[], N_0_C=Float64[])
+for (n, prev_lim) in zip(["short", "long"], [short, long]), max_shed in [1.5, 3.0], renew_mult in [1.0, 2.0], renew_ramp in [0.0, 100.0]
+    name = Printf.@sprintf "prev-%s_ls%d_pd150_pr%dramp%d_time%d" n max_shed*100 renew_mult*100 renew_ramp i
+    valb = CSV.read("results/"*name*"_base_cost.csv", DataFrames.DataFrame)
+    valc = CSV.read("results/"*name*"_corrective_cost.csv", DataFrames.DataFrame)
+    push!(vals30, (prev_lim, max_shed, renew_mult, renew_ramp, i, valb[1,:]..., valc[1,:]...), promote=true)
+end
+dataB = vals30[!,r"B"]
+dataC = vals30[!,r"C"]
+data = Matrix(dataB) .+ Matrix(dataC);
+Plots.heatmap(data, xticks=(1:5,["SP", "SC", "N1P", "N1C", "N0"]), yticks=(1:size(data,1)), c=Plots.cgrad(:nipy_spectral))
+Plots.annotate!([(j,i,Plots.text(round(data[i,j], digits=0), 8, :black, :center)) for i in 1:size(data,1) for j in 1:size(data,2)], linecolor=:white)
 
-function generate_states(branches::Integer, probability::Real)
-    vals = Dict()
-    for _ in 1:10000
-        x = branches - count([probability < rand() for _ in 1:branches])
-        vals[x] = get(vals, x, 0) + 1
+bx = SCOPF.get_bus_idx.(SCOPF.sort_components!(SCOPF.get_branches(system)), [SCOPF.get_nodes_idx(SCOPF.sort_components!(SCOPF.get_nodes(system)))]);
+forced_ls = [SCOPF.calc_forced_ls(case, x[2], x[1]) for x in scenarioes_n1]
+Plots.plot([count(SCOPF.is_islanded(case.pf, bx[c[2]], c[2]) for c in s[1] if length(c[2]) > 0) for s in scenarioes_n1], xlabel="Time", ylabel="Count of islands", leg=:none)
+Plots.plot!(Plots.twinx(), c=:red, sum.(forced_ls), leg=:none, ylabel="Forced load shed by islands")
+
+res_new = []
+for (i,(r, s)) in enumerate(zip(res, scenarioes_n1))
+    println("\n",i)
+    case, tot_t = SCOPF.run_benders(SCOPF.Base_SCOPF, system, Gurobi.Optimizer(), voll, s[2], s[1], max_shed=max_shed, ramp_mult=ramp_mult, renew_cost=renew_cost, renew_ramp=renew_ramp, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=0.00, max_itr=10)
+    push!(res_new, run_corrective_with_base(case, r))
+end
+base_costs_new = [isnan(x[:obj_val]) ? NaN : x[:costs][1,:Base] for x in res_new]
+corrective_costs_new = [isnan(x[:obj_val]) ? NaN : (x[:costs][1,:r] + sum(p[2] .* (x[:costs][:,:Pc] + x[:costs][:,:Pcc]))) for (x,p) in zip(res_new,scenarioes_n1)]
+
+Plots.plot(base_costs[2] + corrective_costs[2], labels=labels, line=(:steppre, :dash), alpha=0.5, xlabel="Time", ylabel="Cost", palette = Plots.palette(:seaborn_colorblind6)[1:5])
+Plots.plot!(base_costs_new + corrective_costs_new, labels=labels.*" no corr cost", line=:steppre, xlabel="Time", ylabel="Cost", palette = Plots.palette(:seaborn_colorblind6)[1:5], leg=:topright)
+Plots.savefig("results/"*name*"_objective_no-corr-cost.pdf")
+
+
+
+consequences = Dict()
+for (s, case) in zip(scenarioes_n1, res_sn1)
+    for (c,v) in zip(s[1], case[:costs][:,:Pcc]) 
+        if v != 0.0
+            for i in c[2]
+                if get(consequences, i, 0) == 0
+                    consequences[i] = [v] 
+                else
+                    push!(consequences[i], v) 
+                end
+            end
+        end
     end
-    return [i => v/10000 for (i,v) in sort(vals, by=x->x[1])]
+end
+for (_,c) in consequences
+    sort!(unique!(c), rev=true)
+end
+sort(consequences, by=x->x[2])
+
+
+
+
+vals3 = []
+for i in 0:23
+    t = Dates.DateTime("2020-01-01T"*string(i)*":00:00")
+    demands = SCOPF.sort_components!((SCOPF.get_demands(system)))
+    renewables = SCOPF.sort_components!((SCOPF.get_renewables(system)))
+    set_time_series_value!(demands, t)
+    set_active_power!.(demands, get_active_power.(demands)*1.5)
+    set_time_series_value!(renewables, t)
+    set_active_power!.(renewables, get_active_power.(renewables)*2.0)
+    @time case, tot_t = SCOPF.run_benders(SCOPF.PC2_SCOPF, system, Gurobi.Optimizer(), voll, prob/8760, contingencies, max_shed=max_shed, ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=0.00, max_itr=10, debug=true);
+    max_demand = sum(get_active_power(g) for g in demands)
+    max_renewable = sum(get_active_power(g) for g in gen if typeof(g) <: RenewableGen)
+    prod = SCOPF.get_type_prod(system, JuMP.value.(case.model[:pg0]))
+    push!(vals3, (prod, max_renewable, max_demand))
 end
 
+
+import FileIO, JLD2
+a = 1
+FileIO.save("myfile.jld2","a",a)
+b = FileIO.load("myfile.jld2","a")

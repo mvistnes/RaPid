@@ -40,6 +40,74 @@
 #     end
 # end
 
+extract_results(model::Model, Pc::Dict{Int64,ExprC}) = Dict(i => Dict(:pgu => get_value(model, x.pgu), :pgd => get_value(model, x.pgd), :lsc => get_value(model, x.lsc), :pc => get_value(model, x.pc)) for (i,x) in Pc)
+extract_results(model::Model, Pcc::Dict{Int64,ExprCC}) = Dict(i => Dict(:pgu => get_value(model, x.pgu), :pgd => get_value(model, x.pgd), :lscc => get_value(model, x.lscc), :pfdccc => get_value(model, x.pfdccc), :pcc => get_value(model, x.pcc)) for (i,x) in Pcc)
+
+function extract_results(case::Case)
+    costs = DataFrames.DataFrame(get_costs(case)...)
+    p0 = get_value(case.model, :p0)
+    pg0 = get_value(case.model, :pg0)
+    pfdc0 = get_value(case.model, :pfdc0)
+    pgru = get_value(case.model, :pgru)
+    pgrd = get_value(case.model, :pgrd)
+    ls0 = get_value(case.model, :ls0)
+    Pc = extract_results(case.model, case.Pc)
+    Pcc = extract_results(case.model, case.Pcc)
+    obj_val = is_solved_and_feasible(case.model) ? JuMP.objective_value(case.model) : NaN
+    return Dict([:costs, :p0, :pg0, :pfdc0, :pgru, :pgrd, :ls0, :Pc, :Pcc, :obj_val] .=> [costs, p0, pg0, pfdc0, pgru, pgrd, ls0, Pc, Pcc, obj_val])
+end
+
+function calc_forced_ls(case::Case, prob=case.opf.prob, contingencies=case.opf.contingencies)
+    val = Dict()
+    for (c, c_obj) in enumerate(contingencies)
+        c_i = c_obj.second
+        length(c_i) == 0 && continue
+        c_n = c_obj.first == "branch" ? [get_bus_idx(case.opf.mbx[i,:]) for i in c_i] : [case.opf.mgx[i,:].nzind[1] for i in c_i]
+        if is_islanded(case.pf, c_n, c_i)
+            islands, islands_b = handle_islands(case.pf.B, case.pf.DA, c_n, c_i)
+            ptdf = Matrix{Float64}[]
+            for (inodes, ibranches) in zip(islands, islands_b)
+                s = find_slack(inodes, case.pf.slack, case.oplim.pg_lim_max, case.opf.mgx)
+                push!(ptdf, calc_isf(case.pf.DA, case.pf.B, c_n, c_i, s, inodes, ibranches))
+            end
+            itr = 1:size(case.opf.mgx, 2)
+            for island in islands
+                itr = setdiff(itr, island)
+            end
+            vals = 0.0
+            for in_vec in itr, n in in_vec
+                vals += (case.opf.mdx[:,n]' * case.oplim.pd_lim)
+                # push!(val, (case.opf.mdx[:,n]' * (case.opf.voll .* case.oplim.pd_lim) * prob[c] * 2))
+            end
+            if vals > 0.0 
+                val[c] = vals
+            end
+        end
+    end
+    return val
+end
+
+function get_type_prod(system::System, pg0::Vector{Float64})
+    gens = typeof.(sort_components!(get_generation(system)))
+    type_prod = zeros(3)
+    for (i,type) in enumerate(gens)
+        if type <: ThermalGen 
+            type_prod[1] += pg0[i]
+        elseif type <: HydroGen 
+            type_prod[2] += pg0[i]
+        elseif type <: RenewableGen
+            type_prod[3] += pg0[i]
+        else
+            @error "Unknown generation type"
+        end
+    end
+    return [ThermalGen, HydroGen, RenewableGen] .=> type_prod
+end
+
+function get_all_type_prod(system::System, results::Vector)
+    return reduce(hcat, [getindex.(get_type_prod(system, x[:pg0]), 2) for x in results])
+end
+
 function add_to!(vec::AbstractVector, varref::AbstractVector{VariableRef}, idx::Dict, 
     components::AbstractVector, func::Function
 )
