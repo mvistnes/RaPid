@@ -78,8 +78,8 @@ function run_cases(system, scenarioes, voll, prob, contingencies, max_shed, ramp
 end
 
 function plot_contingency_data(results::Vector{<:Vector}, state::Symbol, property::Symbol, labels::Matrix{String}, forced_ls::Vector{<:Dict})
-    data = [sort(reduce(vcat, [[sum(i[property]) - (get(forced_ls[t], c, 0) == 0 ? 0 : forced_ls[t][c]) for (c,(_,i)) in enumerate(x[state])] for (t,x) in enumerate(r)]), rev=true) for r in results]
+    data = [sort(reduce(vcat, [[sum(i[property]) - (get(forced_ls[t], c, 0) == 0 ? 0 : forced_ls[t][c]) for (c,i) in x[state]] for (t,x) in enumerate(r)]), rev=true) for r in results]
     xmax = maximum(filter(x->!isnothing(x), findfirst.(x->x<1e-3, data)); init=0)
-    pl = Plots.plot(data, labels=labels, leg=:topright, xaxis=[1,xmax], xlabel="Contingency in scenario", ylabel="Load shed")
-    return pl
+    pl = Plots.plot(data, labels=labels, leg=:topright, xaxis=[1,xmax], xlabel="Contingency in scenario", ylabel="Load shed", thickness_scaling=1.2)
+    return pl, data
 end
