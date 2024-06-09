@@ -61,22 +61,23 @@ sum_value_property(model::Model, P::Dict, symb::Symbol) = [sum(get_value(model, 
 function run_type!(result, i, c, type, goal, optimizer, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long; p_failure=0.00, time_limit_sec=600)
     case = Case(opf_base(type, sys, optimizer, voll=voll, contingencies=cont, prob=prob, max_shed=max_shed,
         ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, time_limit_sec=time_limit_sec)...);
-    add_branch_constraints!(case.model, case.pf.ϕ, case.model[:p0], case.oplim.branch_rating)
+    add_branch_constraints!(case.model, case.pf.ϕ, case.model[:p0], case.brc_up, case.brc_down, case.oplim.branch_rating)
+    solve_model!(case.model)
     MOI.get(case.model, MOI.ResultCount()) < 1 && return
     if type != goal
         fix_base_case!(case.model)
         type.C1 && fix_contingencies!(case.model, case.Pc)
         type.C2 && fix_contingencies!(case.model, case.Pcc)
-        case = add_all_contingencies!(goal - type, case...)
-        solve_model!(model);
+        add_all_contingencies!(goal - type, case)
+        solve_model!(case.model);
     end
     gather_run_data!(result, c, i, case)
     return
 end
 
-function run_typess!(result, i, typess, optimizer, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long; p_failure=0.00, time_limit_sec=600)
-    for (c, types) in enumerate(typess)
-        run_types!(result, i, c, types, typess[end], optimizer, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long, p_failure=p_failure, time_limit_sec=time_limit_sec)
+function run_types!(result, i, types, optimizer, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long; p_failure=0.00, time_limit_sec=600)
+    for (c, type) in enumerate(types)
+        run_type!(result, i, c, type, types[end], optimizer, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long, p_failure=p_failure, time_limit_sec=time_limit_sec)
     end
     return
 end
@@ -84,7 +85,7 @@ end
 function run_contingency_select_type!(result, i, c, type, goal, optimizer, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long; p_failure=0.00, time_limit_sec=600)
     case = Case(opf_base(type, sys, optimizer, voll=voll, contingencies=cont, prob=prob, max_shed=max_shed,
         ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, time_limit_sec=time_limit_sec)...);
-    tot_t = constrain_branches!(case.model, case.pf, case.oplim, 0.0)
+    tot_t = constrain_branches!(case.model, case.pf, case.oplim, case.brc_up, case.brc_down, 0.0)
     MOI.get(case.model, MOI.ResultCount()) < 1 && return
     if type != goal
         fix_base_case!(case.model)
@@ -107,7 +108,7 @@ end
 function run_benders_type!(result, i, c, type, goal, optimizer, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long; p_failure=0.00, time_limit_sec=600)
     case = Case(opf_base(type, sys, optimizer, voll=voll, contingencies=cont, prob=prob, max_shed=max_shed,
         ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, time_limit_sec=time_limit_sec)...);
-    tot_t = constrain_branches!(case.model, case.pf, case.oplim, 0.0)
+    tot_t = constrain_branches!(case.model, case.pf, case.oplim, case.brc_up, case.brc_down, 0.0)
     MOI.get(case.model, MOI.ResultCount()) < 1 && return
     if type != goal
         fix_base_case!(case.model)

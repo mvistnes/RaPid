@@ -18,12 +18,12 @@ function calc_change(X::AbstractMatrix{<:Real}, A::AbstractMatrix{<:Integer}, br
     return mx
 end
 
-function calc_ptdf_vec(Xf::AbstractVector{<:Real}, Xt::AbstractVector{<:Real}, Xk::AbstractVector{<:Real}, Xl::AbstractVector{<:Real}, 
-    x_c::Real, x_l::Real, fbus::Integer, tbus::Integer, kbus::Integer, lbus::Integer; atol::Real=1e-10
+function calc_ptdf_vec!(vec::AbstractVector{<:Real}, Xf::AbstractVector{<:Real}, Xt::AbstractVector{<:Real}, Xk::AbstractVector{<:Real}, Xl::AbstractVector{<:Real}, 
+    x_c::Real, x_l::Real, fbus::Integer, tbus::Integer, kbus::Integer, lbus::Integer#; atol::Real=1e-10
 )
     cinv = 1 + x_c * (Xf[tbus] - Xf[fbus] + Xt[fbus] - Xt[tbus])
     xft = -Xf[kbus] + Xt[kbus] + Xf[lbus] - Xt[lbus]
-    vec = x_l * ((Xk .- Xl) .- x_c * xft / cinv * (Xf .- Xt))
+    @. vec = x_l * ((Xk - Xl) - x_c * xft / cinv * (Xf - Xt))
     # set_tol_zero!(vec)
     # xftl = Xl .- x_c * (Xt .- Xf) * (Xf[lbus] - Xt[lbus]) / cinv
     # xftk = Xk .- x_c * (Xt .- Xf) * (Xf[kbus] - Xt[kbus]) / cinv
@@ -32,14 +32,14 @@ function calc_ptdf_vec(Xf::AbstractVector{<:Real}, Xt::AbstractVector{<:Real}, X
 end
 
 function calc_ptdf_vec(B::AbstractMatrix{<:Real}, K::KLU.KLUFactorization{T,<:Integer}, slack::Integer, 
-    fbus::Integer, tbus::Integer, kbus::Integer, lbus::Integer; atol::Real=1e-10
+    fbus::Integer, tbus::Integer, kbus::Integer, lbus::Integer#; atol::Real=1e-10
 ) where {T<:Real}
     n = size(B, 1)
     Xf = calc_X_vec!(Vector{T}(undef, n), K, fbus, slack)
     Xt = calc_X_vec!(Vector{T}(undef, n), K, tbus, slack)
     Xk = calc_X_vec!(Vector{T}(undef, n), K, kbus, slack)
     Xl = calc_X_vec!(Vector{T}(undef, n), K, lbus, slack)
-    return calc_ptdf_vec(Xf, Xt, Xk, Xl, -B[fbus, tbus], -B[kbus, lbus], fbus, tbus, kbus, lbus, atol=atol)
+    return calc_ptdf_vec!(Vector{T}(undef, n), Xf, Xt, Xk, Xl, -B[fbus, tbus], -B[kbus, lbus], fbus, tbus, kbus, lbus)
 end
 
 """ Multi contingency Woodbury """

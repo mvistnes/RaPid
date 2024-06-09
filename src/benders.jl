@@ -53,11 +53,11 @@ function run_benders(
     if !type.P & !type.C1 & !type.C2 & !type.C2F
         return case, total_solve_time
     end
-    return run_benders!(type, case, atol, max_itr)
+    return run_benders!(type, case, total_solve_time, atol, max_itr)
 end
 
-run_benders!(type::OPF, case::Case, atol=1e-6, max_itr=max(length(case.opf.contingencies), 5)) =
-    run_benders!(type, case.model, case.opf, case.pf, case.oplim, case.brc_up, case.brc_down, case.Pc, case.Pcc, case.Pccx, atol, max_itr)
+run_benders!(type::OPF, case::Case, total_solve_time::Float64, atol=1e-6, max_itr=max(length(case.opf.contingencies), 5)) =
+    run_benders!(type, case.model, case.opf, case.pf, case.oplim, case.brc_up, case.brc_down, case.Pc, case.Pcc, case.Pccx, total_solve_time, atol, max_itr)
 
 """
 Solve the optimization model using Benders decomposition.
@@ -73,6 +73,7 @@ function run_benders!(
     Pc::Dict{<:Integer, ExprC}, 
     Pcc::Dict{<:Integer, ExprCC}, 
     Pccx::Dict{<:Integer, ExprCCX},
+    total_solve_time=0.0,
     atol=1e-6,
     max_itr=10
 )
@@ -81,13 +82,15 @@ function run_benders!(
     @assert !type.C2 || isempty(Pcc)
     @assert !type.C2F || isempty(Pccx)
     
-    total_solve_time = solve_time(m)
     !has_values(m) && return Case(m, opf, pf, oplim, brc_up, brc_down, Pc, Pcc, Pccx), total_solve_time
     @debug "lower_bound = $(objective_value(m))"
 
     # Set variables
     set_dist_slack!(pf, opf, oplim.dist_slack)
     bd = benders(opf, m)
+
+    brst = oplim.branch_rating * oplim.short_term_multi
+    brlt = oplim.branch_rating * oplim.long_term_multi
 
     overloads = zeros(length(opf.contingencies))
     # PI = zeros(length(opf.contingencies))
@@ -97,6 +100,7 @@ function run_benders!(
         # cont  = get_bus_idx(opf.contingencies[c], opf.idx)
         if is_islanded(pf, cont[2], cont[1])
             islands, island, island_b = handle_islands(pf.B, pf.DA, cont[2], cont[1], pf.slack)
+            length(islands[island]) < 2 && continue
             type.C1 && init_P!(Pc, opf, oplim, m, bd.obj, islands, island, i)
             type.C2 && init_P!(Pcc, opf, oplim, m, bd.obj, islands, island, i)
             type.C2F && init_P!(Pccx, opf, oplim, m, bd.obj, islands, island, i)
@@ -115,10 +119,10 @@ function run_benders!(
             end
         end
 
-        # PI[i] = maximum((flow ./ (oplim.branch_rating * oplim.short_term_multi)).^2)
+        # PI[i] = maximum((flow ./ (brst)).^2)
 
         # Calculate the power flow with the new outage and find if there are any overloads
-        overload = filter_overload(flow, oplim.branch_rating * oplim.short_term_multi)
+        overload = filter_overload(flow, brst)
 
         if !isempty(overload)
             overloads[i] = maximum(x -> abs(x[2]), overload)
@@ -135,9 +139,6 @@ function run_benders!(
     corr1 = 0
     corr2 = 0
     corr2f = 0
-
-    brst = oplim.branch_rating * oplim.short_term_multi
-    brlt = oplim.branch_rating * oplim.long_term_multi
 
     olc = Vector{Tuple{Int,Float64}}()
     olcc = Vector{Tuple{Int,Float64}}()
@@ -164,6 +165,7 @@ function run_benders!(
             if is_islanded(pf, cont[2], cont[1])
                 islands, island, island_b = handle_islands(pf.B, pf.DA, cont[2], cont[1], pf.slack)
                 inodes = islands[island]
+                length(inodes) < 2 && continue
                 # initialize_islands(opf, islands, island)
             else
                 empty!(islands)
@@ -246,7 +248,7 @@ function calculate_contingency_line_flows!(ΔP::Vector{<:Real}, P::Dict{<:Intege
     if get(P, c, 0) == 0
         return calculate_contingency_line_flows(m, pf, Pᵢ, cont, c, c_obj, island, island_b)
     end
-    ΔP = get_ΔP!(ΔP, m, opf, P, c)
+    get_ΔP!(ΔP, m, opf, P, c)
     if iszero(ΔP)
         calculate_line_flows!(pf.vb_tmp, pf, cont[2], cont[1], nodes=island, branches=island_b)
     else
@@ -261,7 +263,7 @@ function calculate_contingency_line_flows!(ΔP::Vector{<:Real}, P::Dict{<:Intege
     if get(P, c, 0) == 0
         return calculate_contingency_line_flows(m, pf, Pᵢ, cont, c, c_obj, island, island_b)
     end
-    ΔP = get_ΔP!(ΔP, m, opf, P, c)
+    get_ΔP!(ΔP, m, opf, P, c)
     ΔP[cont[2]] -= get_ΔP(m, cont, c_obj, P, c)
     LinearAlgebra.mul!(pf.vb_tmp, pf.ϕ, (Pᵢ .+ ΔP))
     return pf.vb_tmp

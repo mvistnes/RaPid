@@ -143,7 +143,7 @@ make_prob(contingencies::AbstractVector, prob_min=0.1, prob_max=0.4) =
 get_system(fname::String) = System(joinpath("data", fname))
 
 function create_model(optimizer; time_limit_sec::Integer=10000, silent::Bool=true, debug::Bool=false)
-    m = direct_model(optimizer)
+    m = Model(optimizer)
     set_string_names_on_creation(m, debug)
     MOI.set(m, MOI.Silent(), silent) # supress output from the solver
     set_time_limit_sec(m, time_limit_sec)
@@ -291,6 +291,7 @@ function opfsystem(sys::System, voll::Vector{TR}, contingencies::Vector{<:Compon
         @error "The system is separated into islands" islands
     end
 
+    # sump = sum(prob)
     return OPFsystem{TR, Int}(cost_ctrl_gen, cost_renewables, voll, prob, idx, mgx, mdx, mbx, mdcx, mrx,
         ctrl_generation, branches, arcs, dc_branches, nodes, demands, renewables, contingencies)
 end
@@ -624,12 +625,12 @@ get_low_dual(varref::VariableRef) = dual(LowerBoundRef(varref))
 get_high_dual(varref::VariableRef) = dual(UpperBoundRef(varref))
 
 """ This is a faster version of JuMP.value """
-get_value(m::Model, symb::Symbol) =
-    MOI.get.([JuMP.backend(m)], [MOI.VariablePrimal()], JuMP.index.(m[symb]))
-get_value(m::Model, var::JuMP.VariableRef) =
-    MOI.get(JuMP.backend(m), MOI.VariablePrimal(), JuMP.index(var))
-get_value(m::Model, var::Vector{JuMP.VariableRef})::Vector{Float64} =
-    MOI.get(JuMP.backend(m), MOI.VariablePrimal(), JuMP.index.(var))
+get_value(m::Model, symb::Symbol) = JuMP.value.(m[symb])
+    # MOI.get.([JuMP.backend(m)], [MOI.VariablePrimal()], JuMP.index.(m[symb]))
+get_value(m::Model, var::JuMP.VariableRef) = JuMP.value(var)
+    # MOI.get(JuMP.backend(m), MOI.VariablePrimal(), JuMP.index(var))
+get_value(m::Model, var::Vector{JuMP.VariableRef})::Vector{Float64} = JuMP.value.(var)
+    # MOI.get(JuMP.backend(m), MOI.VariablePrimal(), JuMP.index.(var))
 
 function get_variable_values(m::Model)
     vals = Dict{Symbol, Vector{Float64}}()

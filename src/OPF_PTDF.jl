@@ -41,8 +41,11 @@ function oplimits(
     if !isempty(dist_slack)
         dist_slack = dist_slack / sum(dist_slack)
     end
+    if any(pg_lim_min .< 0.0)
+        @error "Negative pg_lim_min, enable min limits on generators!"
+    end
     return Oplimits{TR}(ramp_mult, ramp_minutes, p_failure, branch_rating, short_term_multi, long_term_multi, 
-        pg_lim_min, pg_lim_max, rampup, rampdown, dist_slack, pr_lim, max_curtail, dc_lim_min, dc_lim_max, pd_lim, max_shed)
+        zeros(length(pg_lim_max)), pg_lim_max, rampup, rampdown, dist_slack, pr_lim, max_curtail, dc_lim_min, dc_lim_max, pd_lim, max_shed)
 end
 
 mutable struct Case{TR<:Real,TI<:Integer}
@@ -104,7 +107,7 @@ function opf_base(type::OPF, system::System, optimizer;
         # renewable curtailment variables
     end)
 
-    @objective(m, Min, sum(c.var * g for (c, g) in zip(opf.cost_ctrl_gen, pg0)) + sum(opf.voll' * ls0) + sum(pr0 * 1))
+    @objective(m, Min, sum(c.var * g for (c, g) in zip(opf.cost_ctrl_gen, pg0)) + sum(opf.voll' * ls0))
     # @objective(m, Min, sum(c[1] * g^2 + c[2] * g for (c, g) in zip(opf.cost_ctrl_gen, pg0)) + sum(opf.voll' * ls0) + sum(pr0 * 1))
 
     JuMP.fix.(pd, oplim.pd_lim)
@@ -208,6 +211,7 @@ function add_all_contingencies!(type::OPF, opf::OPFsystem, oplim::Oplimits, m::M
         cont = typesort_component(c_obj, opf)
         if is_islanded(pf, cont[2], cont[1])
             islands, island, island_b = handle_islands(pf.B, pf.DA, cont[2], cont[1], pf.slack)
+            length(islands[island]) < 2 && continue
             ptdf = calc_isf(pf, cont[2], cont[1], islands, island, island_b)
             set_tol_zero!(ptdf)
         else
@@ -226,7 +230,7 @@ function add_all_contingencies!(type::OPF, opf::OPFsystem, oplim::Oplimits, m::M
     return m, opf, pf, oplim, brc_up, brc_down, Pc, Pcc, Pccx
 end
 add_all_contingencies!(type::OPF, case::Case) = 
-    add_all_contingencies!(type, case.opf, case.opflim, case.model, case.pf, case.brc_up, case.brc_down, case.Pc, case.Pcc, case.Pccx)
+    add_all_contingencies!(type, case.opf, case.oplim, case.model, case.pf, case.brc_up, case.brc_down, case.Pc, case.Pcc, case.Pccx)
 
 function add_contingency!(opf::OPFsystem, pf::DCPowerFlow, oplim::Oplimits, m::Model, 
     brc_up::Dict{<:Integer, ConstraintRef}, brc_down::Dict{<:Integer, ConstraintRef}, 
@@ -547,7 +551,7 @@ function calc_slack_cost(case::Case)
     end
     pg0 = opf.mgx' * pg0
     pr = opf.mrx' * (get_value(m, :pr) - get_value(m, :pr0))
-    pr_cost = pr
+    # pr_cost = pr
     pd = opf.mdx' * (get_value(m, :pd) - get_value(m, :ls0))
     ls_cost = opf.mdx' * (opf.voll' * (get_value(m, :pd) - get_value(m, :ls0)))
     for (i, c_obj) in enumerate(opf.contingencies)
@@ -556,7 +560,7 @@ function calc_slack_cost(case::Case)
             islands, island, island_b = handle_islands(pf.B, pf.DA, cont[2], cont[1], pf.slack)
             nodes = reduce(vcat, islands[1:end.!=island], init=[])
             ΔP = sum(pg0[nodes]) + sum(pr[nodes]) - sum(pd[nodes])
-            costs[i] = sum(slack_cost * abs(ΔP)) + sum(pr_cost[nodes]) + sum(ls_cost[nodes])
+            costs[i] = sum(slack_cost * abs(ΔP)) + sum(ls_cost[nodes]) #+ sum(pr_cost[nodes])
         elseif typeof(c_obj) <: StaticInjection
             costs[i] = sum(slack_cost * value(m[:pg0][cont[1]]))
         end
