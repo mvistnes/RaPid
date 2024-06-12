@@ -44,6 +44,16 @@ function oplimits(
     if any(pg_lim_min .< 0.0)
         @error "Negative pg_lim_min, enable min limits on generators!"
     end
+    replace!(branch_rating, NaN=>0.0)
+    replace!(pg_lim_min, NaN=>0.0)
+    replace!(pg_lim_max, NaN=>0.0)
+    replace!(rampup, NaN=>0.0)
+    replace!(rampdown, NaN=>0.0)
+    replace!(dist_slack, NaN=>0.0)
+    replace!(pr_lim, NaN=>0.0)
+    replace!(dc_lim_min, NaN=>0.0)
+    replace!(dc_lim_max, NaN=>0.0)
+    replace!(pd_lim, NaN=>0.0)
     return Oplimits{TR}(ramp_mult, ramp_minutes, p_failure, branch_rating, short_term_multi, long_term_multi, 
         zeros(length(pg_lim_max)), pg_lim_max, rampup, rampdown, dist_slack, pr_lim, max_curtail, dc_lim_min, dc_lim_max, pd_lim, max_shed)
 end
@@ -300,10 +310,10 @@ end
 function init_P!(Pc::Dict{<:Integer,ExprC}, opf::OPFsystem, oplim::Oplimits, m::Model, obj::AbstractJuMPScalar, 
     islands::Vector, island::Integer, c::Integer
 )
-    pgu = @variable(m, [g in 1:length(opf.ctrl_generation)], base_name = "pgu"*string(c),
+    pgu = @variable(m, [g in 1:length(opf.ctrl_generation)], base_name = "pguc"*string(c),
         lower_bound = 0.0, upper_bound = oplim.rampup[g] * 0.0)
     # active power variables for the generators in contingencies ramp up 
-    pgd = @variable(m, [g in 1:length(opf.ctrl_generation)], base_name = "pgd"*string(c),
+    pgd = @variable(m, [g in 1:length(opf.ctrl_generation)], base_name = "pgdc"*string(c),
         lower_bound = 0.0) #, upper_bound = rampdown[g] * 0.0)
     # and ramp down
     prc = @variable(m, [d in 1:length(opf.renewables)], base_name = "prc"*string(c),
@@ -369,10 +379,10 @@ function init_P!(Pcc::Dict{<:Integer,ExprCC}, opf::OPFsystem, oplim::Oplimits, m
     islands::Vector, island::Integer, c::Integer
 )
     # Add corrective variables
-    pgu = @variable(m, [g in 1:length(opf.ctrl_generation)], base_name = @sprintf("pgu%s", c),
+    pgu = @variable(m, [g in 1:length(opf.ctrl_generation)], base_name = @sprintf("pgucc%s", c),
         lower_bound = 0.0, upper_bound = oplim.rampup[g] * oplim.ramp_minutes)
     # active power variables for the generators in contingencies ramp up 
-    pgd = @variable(m, [g in 1:length(opf.ctrl_generation)], base_name = @sprintf("pgd%s", c),
+    pgd = @variable(m, [g in 1:length(opf.ctrl_generation)], base_name = @sprintf("pgdcc%s", c),
         lower_bound = 0.0) #, upper_bound = rampdown[g] * ramp_minutes)
     # and ramp down
     pfdccc = @variable(m, [d in 1:length(opf.dc_branches)], base_name = @sprintf("pfdccc%s", c),

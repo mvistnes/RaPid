@@ -163,8 +163,25 @@ end
 function calc_isf(pf::DCPowerFlow, cont::Tuple{Real,Real}, c::Integer, islands::Vector, 
     island::Integer, island_b::Vector{<:Integer}
 )
-    calc_isf!(pf.mbn_tmp, pf.ϕ, islands[island], island_b)
-    return pf.mbn_tmp
+    return calc_isf!(similar(pf.ϕ), pf.ϕ, islands[island], island_b)
+end
+
+function calc_isf_vec!(ϕ::AbstractVector{T}, ϕ₀::AbstractMatrix{T}, i::Integer,
+    nodes::AbstractVector{<:Integer}, branches::AbstractVector{<:Integer}
+) where {T<:Real}
+    if i ∈ branches
+        copy!(ϕ, ϕ₀[i,:])
+        zero_not_in_array!(ϕ, nodes, Val(1))
+    else
+        ϕ .= zero(T)
+    end
+    return ϕ
+end
+
+function calc_isf_vec(pf::DCPowerFlow, i::Integer, cont::Tuple{Real,Real}, c::Integer, islands::Vector, 
+    island::Integer, island_b::Vector{<:Integer}
+)
+    return calc_isf_vec!(similar(pf.vb_tmp), pf.ϕ, i, islands[island], island_b)
 end
 
 function calculate_line_flows!(F::AbstractVector{T}, ϕ::AbstractMatrix{<:Real}, ϕ₀::AbstractMatrix{<:Real}, Pᵢ::AbstractVector{<:Real}, 

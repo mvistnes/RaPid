@@ -82,11 +82,11 @@ function setup_system(fname::String)
     voll, prob, contingencies = SCOPF.setup(system, 100.0, 400.0)
     SCOPF.set_ramp_limits!(system)
     SCOPF.set_renewable_prod!(system, 0.5)
-    prob = fill(0.01, length(contingencies))
+    prob = fill(1/length(contingencies), length(contingencies))
     short = 1.5
     long = 1.25
     ramp_minutes = 10.0
-    max_shed = 1.5
+    max_shed = sum(get_active_power.(SCOPF.get_demands(system)))/100
     ramp_mult = 2.0
     time_limit_sec = length(contingencies)^2 + 10
     return system, voll, contingencies, prob, short, long, ramp_minutes, ramp_mult, max_shed, time_limit_sec

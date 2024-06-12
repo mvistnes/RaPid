@@ -31,15 +31,17 @@ function calc_ptdf_vec!(vec::AbstractVector{<:Real}, Xf::AbstractVector{<:Real},
     return vec
 end
 
-function calc_ptdf_vec(B::AbstractMatrix{<:Real}, K::KLU.KLUFactorization{T,<:Integer}, slack::Integer, 
-    fbus::Integer, tbus::Integer, kbus::Integer, lbus::Integer#; atol::Real=1e-10
+function calc_ptdf_vec(B::AbstractMatrix{<:Real}, DA::AbstractMatrix{<:Real}, K::KLU.KLUFactorization{T,<:Integer}, slack::Integer, 
+    cbranch::Integer, fbus::Integer, tbus::Integer, sbranch::Integer, kbus::Integer, lbus::Integer#; atol::Real=1e-10
 ) where {T<:Real}
     n = size(B, 1)
     Xf = calc_X_vec!(Vector{T}(undef, n), K, fbus, slack)
     Xt = calc_X_vec!(Vector{T}(undef, n), K, tbus, slack)
     Xk = calc_X_vec!(Vector{T}(undef, n), K, kbus, slack)
     Xl = calc_X_vec!(Vector{T}(undef, n), K, lbus, slack)
-    return calc_ptdf_vec!(Vector{T}(undef, n), Xf, Xt, Xk, Xl, -B[fbus, tbus], -B[kbus, lbus], fbus, tbus, kbus, lbus)
+    c_b = -B[fbus, tbus] * DA[cbranch, tbus] / B[fbus, tbus]
+    s_b = -B[kbus, lbus] * DA[sbranch, lbus] / B[kbus, lbus]
+    return calc_ptdf_vec!(Vector{T}(undef, n), Xf, Xt, Xk, Xl, c_b, s_b, fbus, tbus, kbus, lbus)
 end
 
 """ Multi contingency Woodbury """
@@ -210,7 +212,7 @@ function calc_isf!(
     calc_isf!(isf, DA, X)
     isf[branch, :] .= 0.0
     set_tol_zero!(isf)
-    nothing
+    return isf
 end
 
 """ Get the isf-matrix after a line outage using IMML. 
@@ -220,8 +222,7 @@ function calc_isf(
     cont::Tuple{Integer,Integer},
     branch::Integer
 )
-    calc_isf!(pf.mbn_tmp, pf.mnn_tmp, pf.X, pf.B, pf.DA, cont, branch)
-    return pf.mbn_tmp
+    return calc_isf!(similar(pf.mbn_tmp), similar(pf.mnn_tmp), pf.X, pf.B, pf.DA, cont, branch)
 end
 
 function calc_isf(pf::DCPowerFlow, cont::Real, c::Integer)
@@ -266,7 +267,7 @@ Input:
     delta = inv(c⁻¹) * (θ[from_bus] - θ[to_bus])
     @. Pl = Pl0 - (ptdf[:, from_bus] - ptdf[:, to_bus]) * change * delta
     Pl[branch] = 0.0
-    return nothing
+    return Pl
 end
 @views function calculate_line_flows!(
     Pl::AbstractVector{T},
@@ -290,7 +291,7 @@ end
     delta = inv(c⁻¹) * (θ[from_bus] - θ[to_bus])
     @. Pl = Pl0 - (- ptdf[:, to_bus]) * change * delta
     Pl[branch] = 0.0
-    return nothing
+    return Pl
 end
 @views function calculate_line_flows!(
     Pl::AbstractVector{T},
@@ -314,7 +315,7 @@ end
     delta = inv(c⁻¹) * (θ[from_bus] - θ[to_bus])
     @. Pl = Pl0 - (ptdf[:, from_bus]) * change * delta
     Pl[branch] = 0.0
-    return nothing
+    return Pl
 end
 
 function calculate_line_flows!(
@@ -327,8 +328,8 @@ function calculate_line_flows!(
     branches::AbstractVector{<:Integer} = Int[]
 )
     if !isempty(Pᵢ)
-        θ = run_pf!(pf.vn_tmp, pf.K, Pᵢ, pf.slack)
-        F = LinearAlgebra.mul!(pf.vb_tmp, pf.DA, pf.vn_tmp)
+        θ = run_pf!(similar(pf.vn_tmp), pf.K, Pᵢ, pf.slack)
+        F = LinearAlgebra.mul!(similar(pf.vb_tmp), pf.DA, θ)
     else
         θ = pf.θ
         F = pf.F
@@ -340,7 +341,7 @@ function calculate_line_flows!(
     else
         calculate_line_flows!(Pl, F, pf.ϕ, pf.B, pf.DA, pf.X, θ, cont[1], cont[2], branch)
     end
-    return nothing
+    return Pl
 end
 function calculate_line_flows(
     pf::DCPowerFlow,
