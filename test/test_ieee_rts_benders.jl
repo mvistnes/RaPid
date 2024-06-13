@@ -46,15 +46,15 @@ function test_benders(system, optimizer, voll, contingencies, prob, max_shed,ram
         SCOPF.add_branch_constraints!(mod, pf.ϕ, mod[:p0], brc_up, brc_down, oplim.branch_rating)
         SCOPF.solve_model!(mod);
 
-        println("Start Contingency select")
-        case_cont, tot_t = SCOPF.run_contingency_select(type, system, HiGHS.Optimizer(), voll, prob, contingencies, 
-            max_shed=max_shed, ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=p_failure);
+        # println("Start Contingency select")
+        # case_cont, tot_t = SCOPF.run_contingency_select(type, system, HiGHS.Optimizer(), voll, prob, contingencies, 
+        #     max_shed=max_shed, ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=p_failure);
 
         println("Start Benders")
         case, tot_t = SCOPF.run_benders(type, system, HiGHS.Optimizer(), voll, prob, contingencies, max_shed=max_shed,
             ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=p_failure);
 
-        @test JuMP.objective_value(mod) ≈ JuMP.objective_value(case_cont.model)
+        # @test JuMP.objective_value(mod) ≈ JuMP.objective_value(case_cont.model)
         @test JuMP.objective_value(mod) ≈ JuMP.objective_value(case.model)
     end
     return

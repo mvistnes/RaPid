@@ -143,7 +143,7 @@ make_prob(contingencies::AbstractVector, prob_min=0.1, prob_max=0.4) =
 get_system(fname::String) = System(joinpath("data", fname))
 
 function create_model(optimizer; time_limit_sec::Integer=10000, silent::Bool=true, debug::Bool=false)
-    m = Model(optimizer)
+    m = direct_model(optimizer)
     set_string_names_on_creation(m, debug)
     MOI.set(m, MOI.Silent(), silent) # supress output from the solver
     set_time_limit_sec(m, time_limit_sec)
@@ -213,9 +213,9 @@ get_branches(sys::System) = vcat(get_lines(sys), get_transformers2w(sys), get_ta
 get_dc_branches(sys::System) = get_components(TwoTerminalHVDCLine, sys) |> collect
 get_nodes(sys::System) = get_components(ACBus, sys) |> collect
 get_demands(sys::System) = get_components(StaticLoad, sys) |> collect
-get_renewables(sys::System) = get_components(RenewableGen, sys) |> collect # Renewable modelled as negative demand
-get_ctrl_generation(sys::System) = vcat(get_gens_t(sys), get_gens_h(sys)) # An iterator of all controllable generators
-get_generation(sys::System) = vcat(get_ctrl_generation(sys), get_renewables(sys)) # An iterator of all generation
+get_renewables(sys::System) = get_components(RenewableGen, sys) |> collect
+get_ctrl_generation(sys::System) = vcat(get_gens_t(sys), get_gens_h(sys))
+get_generation(sys::System) = vcat(get_ctrl_generation(sys), get_renewables(sys))
 
 """ A sorted vector to a type of power system component """
 sort_components!(list::PowerSystems.FlattenIteratorWrapper{T}) where {T} = sort_components!(collect(T, list))
@@ -469,7 +469,7 @@ find_slack(sys::System) = find_slack(sort_components!(get_nodes(sys)))
 """ Run optimizer to solve the model and check for optimality """
 function solve_model!(model::Model)
     optimize!(model)
-    if !has_values(model)
+    if !is_solved_and_feasible(model)
         @warn "Model not optimally solved with status $(termination_status(model))!"
     else
         @info @sprintf "Model solved in %.6fs with objective value %.10f" MOI.get(model, MOI.SolveTimeSec()) objective_value(model)
@@ -625,12 +625,12 @@ get_low_dual(varref::VariableRef) = dual(LowerBoundRef(varref))
 get_high_dual(varref::VariableRef) = dual(UpperBoundRef(varref))
 
 """ This is a faster version of JuMP.value """
-get_value(m::Model, symb::Symbol) = JuMP.value.(m[symb])
-    # MOI.get.([JuMP.backend(m)], [MOI.VariablePrimal()], JuMP.index.(m[symb]))
-get_value(m::Model, var::JuMP.VariableRef) = JuMP.value(var)
-    # MOI.get(JuMP.backend(m), MOI.VariablePrimal(), JuMP.index(var))
-get_value(m::Model, var::Vector{JuMP.VariableRef})::Vector{Float64} = JuMP.value.(var)
-    # MOI.get(JuMP.backend(m), MOI.VariablePrimal(), JuMP.index.(var))
+get_value(m::Model, symb::Symbol) = # JuMP.value.(m[symb])
+    MOI.get.([JuMP.backend(m)], [MOI.VariablePrimal()], JuMP.index.(m[symb]))
+get_value(m::Model, var::JuMP.VariableRef) = # JuMP.value(var)
+    MOI.get(JuMP.backend(m), MOI.VariablePrimal(), JuMP.index(var))
+get_value(m::Model, var::Vector{JuMP.VariableRef})::Vector{Float64} = # JuMP.value.(var)
+    MOI.get(JuMP.backend(m), MOI.VariablePrimal(), JuMP.index.(var))
 
 function get_variable_values(m::Model)
     vals = Dict{Symbol, Vector{Float64}}()

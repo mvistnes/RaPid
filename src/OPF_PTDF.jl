@@ -135,8 +135,8 @@ function opf_base(type::OPF, system::System, optimizer;
     # add_branch_constraints!(m, pf.ϕ, p0, oplim.branch_rating)
     @expression(m, balance, sum(pg0, init=0.0))
     add_to_expression!.(balance, pr)
-    add_to_expression!.(balance, -pr0)
-    add_to_expression!.(balance, -pd)
+    add_to_expression!.(balance, -1, pr0)
+    add_to_expression!.(balance, -1, pd)
     add_to_expression!.(balance, ls0)
     @constraint(m, power_balance, balance == 0.0)
 
@@ -182,14 +182,14 @@ end
 function constrain_branches!(m::Model, pf::DCPowerFlow, oplim::Oplimits, brc_up::Dict{<:Integer, ConstraintRef}, brc_down::Dict{<:Integer, ConstraintRef}, 
     total_solve_time::Real, atol::Real=1e-6
 )
-    # if !has_values(m)
+    # if !is_solved_and_feasible(m)
         # Note: While using a direct_model, this check fails after the model is modified for some solvers
         total_solve_time = update_model!(m, pf, total_solve_time)
     # end
     while true
         ol_br = find_overloaded_branches(pf.F, oplim.branch_rating, atol)
         isempty(ol_br) && break 
-        termination_status(m) != JuMP.OPTIMAL && break
+        !is_solved_and_feasible(m) && break
         for br in ol_br
             add_branch_constraint!(m, pf, m[:p0], brc_up, brc_down, br, oplim.branch_rating[br])
             @info "Branch $br added"
@@ -333,9 +333,9 @@ function init_P!(Pc::Dict{<:Integer,ExprC}, opf::OPFsystem, oplim::Oplimits, m::
 
     # Add new constraints that limit the corrective variables within operating limits
     balance_pc = @expression(m, sum(lsc))
-    add_to_expression!.(balance_pc, -prc)
+    add_to_expression!.(balance_pc, -1, prc)
     add_to_expression!.(balance_pc, pgu)
-    add_to_expression!.(balance_pc, -pgd)
+    add_to_expression!.(balance_pc, -1, pgd)
     @constraint(m, balance_pc == 0.0)
     if isempty(islands)
         @constraint(m, m[:pg0] .+ pgu .- pgd .>= oplim.pg_lim_min)
@@ -414,8 +414,8 @@ function init_P!(Pcc::Dict{<:Integer,ExprCC}, opf::OPFsystem, oplim::Oplimits, m
     # Add new constraints that limit the corrective variables within operating limits
     balance_pcc = @expression(m, sum(pgu))
     add_to_expression!.(balance_pcc, lscc)
-    add_to_expression!.(balance_pcc, -pgd)
-    add_to_expression!.(balance_pcc, -prcc)
+    add_to_expression!.(balance_pcc, -1, pgd)
+    add_to_expression!.(balance_pcc, -1, prcc)
     @constraint(m, balance_pcc == 0.0)
     if isempty(islands)
         @constraints(m, begin
@@ -519,8 +519,8 @@ fix!(var::AbstractVector{VariableRef}, vec::AbstractVector) =
     JuMP.fix.(var[vec], 0.0; force=true)
 
 """ Force a variable to equal its current value in the model """
-fix_values!(m::Model, symb::Symbol) = JuMP.fix.(m[symb], get_value(m, symb), force=true)
-fix_values!(m::Model, var::AbstractVector{VariableRef}) = JuMP.fix.(var, get_value(m, var), force=true)
+fix_values!(m::Model, symb::Symbol) = JuMP.fix.(m[symb], JuMP.value.(m[symb]), force=true)
+fix_values!(m::Model, var::AbstractVector{VariableRef}) = JuMP.fix.(var, JuMP.value.(m[var]), force=true)
 
 """ Fix all base case varibles to its current values in the model """
 function fix_base_case!(m::Model)

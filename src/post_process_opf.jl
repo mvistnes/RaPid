@@ -1,44 +1,62 @@
 # CC BY 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2022
 
-# scatterplot(model, system, name, type) =
-#     scatter(
-#         [get_name.(get_components(type, system))],
-#         [value.(model[name]).data],
-#         dpi=100,
-#         size=(600, 600),
-#         label=false,
-#         rotation=90,
-#         title=name
-#     )
 
-# function make_save_plot(model, system, sys_name, name)
-#     plt = scatterplot(model, system, name[1], name[2])
-#     display(plt)
-#     path = mkpath(joinpath("results", sys_name))
-#     savefig(plt, joinpath(path, "$(name[1]).pdf"))
-# end
+extract_results(model::Model, Pc::Dict{Int64,ExprC}) = Dict(i => Dict(
+        :pgu => get_value(model, x.pgu), 
+        :pgd => get_value(model, x.pgd), 
+        :prc => get_value(model, x.prc), 
+        :lsc => get_value(model, x.lsc), 
+        :pc => get_value(model, x.pc)
+    ) for (i,x) in Pc)
+extract_results(model::Model, Pcc::Dict{Int64,ExprCC}) = Dict(i => Dict(
+        :pgu => get_value(model, x.pgu), 
+        :pgd => get_value(model, x.pgd), 
+        :prcc => get_value(model, x.prcc), 
+        :lscc => get_value(model, x.lscc), 
+        :pfdccc => get_value(model, x.pfdccc), 
+        :pcc => get_value(model, x.pcc)
+    ) for (i,x) in Pcc)
 
-# function scatter_all(model, system; sys_name="")
-#     names = [
-#         (:pg0, Generator), (:pgu, Generator), (:pgd, Generator), (:u, ThermalGen),
-#         (:pf0, Branch), (:pfc, Branch), (:pfcc, Branch),
-#         (:ls0, StaticLoad), (:lsc, StaticLoad), (:lscc, StaticLoad),
-#         (:qg0, Generator), (:qgu, Generator), (:qgd, Generator),
-#         (:qf0, Branch), (:qfc, Branch), (:qfcc, Branch),
-#         (:va0, ACBus), (:vac, ACBus), (:vacc, ACBus),
-#         (:cbc, ACBus), (:cbcc, ACBus)
-#     ]
-#     for name in names
-#         try
-#             plt = scatterplot(model, system, name[1], name[2])
-#             display(plt)
-#             path = mkpath(joinpath("results", sys_name))
-#             savefig(plt, joinpath(path, "$(name[1]).pdf"))
-#         catch e
-#             print("No $(name[1]). ")
-#         end
-#     end
-# end
+function extract_results(case::Case)
+    costs = DataFrames.DataFrame(get_costs(case)...)
+    p0 = get_value(case.model, :p0)
+    pg0 = get_value(case.model, :pg0)
+    pfdc0 = get_value(case.model, :pfdc0)
+    pr0 = get_value(case.model, :pr0)
+    ls0 = get_value(case.model, :ls0)
+    Pc = extract_results(case.model, case.Pc)
+    Pcc = extract_results(case.model, case.Pcc)
+    obj_val = is_solved_and_feasible(case.model) ? JuMP.objective_value(case.model) : NaN
+    return Dict([:costs, :p0, :pg0, :pfdc0, :pr0, :ls0, :Pc, :Pcc, :obj_val] .=> [costs, p0, pg0, pfdc0, pr0, ls0, Pc, Pcc, obj_val])
+end
+
+function calc_forced_ls(case::Case, prob=case.opf.prob, contingencies=case.opf.contingencies)
+    val = Dict()
+    for (c, c_obj) in enumerate(contingencies)
+        c_i = c_obj.second
+        length(c_i) == 0 && continue
+        c_n = c_obj.first == "branch" ? [get_bus_idx(case.opf.mbx[i,:]) for i in c_i] : [case.opf.mgx[i,:].nzind[1] for i in c_i]
+        if is_islanded(case.pf, c_n, c_i)
+            islands, island, island_b = handle_islands(pf.B, pf.DA, cont[2], cont[1], pf.slack)
+            itr = isempty(itr) ? (1:length(opf.nodes)) : islands[1:end.!=island]
+            vals = 0.0
+            for in_vec in itr, n in in_vec
+                vals += (case.opf.mdx[:,n]' * case.oplim.pd_lim)
+                # push!(val, (case.opf.mdx[:,n]' * (case.opf.voll .* case.oplim.pd_lim) * prob[c] * 2))
+            end
+            if vals > 0.0 
+                val[c] = vals
+            end
+        end
+    end
+    return val
+end
+
+get_ens(mod::Model, cont::Dict, symb::Symbol) = 
+    sum(sum(get_value(mod, getfield(c, symb))) for (i,c) in cont)
+    
+get_lol(mod::Model, cont::Dict, symb::Symbol, atol::Real=1e-14) = 
+    sum(count(x->(abs(x)>atol), get_value(mod, getfield(c, symb))) for (i,c) in cont)
 
 function add_to!(vec::AbstractVector, varref::AbstractVector{VariableRef}, idx::Dict, 
     components::AbstractVector, func::Function

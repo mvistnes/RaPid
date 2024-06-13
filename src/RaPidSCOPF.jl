@@ -21,6 +21,7 @@ import MathOptInterface
 const MOI = MathOptInterface
 import KLU
 import LinearAlgebra
+import DataFrames
 
 import Base: +, -
 

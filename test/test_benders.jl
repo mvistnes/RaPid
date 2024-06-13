@@ -126,3 +126,12 @@ function run_test_benders()
     end
     return rt
 end
+
+function run_test_scopf(system, voll, prob, contingencies, max_shed, ramp_mult, ramp_minutes, short, long, time_limit_sec)
+    result = Dict()
+    for type in [SCOPF.Base_SCOPF, SCOPF.P_SCOPF, SCOPF.PC2_SCOPF]
+        println(type)
+        SCOPF.run_benders_type!(result, type, SCOPF.PC2_SCOPF, Gurobi.Optimizer(), system, voll, prob, contingencies, max_shed, ramp_mult, ramp_minutes, short, long, p_failure=0.00)
+    end
+    return result
+end

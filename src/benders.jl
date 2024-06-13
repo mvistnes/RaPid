@@ -82,7 +82,7 @@ function run_benders!(
     @assert !type.C2 || isempty(Pcc)
     @assert !type.C2F || isempty(Pccx)
     
-    !has_values(m) && return Case(m, opf, pf, oplim, brc_up, brc_down, Pc, Pcc, Pccx), total_solve_time
+    !is_solved_and_feasible(m) && return Case(m, opf, pf, oplim, brc_up, brc_down, Pc, Pcc, Pccx), total_solve_time
     @debug "lower_bound = $(objective_value(m))"
 
     # Set variables
@@ -94,9 +94,6 @@ function run_benders!(
     bx = get_bus_idx.(opf.branches, [opf.idx])
     flow = zeros(length(pf.vb_tmp))
 
-    overloads = zeros(length(opf.contingencies))
-    # PI = zeros(length(opf.contingencies))
-    pg = get_value(m, :pg0)
     for (i, c_obj) in enumerate(opf.contingencies)
         cont = typesort_component(c_obj, opf)
         # cont  = get_bus_idx(opf.contingencies[c], opf.idx)
@@ -107,31 +104,11 @@ function run_benders!(
             type.C2 && init_P!(Pcc, opf, oplim, m, bd.obj, islands, island, i)
             type.C2F && init_P!(Pccx, opf, oplim, m, bd.obj, islands, island, i)
             @debug "Island: Contingency $(string(typeof(c_obj))) $(get_name(c_obj))"
-            if isempty(islands)
-                fill!(flow, 0.0)
-            else
-                calculate_line_flows!(flow, pf, cont[2], cont[1], nodes=islands[island], branches=island_b)
-            end
-        else
-            if typeof(c_obj) <: ACBranch
-                calculate_contingency_line_flows!(flow, m, pf, bd.Pᵢ, cont, i, c_obj, Int[], Int[])
-            else
-                calculate_contingency_line_flows!(flow, m, pf, bd.Pᵢ, cont, i, c_obj, Int[], Int[], pg[cont[1]])
-            end
-        end
-
-        # PI[i] = maximum((flow ./ (brst)).^2)
-
-        # Calculate the power flow with the new outage and find if there are any overloads
-        overload = filter_overload(flow, brst)
-
-        if !isempty(overload)
-            overloads[i] = maximum(x -> abs(x[2]), overload)
         end
     end
 
     total_solve_time = update_model!(m, pf, oplim, brc_up, brc_down, bd, total_solve_time)
-    !has_values(m) && return Case(m, opf, pf, oplim, brc_up, brc_down, Pc, Pcc, Pccx), total_solve_time
+    !is_solved_and_feasible(m) && return Case(m, opf, pf, oplim, brc_up, brc_down, Pc, Pcc, Pccx), total_solve_time
     old_obj = -1.0
 
     ΔPc = zeros(length(bd.Pᵢ))
@@ -149,8 +126,6 @@ function run_benders!(
     island = 0
     island_b = Int[]
 
-    permutation = sortperm(overloads, rev=true)
-    # permutation = sortperm(PI, rev=true)
     cut_added = 1
     for iterations in 1:max_itr
         if cut_added == 0 # loops until no new cuts are added for the contingencies
@@ -165,8 +140,7 @@ function run_benders!(
         old_obj = objective_value(m)
         @info "\n------------------\nIteration $iterations"
 
-        for i in permutation
-            c_obj = opf.contingencies[i]
+        for (i, c_obj) in enumerate(opf.contingencies)
             cont = typesort_component(c_obj, opf)
             if is_islanded(pf, cont[2], cont[1])
                 islands, island, island_b = handle_islands(pf.B, pf.DA, cont[2], cont[1], pf.slack)
@@ -201,23 +175,23 @@ function run_benders!(
             # Cannot change the model before all data is exctracted!
             if !isempty(olc)
                 if type.P
-                    cut_added, pre = add_cut(opf, pf, bx, m, bd, brst, olc, c_obj, cont, cut_added, atol, pre)
+                    cut_added, pre = add_cut(opf, pf, bx, m, bd, brst, olc, islands, island, island_b, c_obj, cont, cut_added, atol, pre)
                 elseif type.C1
-                    cut_added, corr1 = add_cut(Pc, opf, pf, bx, oplim, m, bd, brst, ΔPc, olc, islands, island, c_obj, cont, i, cut_added, atol, corr1)
+                    cut_added, corr1 = add_cut(Pc, opf, pf, bx, oplim, m, bd, brst, ΔPc, olc, islands, island, island_b, c_obj, cont, i, cut_added, atol, corr1)
                 end
             end
             if !isempty(olcc)
-                cut_added, corr2 = add_cut(Pcc, opf, pf, bx, oplim, m, bd, brlt, ΔPcc, olcc, islands, island, c_obj, cont, i, cut_added, atol, corr2)
+                cut_added, corr2 = add_cut(Pcc, opf, pf, bx, oplim, m, bd, brlt, ΔPcc, olcc, islands, island, island_b, c_obj, cont, i, cut_added, atol, corr2)
             end
             if !isempty(olccx)
-                cut_added, corr2f = add_cut(Pccx, opf, pf, bx, oplim, m, bd, brlt, ΔPccx, olccx, islands, island, c_obj, cont, i, cut_added, atol, corr2f)
+                cut_added, corr2f = add_cut(Pccx, opf, pf, bx, oplim, m, bd, brlt, ΔPccx, olccx, islands, island, island_b, c_obj, cont, i, cut_added, atol, corr2f)
             end
-            if cut_added > 1
-                total_solve_time = update_model!(m, pf, oplim, brc_up, brc_down, bd, total_solve_time)
-                cut_added = 1
-            end
-            !has_values(m) && return Case(m, opf, pf, oplim, brc_up, brc_down, Pc, Pcc, Pccx), total_solve_time
         end
+        if cut_added > 1
+            total_solve_time = update_model!(m, pf, oplim, brc_up, brc_down, bd, total_solve_time)
+            cut_added = 1
+        end
+        !is_solved_and_feasible(m) && return Case(m, opf, pf, oplim, brc_up, brc_down, Pc, Pcc, Pccx), total_solve_time
     end
     @warn "Reached $(max_itr) iterations without a stable solution."
     return Case(m, opf, pf, oplim, brc_up, brc_down, Pc, Pcc, Pccx), total_solve_time
@@ -371,11 +345,17 @@ function add_overload_expr!(m::Model, expr::JuMP.AbstractJuMPScalar, ol::Real, r
 end
 
 function add_cut(opf::OPFsystem, pf::DCPowerFlow, bx::Vector, m::Model, bd::Benders, rate::Vector{<:Real}, overloads::Vector{<:Tuple{Integer,Real}},
-    c_obj::Component, cont, cut_added::Integer, atol::Real, id::Integer
+    islands::Vector, island::Integer, island_b::Vector, c_obj::Component, cont, cut_added::Integer, atol::Real, id::Integer
 )
     for (i, ol) in overloads
-        ptdf = calc_ptdf_vec(pf.B, pf.DA, pf.K, pf.slack, cont[1], cont[2][1], cont[2][2], i, bx[i][1], bx[i][2])
-        set_tol_zero!(ptdf)
+        if is_islanded(pf, cont[2], cont[1])
+            ptdf = calc_isf_vec(pf, i, cont[2], cont[1], islands, island, island_b)
+            # ptdf = calc_isf(pf, cont[2], cont[1], islands, island, island_b)
+        else
+            # ptdf = calc_isf(pf, cont[2], cont[1])
+            ptdf = calc_ptdf_vec(pf.B, pf.DA, pf.K, pf.slack, cont[1], cont[2][1], cont[2][2], i, bx[i][1], bx[i][2])
+            set_tol_zero!(ptdf)
+        end
         expr = AffExpr() #+ sum(ptdf .* bd.Pᵢ)
         for j in axes(ptdf,1)
             add_to_expression!(expr, ptdf[j], m[:inj_p0][j])
@@ -390,7 +370,7 @@ end
 
 """ Finding and adding Benders cuts to mitigate overloads from one contingency """
 function add_cut(P::Dict{<:Integer, <:ContExpr}, opf::OPFsystem, pf::DCPowerFlow, bx::Vector, oplim::Oplimits, m::Model, bd::Benders, rate::Vector{<:Real}, ΔP::Vector{<:Real},
-    overloads::Vector{<:Tuple{Integer,Real}}, islands::Vector, island::Integer,
+    overloads::Vector{<:Tuple{Integer,Real}}, islands::Vector, island::Integer, island_b::Vector, 
     c_obj::Component, cont, c::Integer, cut_added::Integer, atol::Real, id::Integer
 )
     p = get(P, c, 0)
