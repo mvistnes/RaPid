@@ -34,7 +34,7 @@ function run_corrective_with_base(case::Case, vals)
         return extract_results(case)
     else
         for (k,x) in case.Pc
-            JuMP.set_upper_bound.(x[:pgu], case.oplim.rampup)
+            JuMP.set_upper_bound.(x.pgu, case.oplim.rampup)
         end
         # JuMP.delete_upper_bound.(case.model[:pgrd])
         @time solve_model!(case.model)
@@ -47,13 +47,14 @@ function run_corrective_with_base(case::Case, vals)
     end
 end
 
-function run_benders_type!(result, type, goal, optimizer, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long; p_failure=0.00, time_limit_sec=600)
+function run_benders_type!(result, type, goal, optimizer, optimizer2, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long; p_failure=0.00, time_limit_sec=600)
     case, tot_t = run_benders(type, sys, optimizer, voll, prob, cont, max_shed=max_shed,
         ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, time_limit_sec=time_limit_sec)
     !is_solved_and_feasible(case.model) && return
     if type != goal
         vals = extract_results(case)
-        result[type] = run_corrective_with_base(case, vals)
+        case_i, _ = run_benders(Base_SCOPF, sys, optimizer2, voll, prob, cont, max_shed=max_shed, ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, time_limit_sec=time_limit_sec);
+        result[type] = run_corrective_with_base(case_i, vals)
     else
         result[type] = extract_results(case)
     end

@@ -597,8 +597,15 @@ set_zero!(mx::AbstractMatrix{T}, i::Integer, ::Val{2}) where {T<:Real} = mx[:,i]
 set_zero!(mx::AbstractMatrix{T}, i::Integer, ::Val{1}) where {T<:Real} = mx[i,:] .= zero(T)
 set_zero!(vx::AbstractVector{T}, i::Integer, ::Val{1}) where {T<:Real} = vx[i] = zero(T)
 
-set_tol_zero!(vals::AbstractArray{T}, atol::Float64 = 1e-14) where {T<:Real} = 
-    @. vals[abs(vals) < atol && vals != zero(T)] = zero(T)
+function set_tol_zero!(vals::AbstractArray{T}, atol::Float64 = 1e-14) where {T<:Real}
+    @inbounds for i in axes(vals,1)
+        v = vals[i]
+        if abs(v) < atol && v != zero(T)
+            vals[i] = zero(T)
+        end
+    end
+    return nothing
+end
 
 " Split a Vector{Pair} into a Pair{Vector}"
 split_pair(val::AbstractVector) = map(first, val), map(last, val)
@@ -611,8 +618,16 @@ zip_pair(val1::AbstractVector, val2::AbstractVector) = zip_pair((val1, val2))
 find_overload(flow::T, rate::Real, atol::Real=1e-6) where {T<:Real} =
     abs(flow) - rate > atol ? sign(flow) * (abs(flow) - rate) : zero(T)
 
-filter_overload(flow::AbstractVector{<:Real}, linerating::AbstractVector{<:Real}, atol::Real=1e-6) =
-    [(i, ol) for (i, ol) in enumerate(find_overload.(flow, linerating)) if abs(ol) > atol]
+function filter_overload(flow::AbstractVector{<:Real}, linerating::AbstractVector{<:Real}, atol::Real=1e-6)
+    res = Vector{Tuple{Int64, Float64}}()
+    for (i, (f,l)) in enumerate(zip(flow, linerating)) 
+        ol = find_overload(f, l)
+        if abs(ol) > atol
+            push!(res, (i, ol))
+        end
+    end
+    return res 
+end
 
 filter_overload(Δflow::AbstractVector{<:Tuple}, linerating::AbstractVector{<:Real}, atol::Real=1e-6) =
     [(i, find_overload(ol, linerating[i])) for (i, ol) in Δflow if abs(find_overload(ol, linerating[i])) > atol]

@@ -13,13 +13,13 @@ Random.seed!(42)
 LinearAlgebra.BLAS.set_num_threads(Threads.nthreads())
 # system = System(joinpath("data","ELK14","A5.m")); c1 = 1; c2 = 5
 # system = SCOPF.System(joinpath("data","matpower","IEEE_RTS.m")); c1 = 1; c2 = 11
-# system = SCOPF.System(joinpath("data","matpower","RTS_GMLC.m")); c1 = 1; c2 = 52
-system = SCOPF.System(joinpath("data","matpower","ACTIVSg500.m")); c1 = 2; c2 = 1
+system = SCOPF.System(joinpath("data","matpower","RTS_GMLC.m")); c1 = 1; c2 = 52
+# system = SCOPF.System(joinpath("data","matpower","ACTIVSg500.m")); c1 = 2; c2 = 1
 # system = SCOPF.System(joinpath("data","matpower","ACTIVSg2000.m")); c1 = 1; c2 = 9
 # system = SCOPF.System(joinpath("data","matpower","case_ACTIVSg10k.m")); c1 = 1; c2 = 4
 SCOPF.fix_generation_cost!(system);
 voll = SCOPF.make_voll(system)
-model, opf, pf, oplim, _, _, _ = SCOPF.opf_base(SCOPF.Base_SCOPF, system, HiGHS.Optimizer, voll=voll);
+model, opf, pf, oplim, _, _, _ = SCOPF.opf_base(SCOPF.Base_SCOPF, system, HiGHS.Optimizer(), voll=voll);
 SCOPF.solve_model!(model)
 bx = SCOPF.get_bus_idx.(opf.branches, [opf.idx])
 slack = SCOPF.find_slack(opf.nodes)[1]
@@ -32,7 +32,7 @@ X = copy(pf.X)
 θ = copy(pf.θ)
 F = copy(pf.F)
 K = SCOPF.calc_klu(B, pf.slack)
- 
+
 # CONTAINERS FOR POWER FLOW
 flow1 = copy(pf.F)
 flow2 = copy(pf.F)
@@ -61,7 +61,7 @@ println("        IMML flow; IMML thet; inv theta; imml ptdf;  inv ptdf")
 # CONTINGENCY WITH POWER INJECTION CHANGE AND WITHOUT ISLANDING
 immlF = @benchmark SCOPF.calculate_line_flows!($flow1, $pf, $cont1, $c1, Pᵢ=($Pᵢ .+ $ΔPc)) # IMML flow
 inv_theta = @benchmark SCOPF.calculate_line_flows!($flow2, $θ, $B, $pf.DA, $pf.B, ($Pᵢ .+ $ΔPc), $cont1, $c1, $pf.slack) # inverse with theta
-imml_theta = @benchmark begin θ₂ = SCOPF.run_pf($pf.K, ($Pᵢ .+ $ΔPc), $pf.slack); SCOPF.calc_Pline!($flow4, $θ, $pf.X, $pf.B, $pf.DA, θ₂, $cont1, $c1); end # IMML theta
+imml_theta = @benchmark SCOPF.calc_Pline!($flow4, $θ, $pf, $cont2, $c2, Pᵢ=($Pᵢ .+ $ΔPc)) # IMML theta
 imml_ptdf = @benchmark begin SCOPF.calc_isf!($ϕ, $X, $pf.X, $pf.B, $pf.DA, $cont1, $c1); LinearAlgebra.mul!($flow3, $ϕ, ($Pᵢ .+ $ΔPc)); end # IMML ptdf
 inv_ptdf = @benchmark begin SCOPF.calc_isf!($ϕ, $K, $pf.DA, $pf.B, $cont1, $c1, $pf.slack); LinearAlgebra.mul!($flow4, $ϕ, ($Pᵢ .+ $ΔPc)); end # inverse with ptdf
 println("         IMML flow; IMML thet; inv theta; imml ptdf;  inv ptdf")
@@ -72,10 +72,19 @@ println("         IMML flow; IMML thet; inv theta; imml ptdf;  inv ptdf")
 immlF = @benchmark SCOPF.calculate_line_flows!($flow1, $pf, $cont2, $c2, Pᵢ=($Pᵢ .+ $ΔPc), nodes=$islands[island], branches=$island_b) # IMML flow
 inv_theta = @benchmark SCOPF.calculate_line_flows!($flow2, $θ, $pf.DA, $pf.B, ($Pᵢ .+ $ΔPc), $cont2, $c2, $pf.slack, $islands[island], $island_b) # inverse with theta
 inv_ptdf = @benchmark begin SCOPF.calc_isf!($ϕ, $pf.DA, $pf.B, $cont2, $c2, $pf.slack, $islands[island], $island_b); LinearAlgebra.mul!($flow3, ϕ, ($Pᵢ .+ $ΔPc)); end # inverse with ptdf
-imml_theta = @benchmark begin θ₂ = SCOPF.run_pf($pf.K, ($Pᵢ .+ $ΔPc), $pf.slack); SCOPF.calc_Pline!($flow4, $θ, $pf.X, $pf.B, $pf.DA, θ₂, $cont2, $c2); end # IMML theta
+imml_theta = @benchmark SCOPF.calc_Pline!($flow4, $θ, $pf, $cont2, $c2, Pᵢ=($Pᵢ .+ $ΔPc), nodes=$islands[island], branches=$island_b) # IMML theta
 imml_ptdf = @benchmark begin SCOPF.calc_isf!($ϕ, $X, $pf.X, $pf.B, $pf.DA, $cont2, $c2); LinearAlgebra.mul!($flow5, ϕ, ($Pᵢ .+ $ΔPc)); end # IMML ptdf
 hack = @benchmark begin SCOPF.calc_isf!($ϕ, $pf.ϕ, $islands[island], $island_b); LinearAlgebra.mul!($flow6, ϕ, ($Pᵢ .+ $ΔPc)); end
 hack2 = @benchmark SCOPF.calculate_line_flows!($flow7, $ϕ, $pf.ϕ, ($Pᵢ .+ $ΔPc), $islands[island], $island_b)
 println("        IMML flow; IMML thet; imml ptdf;      hack;     hack2; inv theta;  inv ptdf")
 @printf("Min:    %9.0f; %9.0f; %9.0f; %9.0f; %9.0f; %9.0f; %9.0f\n", minimum(immlF).time, minimum(imml_theta).time, minimum(imml_ptdf).time, minimum(hack).time, minimum(hack2).time, minimum(inv_theta).time, minimum(inv_ptdf).time)
 @printf("Median: %9.0f; %9.0f; %9.0f; %9.0f; %9.0f; %9.0f; %9.0f\n", median(immlF).time, median(imml_theta).time, median(imml_ptdf).time, median(hack).time, median(hack2).time, median(inv_theta).time, median(inv_ptdf).time)
+
+# CONTINGENCY WITH ISLANDING, ONLY PTDF-VECTOR
+inv_ptdfvec = @benchmark SCOPF.calc_isf_vec!($pf.vn_tmp, $pf.ϕ, $1, $islands[island], $island_b) # inverse with ptdf-vec
+imml_ptdfvec_x = @benchmark SCOPF.calc_ptdf_vec($pf, $c1, $cont1[1], $cont1[2], 1, $bx[1][1], $bx[1][2]) # IMML ptdf-vec
+SCOPF.calc_ptdf_vec(pf, c2, cont2[1], cont2[2], 1, bx[1][1], bx[1][2]) # IMML ptdf-vec
+imml_ptdfvec = @benchmark SCOPF.calc_ptdf_vec!($pf.vn_tmp, $pf, $c1, $cont1[1], $cont1[2], 1, $bx[1][1], $bx[1][2]) # IMML ptdf-vec
+println("        imml ptdf;   imml ptdf_x;  inv ptdf")
+@printf("Min:    %9.0f; %9.0f; %9.0f\n", minimum(imml_ptdfvec).time, minimum(imml_ptdfvec_x).time, minimum(inv_ptdfvec).time)
+@printf("Median: %9.0f; %9.0f; %9.0f\n", median(imml_ptdfvec).time, median(imml_ptdfvec_x).time, median(inv_ptdfvec).time)

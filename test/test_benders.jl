@@ -86,7 +86,7 @@ function setup_system(fname::String)
     short = 1.5
     long = 1.25
     ramp_minutes = 10.0
-    max_shed = sum(get_active_power.(SCOPF.get_demands(system)))/100
+    max_shed = sum(get_active_power.(SCOPF.get_demands(system)))/100*10
     ramp_mult = 2.0
     time_limit_sec = length(contingencies)^2 + 10
     return system, voll, contingencies, prob, short, long, ramp_minutes, ramp_mult, max_shed, time_limit_sec
@@ -100,29 +100,31 @@ function run_test_benders()
     push!(systems, setup_ieee_rts(joinpath("data", "matpower", "IEEE_RTS.m")))
     # push!(systems, setup_system(joinpath("data", "matpower", "RTS_GMLC.m")))
     push!(systems, setup_system(joinpath("data","matpower","ACTIVSg500.m")))
-    # push!(systems, setup_system(joinpath("data","matpower","ACTIVSg2000.m")))
+    push!(systems, setup_system(joinpath("data","matpower","ACTIVSg2000.m")))
+    push!(systems, setup_system(joinpath("data", "matpower7", "case2383wp.m")))
+    push!(systems, setup_system(joinpath("data", "matpower7", "case2746wp.m")))
     # push!(systems, setup_system(joinpath("data","matpower","case_ACTIVSg10k.m")))
 
-    types = [SCOPF.Base_SCOPF, SCOPF.P_SCOPF, SCOPF.OPF(true, false, true, false, false), SCOPF.PC2_SCOPF]
-    results1 = run_all(systems, optimizer, types, SCOPF.run_benders_types!)
-    # results2 = run_all_contingency_select(systems, optimizer, types);
-    results3 = run_all(systems, optimizer, types, SCOPF.run_types!)
-    println("Benders")
-    SCOPF.print_data(results1)
+    # types = [SCOPF.Base_SCOPF, SCOPF.P_SCOPF, SCOPF.OPF(true, false, true, false, false), SCOPF.PC2_SCOPF]
+    # results1 = run_all(systems, optimizer, types, SCOPF.run_benders_types!)
+    # # results2 = run_all_contingency_select(systems, optimizer, types);
+    # results3 = run_all(systems, optimizer, types, SCOPF.run_types!)
+    # println("Benders")
+    # SCOPF.print_data(results1)
     # println("Cont")
     # SCOPF.print_data(results2)
     # println("PTDF")
     # SCOPF.print_data(results3)
 
-    rt = []
+    rt = Dict()
     for x in systems
         system, voll, contingencies, prob, short, long, ramp_minutes, ramp_mult, max_shed, time_limit_sec = x
         # t = run_timed_types(types, optimizer, system, voll, prob, contingencies, max_shed, ramp_mult, ramp_minutes, short, long, time_limit_sec=time_limit_sec)
         # push!(rt, "ptdf" => t)
         # t = run_timed_contingency_select_types(types, optimizer, system, voll, prob, contingencies, max_shed, ramp_mult, ramp_minutes, short, long, time_limit_sec=time_limit_sec)
         # push!(rt, "cont"=>t)
-        t = run_timed_benders_types(types, optimizer, system, voll, prob, contingencies, max_shed, ramp_mult, ramp_minutes, short, long, time_limit_sec=time_limit_sec)
-        push!(rt, "bend" => t)
+        # t = run_timed_benders_types(types, optimizer, system, voll, prob, contingencies, max_shed, ramp_mult, ramp_minutes, short, long, time_limit_sec=time_limit_sec)
+        rt[length(get_components(ACBus, system))] = run_test_scopf(system, voll, prob, contingencies, max_shed, ramp_mult, ramp_minutes, short, long, time_limit_sec)
     end
     return rt
 end
@@ -131,7 +133,7 @@ function run_test_scopf(system, voll, prob, contingencies, max_shed, ramp_mult, 
     result = Dict()
     for type in [SCOPF.Base_SCOPF, SCOPF.P_SCOPF, SCOPF.PC2_SCOPF]
         println(type)
-        SCOPF.run_benders_type!(result, type, SCOPF.PC2_SCOPF, Gurobi.Optimizer(), system, voll, prob, contingencies, max_shed, ramp_mult, ramp_minutes, short, long, p_failure=0.00)
+        SCOPF.run_benders_type!(result, type, SCOPF.PC2_SCOPF, Gurobi.Optimizer(), Gurobi.Optimizer(), system, voll, prob, contingencies, max_shed, ramp_mult, ramp_minutes, short, long, p_failure=0.00)
     end
     return result
 end

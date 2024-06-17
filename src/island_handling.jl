@@ -8,8 +8,7 @@ function is_islanded(
 ) where {T<:Real}
     (fbus, tbus) = cont
     return isapprox(
-        1 / B[fbus, tbus] + DA[branch, tbus] / B[fbus, tbus] *
-                            ((X[fbus, fbus] - X[fbus, tbus]) - (X[tbus, fbus] - X[tbus, tbus])),
+        (1 + DA[branch, tbus] * ((X[fbus, fbus] - X[fbus, tbus]) - (X[tbus, fbus] - X[tbus, tbus]))) / B[fbus, tbus],
         zero(T), atol=atol)
 end
 is_islanded(pf::DCPowerFlow, cont::Tuple{Integer,Integer}, branch::Integer; atol::Real=1e-14) =

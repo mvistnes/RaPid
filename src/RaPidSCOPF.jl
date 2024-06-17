@@ -23,13 +23,19 @@ import KLU
 import LinearAlgebra
 import DataFrames
 
-import Base: +, -
+import Base: +, -, *
 
 #=
     Definition of common types.
 =#
 include("types.jl")
 export OPF, ExprC, ExprCC, ExprCCX
+
+#=
+    Definition of common types.
+=#
+include("semi_dense_matrix.jl")
+export SemiDenseX, SemiDensePTDF
 
 #=
     Utilities for running and analyzing the SCOPFs.

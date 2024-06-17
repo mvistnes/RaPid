@@ -1,34 +1,30 @@
 abstract type PowerFlow end
 
-mutable struct DCPowerFlow{T1<:Real,T2<:Integer} <: PowerFlow
-    DA::SparseArrays.SparseMatrixCSC{T1,T2} # Diagonal admittance matrix times the connectivity matrix
-    B::SparseArrays.SparseMatrixCSC{T1,T2} # The admittance matrix
-    K::KLU.KLUFactorization{T1, T2} # A factorization of the admittance matrix
-    X::Matrix{T1} # Inverse of the admittance matrix
-    ϕ::Matrix{T1} # PTDF matrix
-    θ::Vector{T1} # Bus voltage angles
-    F::Vector{T1} # Line power flow
-    slack::T2 # Reference bus
+mutable struct DCPowerFlow{TI<:Integer,TR<:Real} <: PowerFlow
+    DA::SparseArrays.SparseMatrixCSC{TR,TI} # Diagonal admittance matrix times the connectivity matrix
+    B::SparseArrays.SparseMatrixCSC{TR,TI} # The admittance matrix
+    K::KLU.KLUFactorization{TR, TI} # A factorization of the admittance matrix
+    X::SemiDenseX{TI, TR} # Inverse of the admittance matrix
+    ϕ::SemiDensePTDF{TI, TR} # PTDF matrix
+    θ::Vector{TR} # Bus voltage angles
+    F::Vector{TR} # Line power flow
+    slack::TI # Reference bus
 
-    sp_tmp::SparseArrays.SparseMatrixCSC{T1,T2} # branch x bus sparse matrix
-    K_tmp::KLU.KLUFactorization{T1, T2} # A factorization of the admittance matrix
-    mnn_tmp::Matrix{T1} # bus x bus matrix
-    mbn_tmp::Matrix{T1} # branch x bus matrix
-    vn_tmp::Vector{T1} # bus vector
-    vb_tmp::Vector{T1} # branch vector
+    K_tmp::KLU.KLUFactorization{TR, TI} # A temp factorization of the admittance matrix
+    vn_tmp::Vector{TR} # bus vector
+    vb_tmp::Vector{TR} # branch vector
 end
 
-function DCPowerFlow(branches::AbstractVector{<:Tuple{T2,T2}}, susceptance::AbstractVector{T1}, numnodes::Integer, slack::Integer
-) where {T1<:Real,T2<:Integer}
+function DCPowerFlow(branches::AbstractVector{<:Tuple{TI,TI}}, susceptance::AbstractVector{TR}, numnodes::Integer, slack::Integer
+) where {TI<:Integer,TR<:Real}
     A = calc_A(branches, numnodes)
     DA = calc_DA(A, susceptance)
     B = calc_B(A, DA)
     K = calc_klu(B, slack)
-    ϕ = calc_isf(K, DA, slack)
-    set_tol_zero!(ϕ)
-    X = calc_X(K, slack)
-    return DCPowerFlow{T1,T2}(DA, B, K, X, ϕ, zeros(T1, numnodes), zeros(T1, length(branches)), slack,
-        zeros(T1, size(DA)), calc_klu(B, slack), zeros(T1, size(X)), zeros(T1, size(ϕ)), zeros(T1, numnodes), zeros(T1, length(branches)))
+    X = SemiDenseX(K, slack)
+    ϕ = SemiDensePTDF(K, DA; slack=slack)
+    return DCPowerFlow{TI,TR}(DA, B, K, X, ϕ, zeros(TR, numnodes), zeros(TR, length(branches)), slack,
+        calc_klu(B, slack), zeros(TR, numnodes), zeros(TR, length(branches)))
 end
 DCPowerFlow(nodes::AbstractVector{<:Bus}, branches::AbstractVector{<:Branch}, idx::Dict{<:Int,<:Int}) =
     DCPowerFlow(get_bus_idx.(branches, [idx]), PowerSystems.get_series_susceptance.(branches), length(nodes), find_slack(nodes)[1])
@@ -42,7 +38,7 @@ end
 
 function DCPowerFlow(nodes::AbstractVector{<:Bus}, branches::AbstractVector{<:Branch}, idx::Dict{<:Int,<:Int}, Pᵢ::AbstractVector{<:Real})
     pf = DCPowerFlow(nodes, branches, idx)
-    calc_θ!(pf, Pᵢ)
+    run_pf!(pf, Pᵢ)
     calc_Pline!(pf)
     return pf
 end
@@ -54,6 +50,9 @@ get_K(pf::DCPowerFlow) = pf.K
 get_X(pf::DCPowerFlow) = pf.X
 get_ϕ(pf::DCPowerFlow) = pf.ϕ
 get_θ(pf::DCPowerFlow) = pf.θ
+
+calc_X_vec(pf::DCPowerFlow, bus::Integer) = getindex(pf.X, bus)
+calc_isf_vec(pf::DCPowerFlow, bus::Integer) = getindex(pf.ϕ, bus)
 
 set_θ!(pf::DCPowerFlow, model::Model) = copy!(pf.θ, get_sorted_angles(model))
 
@@ -85,7 +84,7 @@ function calc_Pᵢ_from_flow(branches::AbstractVector{<:Branch}, F::AbstractVect
 end
 
 """ Distributed slack """
-function set_dist_slack!(ϕ::AbstractMatrix{<:Real}, mgx::AbstractMatrix{<:Real}, dist_slack::AbstractVector{<:Real})
+function set_dist_slack!(ϕ::Matrix{<:Real}, mgx::AbstractMatrix{<:Real}, dist_slack::AbstractVector{<:Real})
     @assert !iszero(sum(dist_slack))
     slack_array = dist_slack / sum(dist_slack)
     ϕ = ϕ .- ((slack_array' * mgx) * ϕ')'
@@ -238,16 +237,6 @@ function calc_X!(X::Matrix{<:Real}, B::AbstractMatrix{T}, slack::Integer) where 
 end
 calc_X(B::AbstractMatrix{<:Real}, slack::Integer) = calc_X!(Matrix(B), B, slack)
 calc_X(K::KLU.KLUFactorization{T,<:Integer}, slack::Integer) where {T<:Real} = calc_X!(Matrix{T}(undef, size(K)), K, slack)
-
-function calc_X_vec!(x::Vector{T}, K::KLU.KLUFactorization{T,<:Integer}, bus::Integer, slack::Integer
-) where {T<:Real}
-    x .= zero(T)
-    x[bus] = one(T)
-    KLU.solve!(K, x)
-    x[slack] = zero(T)
-    return x
-end
-calc_X_vec(pf::DCPowerFlow, bus::Integer) = calc_X_vec!(pf.vn_tmp, pf.K, bus, pf.slack)
     
 calc_isf(DA::AbstractMatrix{<:Real}, X::AbstractMatrix{<:Real}) = DA * X
 calc_isf!(ϕ::AbstractMatrix{<:Real}, DA::AbstractMatrix{<:Real}, X::AbstractMatrix{<:Real}) =
@@ -272,14 +261,6 @@ function calc_isf(branches::AbstractVector{<:Branch}, nodes::AbstractVector{<:Bu
     B = calc_B(A, DA)
     return calc_isf!(B, DA, slack)
 end
-
-function calc_isf_vec!(ϕ_vec::Vector{T}, K::KLU.KLUFactorization{T,<:Integer}, DA::AbstractMatrix{T}, branch::Integer
-) where {T<:Real}
-    copyto!(ϕ_vec, Vector(DA[branch,:]))
-    KLU.solve!(K, ϕ_vec)
-    return ϕ_vec
-end
-calc_isf_vec(pf::DCPowerFlow, branch::Integer) = calc_isf_vec!(pf.vn_tmp, pf.K, pf.DA, branch)
 
 """ Find voltage angles from the factorization of the B-matrix and injected power. Change both θ and K """
 function _calc_θ!(θ::AbstractVector{T}, K::KLU.KLUFactorization{T,<:Integer}, P::AbstractVector{T}, slack::Integer
@@ -315,15 +296,11 @@ calc_Pline!(pf::DCPowerFlow) = LinearAlgebra.mul!(pf.F, pf.DA, pf.θ)
 
 """ DC line flow calculation using Injection Shift Factors and Power Injection vector"""
 calculate_line_flows(isf::AbstractMatrix{<:Real}, Pᵢ::AbstractVector{<:Real}) = isf * Pᵢ
-calculate_line_flows!(pf::DCPowerFlow, Pᵢ::AbstractVector{<:Real}) = LinearAlgebra.mul!(pf.F, pf.ϕ, Pᵢ)
+# calculate_line_flows!(pf::DCPowerFlow, Pᵢ::AbstractVector{<:Real}) = LinearAlgebra.mul!(pf.F, pf.ϕ, Pᵢ)
 
 """ DC power flow calculation using the Admittance matrix factorization and Power Injection vector returning the bus angles """
-function run_pf!(θ::AbstractVector{<:Real}, K::KLU.KLUFactorization, P::AbstractVector{<:Real}, slack::Integer)
-    copy!(θ, P)
-    KLU.solve!(K, θ)
-    θ[slack] = 0.0
-    return θ
-end
+run_pf!(θ::AbstractVector{<:Real}, K::KLU.KLUFactorization, P::AbstractVector{<:Real}, slack::Integer) =
+    _calc_θ!(θ, K, P, slack)
 run_pf(K::KLU.KLUFactorization, P::AbstractVector{<:Real}, slack::Integer) = run_pf!(similar(P), K, P, slack)
 function run_pf!(pf::DCPowerFlow, Pᵢ::AbstractVector{<:Real})
     copy!(pf.θ, Pᵢ)
@@ -334,7 +311,7 @@ end
 
 """ DC power flow calculation using the inverse Admittance matrix and Power Injection vector returning the bus angles """
 calc_θ(X::AbstractMatrix{<:Real}, P::AbstractVector{<:Real}) = X * P
-calc_θ!(pf::DCPowerFlow, Pᵢ::AbstractVector{<:Real}) = LinearAlgebra.mul!(pf.θ, pf.X, Pᵢ)
+# calc_θ!(pf::DCPowerFlow, Pᵢ::AbstractVector{<:Real}) = LinearAlgebra.mul!(pf.θ, pf.X, Pᵢ)
 
 """ Active Power Injection vector calculation using the Admittance matrix and the bus angles """
 calc_Pᵢ(B::AbstractMatrix{<:Real}, θ::AbstractVector{<:Real}) = B * θ

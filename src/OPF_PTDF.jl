@@ -61,7 +61,7 @@ end
 mutable struct Case{TR<:Real,TI<:Integer}
     model::Model
     opf::OPFsystem{TR}
-    pf::DCPowerFlow{TR,TI}
+    pf::DCPowerFlow{TI,TR}
     oplim::Oplimits{TR}
     brc_up::Dict{TI,ConstraintRef}
     brc_down::Dict{TI,ConstraintRef}
@@ -167,12 +167,9 @@ function add_branch_constraint!(m::Model, pf::DCPowerFlow, p::AbstractVector{Var
     brc_up::Dict{<:Integer, ConstraintRef}, brc_down::Dict{<:Integer, ConstraintRef}, branch::Integer, rating::Real
 )
     # ptdf = calc_isf_vec(pf, branch)
-    ptdf = view(pf.ϕ, branch, :)
     # ptdf0 = GenericAffExpr(0.0, Pair.(p, ptdf[i,:])) 
     ptdf0 = @expression(m, AffExpr())
-    for (i,j) in zip(ptdf, p)
-        add_to_expression!(ptdf0, i, j)
-    end
+    add_to_expression!.(ptdf0, pf.ϕ[branch, :], p)
     brc_down[branch] = @constraint(m, ptdf0 + rating >= 0.0)
     brc_up[branch] = @constraint(m, ptdf0 - rating <= 0.0)
     return mod
@@ -206,7 +203,7 @@ function update_model!(m::Model, pf::DCPowerFlow, total_solve_time::Real)
     solve_model!(m)
     total_solve_time += solve_time(m)
     Pᵢ = get_value(m, :p0)
-    calc_θ!(pf, Pᵢ)
+    run_pf!(pf, Pᵢ)
     calc_Pline!(pf)
     return total_solve_time
 end
@@ -216,7 +213,7 @@ function add_all_contingencies!(type::OPF, opf::OPFsystem, oplim::Oplimits, m::M
     Pc::Dict{<:Integer,ExprC}, Pcc::Dict{<:Integer,ExprCC}, Pccx::Dict{<:Integer,ExprCCX}
 )
     obj = objective_function(m)
-    set_dist_slack!(pf, opf, oplim.dist_slack)
+    !isempty(oplim.dist_slack) && set_dist_slack!(pf.ϕ, opf.mgx, oplim.dist_slack)
     for (i, c_obj) in enumerate(opf.contingencies)
         cont = typesort_component(c_obj, opf)
         if is_islanded(pf, cont[2], cont[1])

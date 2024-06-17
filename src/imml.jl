@@ -24,24 +24,28 @@ function calc_ptdf_vec!(vec::AbstractVector{<:Real}, Xf::AbstractVector{<:Real},
     cinv = 1 + x_c * (Xf[tbus] - Xf[fbus] + Xt[fbus] - Xt[tbus])
     xft = -Xf[kbus] + Xt[kbus] + Xf[lbus] - Xt[lbus]
     @. vec = x_l * ((Xk - Xl) - x_c * xft / cinv * (Xf - Xt))
-    # set_tol_zero!(vec)
+    set_tol_zero!(vec)
     # xftl = Xl .- x_c * (Xt .- Xf) * (Xf[lbus] - Xt[lbus]) / cinv
     # xftk = Xk .- x_c * (Xt .- Xf) * (Xf[kbus] - Xt[kbus]) / cinv
     # vec = x_l * (xftk .- xftl)
     return vec
 end
 
-function calc_ptdf_vec(B::AbstractMatrix{<:Real}, DA::AbstractMatrix{<:Real}, K::KLU.KLUFactorization{T,<:Integer}, slack::Integer, 
+function calc_ptdf_vec(B::AbstractMatrix{T}, DA::AbstractMatrix{<:Real}, Xf::AbstractVector{T}, Xt::AbstractVector{T}, Xk::AbstractVector{T}, Xl::AbstractVector{T}, 
     cbranch::Integer, fbus::Integer, tbus::Integer, sbranch::Integer, kbus::Integer, lbus::Integer#; atol::Real=1e-10
 ) where {T<:Real}
     n = size(B, 1)
-    Xf = calc_X_vec!(Vector{T}(undef, n), K, fbus, slack)
-    Xt = calc_X_vec!(Vector{T}(undef, n), K, tbus, slack)
-    Xk = calc_X_vec!(Vector{T}(undef, n), K, kbus, slack)
-    Xl = calc_X_vec!(Vector{T}(undef, n), K, lbus, slack)
     c_b = -B[fbus, tbus] * DA[cbranch, tbus] / B[fbus, tbus]
     s_b = -B[kbus, lbus] * DA[sbranch, lbus] / B[kbus, lbus]
     return calc_ptdf_vec!(Vector{T}(undef, n), Xf, Xt, Xk, Xl, c_b, s_b, fbus, tbus, kbus, lbus)
+end
+
+@views function calc_ptdf_vec!(ϕ::AbstractVector{T}, pf::DCPowerFlow{<:Integer,T}, cbranch::Integer, fbus::Integer, tbus::Integer, sbranch::Integer, kbus::Integer, lbus::Integer#; atol::Real=1e-10
+) where {T<:Real}
+    c_b = -pf.B[fbus, tbus] * pf.DA[cbranch, tbus] / pf.B[fbus, tbus]
+    s_b = -pf.B[kbus, lbus] * pf.DA[sbranch, lbus] / pf.B[kbus, lbus]
+    return calc_ptdf_vec!(ϕ, pf.X[:,fbus], pf.X[:,tbus], pf.X[:,kbus], pf.X[:,lbus], 
+        c_b, s_b, fbus, tbus, kbus, lbus)
 end
 
 """ Multi contingency Woodbury """
@@ -87,21 +91,55 @@ Input:
     # x = change * (X[:, from_bus] - X[:, to_bus])
     c⁻¹ = inv(B[from_bus, to_bus]) + change * (X[from_bus, from_bus] - X[from_bus, to_bus] - X[to_bus, from_bus] + X[to_bus, to_bus])
     if isapprox(c⁻¹, zero(T); atol=atol)
-        if size(SparseArrays.getindex(B,from_bus,:).nzind, 1) <= 2 # Assummes only one islanded bus
-            c⁻¹ = inv(B[from_bus, to_bus]) + change * (- X[from_bus, to_bus] + X[to_bus, to_bus])
-            delta = inv(c⁻¹) * (θ₀[from_bus] - θ₀[to_bus])
-            @. θ = θ₀ - (- X[:, to_bus]) * delta * change
-        elseif size(SparseArrays.getindex(B,to_bus,:).nzind, 1) <= 2
-            c⁻¹ = inv(B[from_bus, to_bus]) + change * (X[from_bus, from_bus] - X[to_bus, from_bus])
-            delta = inv(c⁻¹) * (θ₀[from_bus] - θ₀[to_bus])
-            @. θ = θ₀ - (X[:, from_bus]) * delta * change
-        else
-            return throw(DivideError())
-        end
-    else
-        delta = inv(c⁻¹) * (θ₀[from_bus] - θ₀[to_bus])
-        @. θ = θ₀ - (X[:, from_bus] - X[:, to_bus]) * delta * change
+        return throw(DivideError())
     end
+    delta = inv(c⁻¹) * (θ₀[from_bus] - θ₀[to_bus])
+    @. θ = θ₀ - (X[:, from_bus] - X[:, to_bus]) * delta * change
+    return θ
+end
+@views function calc_changed_angles!(
+    θ::AbstractVector{T},
+    X::AbstractMatrix{T},
+    B::AbstractMatrix{T},
+    DA::AbstractMatrix{T},
+    θ₀::AbstractVector{T},
+    from_bus::Integer,
+    to_bus::Integer,
+    branch::Integer,
+    ::Val{1}; # from_bus is not connected to the system;
+    atol::Real=1e-10
+) where {T<:Real}
+    change = DA[branch, to_bus] / B[from_bus, to_bus]
+    # x = change * (X[:, from_bus] - X[:, to_bus])
+    c⁻¹ = inv(B[from_bus, to_bus]) + change * (- X[from_bus, to_bus] + X[to_bus, to_bus])
+    if isapprox(c⁻¹, zero(T); atol=atol)
+        return throw(DivideError())
+    end
+    delta = inv(c⁻¹) * (θ₀[from_bus] - θ₀[to_bus])
+    @. θ = θ₀ - (- X[:, to_bus]) * delta * change
+    return θ
+end
+
+@views function calc_changed_angles!(
+    θ::AbstractVector{T},
+    X::AbstractMatrix{T},
+    B::AbstractMatrix{T},
+    DA::AbstractMatrix{T},
+    θ₀::AbstractVector{T},
+    from_bus::Integer,
+    to_bus::Integer,
+    branch::Integer,
+    ::Val{2}; # to_bus is not connected to the system;
+    atol::Real=1e-10
+) where {T<:Real}
+    change = DA[branch, to_bus] / B[from_bus, to_bus]
+    # x = change * (X[:, from_bus] - X[:, to_bus])
+    c⁻¹ = inv(B[from_bus, to_bus]) + change * (X[from_bus, from_bus] - X[to_bus, from_bus])
+    if isapprox(c⁻¹, zero(T); atol=atol)
+        return throw(DivideError())
+    end
+    delta = inv(c⁻¹) * (θ₀[from_bus] - θ₀[to_bus])
+    @. θ = θ₀ - (X[:, from_bus]) * delta * change
     return θ
 end
 
@@ -138,13 +176,39 @@ function calc_Pline!(
     X::AbstractMatrix{<:Real},
     B::AbstractMatrix{<:Real},
     DA::AbstractMatrix{<:Real},
-    θ₀::AbstractVector{<:Real},
+    K::AbstractVector{<:Real},
     Pᵢ::AbstractVector{<:Real},
     cont::Tuple{Integer,Integer},
     branch::Integer
 )
-    θ₂ = calc_θ(X, Pᵢ)
+    θ₂ = run_pf(K, Pᵢ, slack)
     return calc_Pline!(F, θ, X, B, DA, θ₂, cont, branch)
+end
+
+function calc_Pline!(
+    F::AbstractVector{<:Real},
+    θ::AbstractVector{<:Real},
+    pf::DCPowerFlow,
+    cont::Tuple{Integer,Integer},
+    branch::Integer;
+    Pᵢ::AbstractVector{<:Real} = Float64[],
+    nodes::AbstractVector{<:Integer} = Int[],
+    branches::AbstractVector{<:Integer} = Int[]
+)
+    if !isempty(Pᵢ)
+        θ₂ = run_pf(pf.K, Pᵢ, pf.slack)
+    else
+        θ₂ = pf.θ
+    end
+    if !isempty(nodes)
+        island = not_insorted_nodes(cont[1], cont[2], nodes)
+        calc_changed_angles!(θ, pf.X, pf.B, pf.DA, θ₂, cont[1], cont[2], branch, Val(island))
+        LinearAlgebra.mul!(F, pf.DA, θ)
+        zero_not_in_array!(F, branches)
+    else
+        calc_Pline!(F, θ, pf.X, pf.B, pf.DA, θ₂, cont, branch)
+    end
+    return F
 end
 
 """
@@ -222,7 +286,7 @@ function calc_isf(
     cont::Tuple{Integer,Integer},
     branch::Integer
 )
-    return calc_isf!(similar(pf.mbn_tmp), similar(pf.mnn_tmp), pf.X, pf.B, pf.DA, cont, branch)
+    return calc_isf!(similar(pf.ϕ), similar(pf.X), pf.X, pf.B, pf.DA, cont, branch)
 end
 
 function calc_isf(pf::DCPowerFlow, cont::Real, c::Integer)
@@ -328,8 +392,8 @@ function calculate_line_flows!(
     branches::AbstractVector{<:Integer} = Int[]
 )
     if !isempty(Pᵢ)
-        θ = run_pf!(similar(pf.vn_tmp), pf.K, Pᵢ, pf.slack)
-        F = LinearAlgebra.mul!(similar(pf.vb_tmp), pf.DA, θ)
+        θ = run_pf!(pf.vn_tmp, pf.K, Pᵢ, pf.slack)
+        F = LinearAlgebra.mul!(pf.vb_tmp, pf.DA, θ)
     else
         θ = pf.θ
         F = pf.F
