@@ -141,7 +141,6 @@ end
 """ 
     Make the isf-matrix after a line outage using base case D*A and B. 
     cont[1] (from_bus), cont[2] (to_bus), and cont_branch are index numbers.
-    slack needs to be in the Vector island.
 """
 function calc_isf!(ϕ::AbstractMatrix{<:Real}, DA::AbstractMatrix{<:Real}, B0::AbstractMatrix{<:Real}, 
     cont::AbstractVector{<:Tuple{Integer,Integer}}, cont_branch::AbstractVector{<:Integer}, slack::Integer
@@ -157,6 +156,19 @@ calc_isf(DA::AbstractMatrix{T}, B::AbstractMatrix{<:Real}, cont::AbstractVector{
 ) where {T<:Real} =
     calc_isf!(Matrix{T}(undef, size(DA)), DA, B, cont, cont_branch, slack)
 
+function calc_isf_vec!(ϕ::AbstractVector{<:Real}, DA::AbstractMatrix{<:Real}, B0::AbstractMatrix{<:Real}, 
+    cont::AbstractVector{<:Tuple{Integer,Integer}}, cont_branch::AbstractVector{<:Integer}, branch::Integer, slack::Integer
+)
+    B = calc_cont_B(DA, B0, cont, cont_branch, slack)
+    K = calc_klu!(B, slack)
+    calc_isf_vec!(ϕ, K, DA, branch, slack)
+    return ϕ
+end
+calc_isf_vec(DA::AbstractMatrix{T}, B::AbstractMatrix{<:Real}, cont::AbstractVector{<:Tuple{Integer,Integer}}, 
+    cont_branch::AbstractVector{<:Integer}, branch::Integer, slack::Integer
+) where {T<:Real} =
+    calc_isf_vec!(Vector{T}(undef, size(DA,2)), DA, B, cont, cont_branch, branch, slack)
+    
 """ 
     Make the isf-matrix after a line outage, which splits the system, using base case D*A and B. 
     cont[1] (from_bus), cont[2] (to_bus), and cont_branch are index numbers.
@@ -175,22 +187,35 @@ calc_isf(DA::AbstractMatrix{T}, B0::AbstractMatrix{<:Real}, cont::AbstractVector
     cont_branch::AbstractVector{<:Integer}, slack::Integer, nodes::AbstractVector{<:Integer}, branches::AbstractVector{<:Integer}
 ) where {T<:Real} = calc_isf!(Matrix{T}(undef, size(DA)), DA, B0, cont, cont_branch, slack, nodes, branches)
 
+function calc_isf_vec!(ϕ::AbstractVector{T}, DA::AbstractMatrix{<:Real}, B0::AbstractMatrix{<:Real}, cont::AbstractVector{<:Tuple{Integer,Integer}}, 
+    cont_branch::AbstractVector{<:Integer}, branch::Integer, slack::Integer, nodes::AbstractVector{<:Integer}, branches::AbstractVector{<:Integer}
+) where {T<:Real}
+    B = calc_cont_B(DA, B0, cont, cont_branch, nodes)
+    K = calc_klu!(B, slack)
+    fill!(ϕ, zero(T))
+    ϕ[nodes] .= calc_isf_vec!(ϕ[nodes], K, view(DA, :, nodes), branch, slack)
+    return ϕ
+end
+calc_isf_vec(DA::AbstractMatrix{T}, B0::AbstractMatrix{<:Real}, cont::AbstractVector{<:Tuple{Integer,Integer}}, 
+    cont_branch::AbstractVector{<:Integer}, branch::Integer, slack::Integer, nodes::AbstractVector{<:Integer}, branches::AbstractVector{<:Integer}
+) where {T<:Real} = calc_isf_vec!(Vector{T}(undef, size(DA,2)), DA, B0, cont, cont_branch, branch, slack, nodes, branches)
+
 """ Only for single branch contingnecies on a radial """
 function calc_isf!(ϕ::AbstractMatrix{<:Real}, ϕ₀::AbstractMatrix{<:Real},
-    nodes::AbstractVector{<:Integer}, branches::AbstractVector{<:Integer}
+    node::Integer, branch::Integer
 )
     copy!(ϕ, ϕ₀)
-    zero_not_in_array!(ϕ, nodes, Val(2))
-    zero_not_in_array!(ϕ, branches, Val(1))
+    zero_not_in_array!(ϕ, node, Val(2))
+    zero_not_in_array!(ϕ, branch, Val(1))
     return ϕ
 end
 
 """ Only for single branch contingnecies on a radial """
 function calculate_line_flows!(F::AbstractVector{<:Real}, ϕ::AbstractMatrix{<:Real}, ϕ₀::AbstractMatrix{<:Real}, Pᵢ::AbstractVector{<:Real}, 
-    nodes::AbstractVector{<:Integer}, branches::AbstractVector{<:Integer}
+    node::Integer, branch::Integer
 )
-    calc_isf!(ϕ, ϕ₀, nodes, branches)
+    calc_isf!(ϕ, ϕ₀, node, branch)
     LinearAlgebra.mul!(F, ϕ, Pᵢ)
-    zero_not_in_array!(F, branches)
+    zero_not_in_array!(F, branch)
     return F
 end

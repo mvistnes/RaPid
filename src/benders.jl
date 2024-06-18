@@ -108,6 +108,7 @@ function run_benders!(
     olccx = Vector{Tuple{Int64,Float64}}()
     islands = [Vector{Int64}()]
     islands_b = [Vector{Int64}()]
+    ptdf = similar(pf.vn_tmp)
 
     overloads = zeros(length(opf.contingencies))
     # PI = zeros(length(opf.contingencies))
@@ -189,42 +190,30 @@ function run_benders!(
             if type.C2F
                 olccx = [calculate_contingency_overload!(ΔPccx, brlt, Pccx, opf, m, pf, bd, c_n, c_i, c, inodes, ibranches, s, atol) for (inodes, ibranches, s) in zip(islands, islands_b, slack)]
             end
-            if sum(.!isempty.(olc)) + sum(.!isempty.(olcc)) + sum(.!isempty.(olccx)) > 0 # ptdf calculation is more computational expensive than line flow
-                if is_islanded(pf, c_n, c_i)
-                    ptdf = Matrix{Float64}[]
-                    for (inodes, ibranches, s) in zip(islands, islands_b, slack)
-                        push!(ptdf, calc_isf(pf.DA, pf.B, c_n, c_i, s, inodes, ibranches))
-                    end
-                else
-                    ptdf = [calc_isf(pf, c_n, c_i)]
-                    set_tol_zero!.(ptdf)
-                end
-
-                type.C1 && get(Pc, c, 0) == 0 && fill!(ΔPc, 0.0)
-                type.C2 && get(Pcc, c, 0) == 0 && fill!(ΔPcc, 0.0)
-                type.C2F && get(Pccx, c, 0) == 0 && fill!(ΔPccx, 0.0)
-            end
 
             # Cannot change the model before all data is exctracted!
             if sum(.!isempty.(olc)) > 0
+                type.C1 && get(Pc, c, 0) == 0 && fill!(ΔPc, 0.0)
                 if type.P
                     for (j,ol) in enumerate(olc)
-                        pre = add_cut(opf, m, brst, ptdf[j], ol, c_obj, cut_added, atol, pre)
+                        pre = add_cut(pf, m, brst, ptdf, ol, c_obj, cut_added, atol, pre, islands, j, islands_b, c_n, c_i)
                     end
                 elseif type.C1
                     for (j,ol) in enumerate(olc)
-                        corr1 = add_cut(Pc, opf, oplim, m, bd, brst, ΔPc, ptdf[j], ol, islands, c_obj, c, cut_added, atol, corr1)
+                        corr1 = add_cut(Pc, pf, opf, oplim, m, bd, brst, ptdf, ol, islands, j, islands_b, c_n, c_i, c_obj, c, cut_added, atol, corr1)
                     end
                 end
             end
             if sum(.!isempty.(olcc)) > 0
+                type.C2 && get(Pcc, c, 0) == 0 && fill!(ΔPcc, 0.0)
                 for (j,ol) in enumerate(olcc)
-                    corr2 = add_cut(Pcc, opf, oplim, m, bd, brlt, ΔPcc, ptdf[j], ol, islands, c_obj, c, cut_added, atol, corr2)
+                    corr2 = add_cut(Pcc, pf, opf, oplim, m, bd, brlt, ptdf, ol, islands, j, islands_b, c_n, c_i, c_obj, c, cut_added, atol, corr2)
                 end
             end
             if sum(.!isempty.(olccx)) > 0
+                type.C2F && get(Pccx, c, 0) == 0 && fill!(ΔPccx, 0.0)
                 for (j,ol) in enumerate(olccx)
-                    corr2f = add_cut(Pccx, opf, oplim, m, bd, brlt, ΔPccx, ptdf[j], ol, islands, c_obj, c, cut_added, atol, corr2f)
+                    corr2f = add_cut(Pccx, pf, opf, oplim, m, bd, brlt, ptdf, ol, islands, j, islands_b, c_n, c_i, c_obj, c, cut_added, atol, corr2f)
                 end
             end
             # if !isempty(cut_added)
@@ -425,14 +414,17 @@ function add_overload_expr!(m::Model, expr::JuMP.AbstractJuMPScalar, ol::Real, r
     end
 end
 
-function add_cut(opf::OPFsystem, m::Model, rate::Vector{<:Real}, ptdf::AbstractMatrix{<:Real}, overloads::Vector{<:Tuple{Integer,Real}},
-    c_obj::Pair{String, Vector{Int64}}, cut_added::Vector, atol::Real, id::Integer
+function add_cut(pf::DCPowerFlow, m::Model, rate::Vector{<:Real}, ptdf::AbstractVector{<:Real}, overloads::Vector{<:Tuple{Integer,Real}},
+    c_obj::Pair{String, Vector{Int64}}, cut_added::Vector, atol::Real, id::Integer, islands::Vector, island::Integer, islands_b::Vector, c_n, c_i
 )
     for (i, ol) in overloads
-        expr = AffExpr() #+ sum(ptdf[i, :] .* bd.Pᵢ)
-        for j in axes(ptdf,2)
-            add_to_expression!(expr, ptdf[i, j], m[:inj_p0][j])
+        if is_islanded(pf, c_n, c_i)
+            calc_isf_vec!(ptdf, pf.DA, pf.B, c_n, c_i, i, pf.slack, islands[island], islands_b[island])
+        else
+            calc_isf_vec!(ptdf, pf.DA, pf.B, c_n, c_i, i, pf.slack)
         end
+        expr = AffExpr() #+ sum(ptdf[i, :] .* bd.Pᵢ)
+        add_to_expression!.(expr, ptdf, m[:inj_p0])
 
         id += 1
         push!(cut_added, add_overload_expr!(m, expr, ol, rate[i], "Pre", id, c_obj, i, atol))
@@ -441,8 +433,8 @@ function add_cut(opf::OPFsystem, m::Model, rate::Vector{<:Real}, ptdf::AbstractM
 end
 
 """ Finding and adding Benders cuts to mitigate overloads from one contingency """
-function add_cut(P::Dict{<:Integer, <:ContExpr}, opf::OPFsystem, oplim::Oplimits, m::Model, bd::Benders, rate::Vector{<:Real}, ΔP::Vector{<:Real},
-    ptdf::AbstractMatrix{<:Real}, overloads::Vector{<:Tuple{Integer,Real}}, islands::Vector,
+function add_cut(P::Dict{<:Integer, <:ContExpr}, pf::DCPowerFlow, opf::OPFsystem, oplim::Oplimits, m::Model, bd::Benders, rate::Vector{<:Real},
+    ptdf::AbstractVector{<:Real}, overloads::Vector{<:Tuple{Integer,Real}}, islands::Vector, island::Integer, islands_b::Vector, c_n, c_i,
     c_obj::Pair{String, Vector{Int64}}, c::Integer, cut_added::Vector, atol::Real, id::Integer
 )
     p = get(P, c, 0)
@@ -451,9 +443,14 @@ function add_cut(P::Dict{<:Integer, <:ContExpr}, opf::OPFsystem, oplim::Oplimits
         p = get(P, c, 0)
     end
     for (i, ol) in overloads
+        if is_islanded(pf, c_n, c_i)
+            calc_isf_vec!(ptdf, pf.DA, pf.B, c_n, c_i, i, pf.slack, islands[island], islands_b[island])
+        else
+            calc_isf_vec!(ptdf, pf.DA, pf.B, c_n, c_i, i, pf.slack)
+        end
         expr = make_cut(p, opf, m)
         # add_to_expression!.(expr, bd.Pᵢ + ΔP)
-        expr2 = JuMP.@expression(m, sum((ptdf[i, :] .* expr)))
+        expr2 = JuMP.@expression(m, sum((ptdf .* expr)))
 
         id += 1
         push!(cut_added, add_overload_expr!(m, expr2, ol, rate[i], get_name(p), id, c_obj, i, atol))
