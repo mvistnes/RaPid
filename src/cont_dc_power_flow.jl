@@ -202,7 +202,7 @@ calc_isf_vec(DA::AbstractMatrix{T}, B0::AbstractMatrix{<:Real}, cont::AbstractVe
 
 """ Only for single branch contingnecies on a radial """
 function calc_isf!(ϕ::AbstractMatrix{<:Real}, ϕ₀::AbstractMatrix{<:Real},
-    node::Integer, branch::Integer
+    node::Vector, branch::Vector
 )
     copy!(ϕ, ϕ₀)
     zero_not_in_array!(ϕ, node, Val(2))
@@ -212,7 +212,7 @@ end
 
 """ Only for single branch contingnecies on a radial """
 function calculate_line_flows!(F::AbstractVector{<:Real}, ϕ::AbstractMatrix{<:Real}, ϕ₀::AbstractMatrix{<:Real}, Pᵢ::AbstractVector{<:Real}, 
-    node::Integer, branch::Integer
+    node::Vector, branch::Vector
 )
     calc_isf!(ϕ, ϕ₀, node, branch)
     LinearAlgebra.mul!(F, ϕ, Pᵢ)

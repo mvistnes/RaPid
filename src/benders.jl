@@ -421,7 +421,7 @@ function add_cut(pf::DCPowerFlow, m::Model, rate::Vector{<:Real}, ptdf::Abstract
         if is_islanded(pf, c_n, c_i)
             calc_isf_vec!(ptdf, pf.DA, pf.B, c_n, c_i, i, pf.slack, islands[island], islands_b[island])
         else
-            calc_isf_vec!(ptdf, pf.DA, pf.B, c_n, c_i, i, pf.slack)
+            calc_isf_vec!(ptdf, pf, c_n, c_i, Tuple(pf.DA[i,:].nzind), i)
         end
         expr = AffExpr() #+ sum(ptdf[i, :] .* bd.Pᵢ)
         add_to_expression!.(expr, ptdf, m[:inj_p0])
@@ -446,7 +446,7 @@ function add_cut(P::Dict{<:Integer, <:ContExpr}, pf::DCPowerFlow, opf::OPFsystem
         if is_islanded(pf, c_n, c_i)
             calc_isf_vec!(ptdf, pf.DA, pf.B, c_n, c_i, i, pf.slack, islands[island], islands_b[island])
         else
-            calc_isf_vec!(ptdf, pf.DA, pf.B, c_n, c_i, i, pf.slack)
+            calc_isf_vec!(ptdf, pf, c_n, c_i, Tuple(pf.DA[i,:].nzind), i)
         end
         expr = make_cut(p, opf, m)
         # add_to_expression!.(expr, bd.Pᵢ + ΔP)

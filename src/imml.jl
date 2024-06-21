@@ -22,6 +22,20 @@ function calc_X(X::AbstractMatrix{T}, A::AbstractMatrix{<:Real}, D::AbstractMatr
     set_tol_zero!(mx, atol)
     return mx
 end
+function calc_X_vec(X::AbstractMatrix{T}, A::AbstractMatrix{<:Real}, D::AbstractMatrix{<:Real}, 
+    cbranches::AbstractVector{<:Integer}, node::Integer; atol::Real=1e-10
+) where {T<:Real}
+    H = A[cbranches,:]
+    G = D[cbranches, cbranches]
+    XF = X * H'
+    cinv = inv(G) - H * XF
+    if isapprox(cinv, zero(T); atol=atol)
+        return throw(DivideError())
+    end
+    mx = X[:,node] + XF * inv(cinv) * XF'[:,node]
+    set_tol_zero!(mx, atol)
+    return mx
+end
 
 """ Get the isf-matrix after a line outage using Sherman Morrison Woodbury. """
 function calc_isf(
@@ -36,6 +50,32 @@ function calc_isf(
         X = calc_X(pf.X, pf.A, pf.D, branch)
         calc_isf!(ϕ, pf.DA, X)
         ϕ[branch, :] .= 0.0
+        set_tol_zero!(ϕ)
+    end
+    return ϕ
+end
+function calc_isf_vec!(
+    ϕ::AbstractVector{T},
+    pf::DCPowerFlow,
+    cont::AbstractVector{<:Tuple{Integer,Integer}},
+    cbranches::AbstractVector{<:Integer}, 
+    nodes::Tuple{<:Integer,<:Integer},
+    branch::Integer; 
+    atol::Real=1e-10
+) where {T<:Real}
+    if branch ∈ cbranches
+        fill!(ϕ, zero(T))
+    elseif length(cont) < 2
+        calc_isf_vec!(ϕ, pf.X, pf.ϕ, pf.B, pf.DA, cont[1], cbranches[1], nodes, branch)
+    else
+        H = pf.A[cbranches,:]
+        G = pf.D[cbranches, cbranches]
+        XF = pf.X * H'
+        cinv = inv(G) - H * XF
+        if isapprox(cinv, zero(T); atol=atol)
+            return throw(DivideError())
+        end
+        ϕ .= pf.ϕ[branch,:] + pf.DA[branch,nodes[1]] * (XF * inv(cinv) * (XF'[:,nodes[1]] - XF'[:,nodes[2]]))
         set_tol_zero!(ϕ)
     end
     return ϕ
@@ -102,24 +142,74 @@ Input:
     copy!(X, X₀)
     LinearAlgebra.mul!(X, x, x', -change * inv(c⁻¹), true) # mul!(C, A, B, α, β) -> C == $A B α + C β$
 end
+@views function calc_changed_X_vec!(
+    X::AbstractVector{T},
+    X₀::AbstractMatrix{T},
+    B::AbstractMatrix{T},
+    DA::AbstractMatrix{T},
+    from_bus::Integer,
+    to_bus::Integer,
+    branch::Integer,
+    node::Integer;
+    atol::Real=1e-10
+) where {T<:Real}
+
+    # X_new = X - (X*A[from_bus,:]*DA[from_bus,to_bus]*x)/(1+DA[from_bus,to_bus]*x*A[from_bus,:])
+    change = DA[branch, to_bus] / B[from_bus, to_bus]
+    x = X₀[:, from_bus] - X₀[:, to_bus]
+    c⁻¹ = inv(B[to_bus, from_bus]) + change * (x[from_bus] - x[to_bus])
+    if isapprox(c⁻¹, zero(T); atol=atol)
+        throw(DivideError())
+    end
+    # delta = 1/c⁻¹ * x
+    copy!(X, X₀[node,:])
+    LinearAlgebra.mul!(X, x, x'[node], -change * inv(c⁻¹), true) # mul!(C, A, B, α, β) -> C == $A B α + C β$
+end
 
 """ Get the isf-matrix after a line outage using IMML. 
     isf and X are containers for output and calculation and will be overwritten """
 function calc_isf!(
-    isf::AbstractMatrix{<:Real},
+    isf::AbstractMatrix{T},
     X::AbstractMatrix{<:Real},
     X₀::AbstractMatrix{<:Real},
     B::AbstractMatrix{<:Real},
     DA::AbstractMatrix{<:Real},
     cont::Tuple{Integer,Integer},
     branch::Integer
-)
+) where {T<:Real}
     calc_changed_X!(X, X₀, B, DA, cont[1], cont[2], branch)
     calc_isf!(isf, DA, X)
-    isf[branch, :] .= 0.0
+    isf[branch, :] .= zero(T)
     set_tol_zero!(isf)
     return isf
 end
+function calc_isf_vec!(
+    isf::AbstractVector{T},
+    X₀::AbstractMatrix{<:Real},
+    ϕ::AbstractMatrix{<:Real},
+    B::AbstractMatrix{<:Real},
+    DA::AbstractMatrix{<:Real},
+    cont::Tuple{Integer,Integer},
+    cbranch::Integer,
+    nodes::Tuple{Integer,Integer},
+    branch::Integer;
+    atol::Real=1e-10
+) where {T<:Real}
+    if branch == cbranch
+        isf .= zero(T)
+    else
+        change = DA[cbranch, cont[2]] / B[cont[1], cont[2]]
+        x = X₀[:, cont[1]] - X₀[:, cont[2]]
+        c⁻¹ = inv(B[cont[2], cont[1]]) + change * (x[cont[1]] - x[cont[2]])
+        if isapprox(c⁻¹, zero(T); atol=atol)
+            throw(DivideError())
+        end
+        isf .=  ϕ[branch,:] - DA[branch,nodes[1]] * change * inv(c⁻¹) * x * (x'[nodes[1]] - x'[nodes[2]])
+        set_tol_zero!(isf)
+    end
+    return isf
+end
+
 
 """ Get the isf-matrix after a line outage using IMML. 
      """
@@ -128,9 +218,17 @@ function calc_isf(
     cont::Tuple{Integer,Integer},
     branch::Integer
 )
-    calc_isf!(pf.mbn_tmp, pf.mnn_tmp, pf.X, pf.B, pf.DA, cont, branch)
-    return pf.mbn_tmp
+    return calc_isf!(pf.mbn_tmp, pf.mnn_tmp, pf.X, pf.B, pf.DA, cont, branch)
 end
+function calc_isf_vec(
+    pf::DCPowerFlow,
+    cont::Tuple{Integer,Integer},
+    cbranch::Integer,
+    branch::Integer
+)
+    return calc_isf_vec!(pf.vn_tmp, pf.X, pf.ϕ, pf.B, pf.DA, cont, cbranch, branch)
+end
+
 
 function calc_isf(pf::DCPowerFlow, cont::Real, c::Integer)
     return pf.ϕ

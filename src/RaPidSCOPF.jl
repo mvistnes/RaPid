@@ -3,7 +3,7 @@
 module RaPidSCOPF
 
 using PowerSystems
-using PowerModels
+# using PowerModels
 using DataFrames
 using JuMP
 # using Plots
