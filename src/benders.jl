@@ -380,6 +380,12 @@ function get_ΔP!(ΔP::Vector{T}, m::Model, opf::OPFsystem,
     x = get(P, c, 0)
     if x != 0
         copy!(ΔP, get_ΔP(x, opf, m))
+        sumP = sum(ΔP)
+        if sumP > 1e-6
+            ΔP .+= (get_value(m, m[:pgru])' * opf.mgx) .* sumP
+        elseif sumP < -1e-6
+            ΔP .+= (get_value(m, m[:pgrd])' * opf.mgx) .* sumP
+        end
     else
         fill!(ΔP, zero(T))
     end
