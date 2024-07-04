@@ -129,55 +129,64 @@ function run_test_benders()
     return rt
 end
 
-function run_test_scopf(system, voll, prob, contingencies, max_shed, ramp_mult, ramp_minutes, short, long, time_limit_sec)
+function run_test_scopf(system, voll, prob, contingencies, max_shed, ramp_mult, ramp_minutes, short, long, dist_slack, time_limit_sec)
     result = Dict()
     for type in [SCOPF.Base_SCOPF, SCOPF.P_SCOPF, SCOPF.PC2_SCOPF]
         println(type)
-        SCOPF.run_benders_type!(result, type, SCOPF.PC2_SCOPF, Gurobi.Optimizer(), Gurobi.Optimizer(), system, voll, prob, contingencies, max_shed, ramp_mult, ramp_minutes, short, long, p_failure=0.00)
+        SCOPF.run_benders_type!(result, type, SCOPF.PC2_SCOPF, Gurobi.Optimizer(GRB_ENV), Gurobi.Optimizer(GRB_ENV), 
+            system, voll, prob, contingencies, max_shed, ramp_mult, ramp_minutes, short, long, dist_slack, time_limit_sec)
     end
     return result
 end
 
-function run_test_scopf_simple(system, voll, prob, contingencies, max_shed, ramp_mult, ramp_minutes, short, long, time_limit_sec)
+function run_test_scopf_simple(system, voll, prob, contingencies, max_shed, ramp_mult, ramp_minutes, short, long, dist_slack, time_limit_sec; all_post_c=true)
     result = Dict()
     for type in [SCOPF.Base_SCOPF, SCOPF.P_SCOPF, SCOPF.OPF(true, false, true, false, false), SCOPF.OPF(true, false, false, true, false), SCOPF.PC_SCOPF, SCOPF.PC2_SCOPF]
         println(type)
-        case, _ = SCOPF.run_benders(type, system, Gurobi.Optimizer(), voll, prob, contingencies, max_shed=max_shed, ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=0.00, all_post_c=true);
+        case, _ = SCOPF.run_benders(type, system, Gurobi.Optimizer(GRB_ENV), voll, prob, contingencies, max_shed=max_shed, 
+            ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, dist_slack=dist_slack, 
+            time_limit_sec=time_limit_sec, all_post_c=all_post_c);
         result[type] = SCOPF.extract_results(case)
     end
     return result
 end
 
-function run_tests(system, voll, prob, contingencies, max_shed, ramp_mult, ramp_minutes, short, long, time_limit_sec)
+function run_tests(system, voll, prob, contingencies, max_shed, ramp_mult, ramp_minutes, short, long, dist_slack, time_limit_sec; all_post_c=true)
     result = []
     logrange(start,stepmul,length) = start .* stepmul .^ (0:(length-1))
-    for x in logrange(0.1, 2, 10)
-        push!(result, x => run_test_scopf_simple(system, voll*x, prob, contingencies, max_shed, ramp_mult, ramp_minutes, short, long, 10))
+    for x in logrange(1, 5, 5)
+        push!(result, x => run_test_scopf_simple(system, voll*x, prob, contingencies, max_shed, ramp_mult, ramp_minutes, short, 
+            long, dist_slack, time_limit_sec, all_post_c=all_post_c))
     end
     return result
 end
 
-function run_range(system, voll, prob, contingencies, max_shed, ramp_mult, ramp_minutes, short, long, time_limit_sec)
+function run_range(system, voll, prob, contingencies, max_shed, ramp_mult, ramp_minutes, short, long, dist_slack, time_limit_sec; all_post_c=true)
     result = []
     logrange(start,stepmul,length) = start .* stepmul .^ (0:(length-1))
     for x in logrange(0.1, 2, 10)
-        case, tot_t = SCOPF.run_benders(SCOPF.PC2_SCOPF, system, Gurobi.Optimizer(), voll*x, prob, contingencies, max_shed=max_shed, ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=0.00, all_post_c=true);
+        case, tot_t = SCOPF.run_benders(SCOPF.PC2_SCOPF, system, Gurobi.Optimizer(GRB_ENV), voll*x, prob, contingencies, 
+            max_shed=max_shed, ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, 
+            dist_slack=dist_slack, time_limit_sec=time_limit_sec, all_post_c=all_post_c);
         push!(result, x => SCOPF.extract_results(case))
     end
     return result
 end
 
-function run_load_profile(system, voll, prob, contingencies, max_shed, ramp_mult, ramp_minutes, short, long, time_limit_sec)
+function run_load_profile(system, voll, prob, contingencies, max_shed, ramp_mult, ramp_minutes, short, long, dist_slack, time_limit_sec; all_post_c=true)
     demands = SCOPF.sort_components!((SCOPF.get_demands(system)))
     pd0 = get_active_power.(demands)
     result = []
     profile = parse.(Float64, readlines("data/ieee_std_load_profile.txt"))
     for x in profile
         set_active_power!.(demands, pd0*x)
-        push!(result, x => run_test_scopf_simple(system, voll*x, prob, contingencies, max_shed, ramp_mult, ramp_minutes, short, long, 10))
+        push!(result, x => run_test_scopf_simple(system, voll*x, prob, contingencies, max_shed, ramp_mult, ramp_minutes, short, long, dist_slack, 
+            time_limit_sec, all_post_c=all_post_c))
     end
     return result
 end
+
+const GRB_ENV = Gurobi.Env()
 
 function run_random(system, voll, prob, contingencies, all_post_c, iterations)
     result = []
@@ -190,7 +199,7 @@ function run_random(system, voll, prob, contingencies, all_post_c, iterations)
         short = rand(1.25:0.01:1.5)
         long = rand(1.0:0.01:1.25)
         reset_timer!(Main.to)
-        case, tot_t = SCOPF.run_benders(SCOPF.PC2_SCOPF, system, Gurobi.Optimizer(), voll*x, prob*y, contingencies, max_shed=max_shed, ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=0.00, all_post_c=all_post_c);
+        case, tot_t = SCOPF.run_benders(SCOPF.PC2_SCOPF, system, Gurobi.Optimizer(GRB_ENV), voll*x, prob*y, contingencies, max_shed=max_shed, ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=0.00, all_post_c=all_post_c);
         vals = SCOPF.extract_results(case)
         vals[:t] = tot_t
         push!(result, (i, x, y, max_shed, ramp_mult, ramp_minutes, short, long) => vals)
@@ -209,7 +218,7 @@ function run_random_p(system, voll, prob, contingencies, all_post_c, iterations)
         short = rand(1.0:0.01:1.25)
         long = 1.0
         reset_timer!(Main.to)
-        case, tot_t = SCOPF.run_benders(SCOPF.P_SCOPF, system, Gurobi.Optimizer(), voll*x, prob*y, contingencies, max_shed=max_shed, ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=0.00, all_post_c=all_post_c);
+        case, tot_t = SCOPF.run_benders(SCOPF.P_SCOPF, system, Gurobi.Optimizer(GRB_ENV), voll*x, prob*y, contingencies, max_shed=max_shed, ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=0.00, all_post_c=all_post_c);
         vals = SCOPF.extract_results(case)
         vals[:t] = tot_t
         push!(result, (i, x, y, max_shed, ramp_mult, ramp_minutes, short, long) => vals)
@@ -224,10 +233,12 @@ make_dataframe(result) = DataFrames.DataFrame(
     :ramp_mult => getindex.(getindex.(result, 1), 5), 
     :short => getindex.(getindex.(result, 1), 7), 
     :long => getindex.(getindex.(result, 1), 8), 
-    :obj_val => getindex.(getindex.(result, 2), :obj_val), 
-    :pg0 => [sum(getproperty.(case.opf.cost_ctrl_gen, :var) .* y[2][:pg0]) for y  in result], 
-    :lsc => [sum((sum((case.opf.voll .* x[:lsc]), init=0.0) for (k,x) in y[2][:Pc]), init=0.0) for y in result], 
-    :lscc => [sum((sum((case.opf.voll .* x[:lscc]), init=0.0) for (k,x) in y[2][:Pcc]), init=0.0) for y in result])
+    :pg0 => [sum(getproperty.(case.opf.cost_ctrl_gen, :var) .* y[2][:pg0]) for y in result], 
+    :lsc => [sum((sum(x[:lsc], init=0.0) for (k,x) in y[2][:Pc]), init=0.0) for y in result], 
+    :lscc => [sum((sum(x[:lscc], init=0.0) for (k,x) in y[2][:Pcc]), init=0.0) for y in result], 
+    :cens_c1 => [sum((sum((case.opf.voll .* x[:lsc]), init=0.0) for (k,x) in y[2][:Pc]), init=0.0) for y in result], 
+    :cens_c2 => [sum((sum((case.opf.voll .* x[:lscc]), init=0.0) for (k,x) in y[2][:Pcc]), init=0.0) for y in result], 
+    :obj_val => getindex.(getindex.(result, 2), :obj_val))
 
 function make_dataframe_big(result) 
     df = DataFrames.DataFrame(
@@ -254,7 +265,7 @@ function scatter_plot(df::DataFrames.DataFrame, x::Symbol, y::Symbol, mark::Symb
             leg=:none)
     else
         Plots.scatter(df[!,x], df[!,y], 
-            markersize=(df[!,mark] .- minimum(df[!,mark]) )/(maximum(df[!,mark])-minimum(df[!,mark]))*9. .+ 1., 
+            markersize=(df[!,mark] .- minimum(df[!,mark]) )/(maximum(df[!,mark])-minimum(df[!,mark]))*8. .+ 2., 
             xlabel=string(x), ylabel=string(y), title=string(mark), 
             leg=:none)
     end

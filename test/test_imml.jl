@@ -73,10 +73,6 @@ SCOPF.calc_Pline!(flow4, θ, pf, cont2, c2, Pᵢ=(Pᵢ .+ ΔPc), nodes=islands[i
 @test flow3 ≈ flow4
 SCOPF.calc_isf!(ϕ, X, pf.X, pf.B, pf.DA, cont2, c2); LinearAlgebra.mul!(flow5, ϕ, (Pᵢ .+ ΔPc)); # IMML ptdf
 @test flow4 ≈ flow5 
-SCOPF.calc_isf!(ϕ, pf.ϕ, islands[island], island_b); LinearAlgebra.mul!(flow6, ϕ, (Pᵢ .+ ΔPc)); # hack
-@test flow5 ≈ flow6 
-SCOPF.calculate_line_flows!(flow7, ϕ, pf.ϕ, (Pᵢ .+ ΔPc), islands[island], island_b); # hack2
-@test flow6 ≈ flow7 
 
 # CONTINGENCY WITH POWER INJECTION CHANGE, ISLANDING, AND DISTRIBUTED SLACK
 SCOPF.set_dist_slack!(pf.ϕ, opf.mgx, oplim.pg_lim_max)
@@ -87,5 +83,10 @@ SCOPF.calc_isf!(ϕ, X, pf.X, pf.B, pf.DA, cont1, c1); LinearAlgebra.mul!(flow3, 
 @test flow2 ≈ flow3
 SCOPF.calc_isf!(ϕ, pf.K, pf.DA, pf.B, cont1, c1, pf.slack); LinearAlgebra.mul!(flow4, ϕ, (Pᵢ .+ ΔPc)); # inverse with ptdf
 @test flow3 ≈ flow4
+dist_slack = getproperty.(get_active_power_limits.(opf.ctrl_generation), [:max])
+slack_array = dist_slack / sum(dist_slack)
+pf_ds = SCOPF.DCPowerFlow(opf.nodes, opf.branches, opf.idx, Pᵢ, slack_array=slack_array, mgx=opf.mgx)
+SCOPF.calculate_line_flows!(flow5, pf_ds, cont1, c1, Pᵢ=(Pᵢ .+ ΔPc)) # IMML flow
+@test flow4 ≈ flow5
 
 end

@@ -9,25 +9,27 @@ mutable struct DCPowerFlow{TI<:Integer,TR<:Real} <: PowerFlow
     θ::Vector{TR} # Bus voltage angles
     F::Vector{TR} # Line power flow
     slack::TI # Reference bus
+    slack_array::Vector{TR} # Distributed slack
 
     K_tmp::KLU.KLUFactorization{TR, TI} # A temp factorization of the admittance matrix
     vn_tmp::Vector{TR} # bus vector
     vb_tmp::Vector{TR} # branch vector
 end
 
-function DCPowerFlow(branches::AbstractVector{<:Tuple{TI,TI}}, susceptance::AbstractVector{TR}, numnodes::Integer, slack::Integer
+function DCPowerFlow(branches::AbstractVector{<:Tuple{TI,TI}}, susceptance::AbstractVector{TR}, numnodes::Integer, slack::Integer; slack_array::AbstractVector{TR}=ones(TR,1)
 ) where {TI<:Integer,TR<:Real}
     A = calc_A(branches, numnodes)
     DA = calc_DA(A, susceptance)
     B = calc_B(A, DA)
     K = calc_klu(B, slack)
     X = SemiDenseX(K, slack)
-    ϕ = SemiDensePTDF(K, DA; slack=slack)
-    return DCPowerFlow{TI,TR}(DA, B, K, X, ϕ, zeros(TR, numnodes), zeros(TR, length(branches)), slack,
+    ϕ = SemiDensePTDF(K, DA; slack=slack, slack_array=slack_array)
+    return DCPowerFlow{TI,TR}(DA, B, K, X, ϕ, zeros(TR, numnodes), zeros(TR, length(branches)), slack, slack_array,
         calc_klu(B, slack), zeros(TR, numnodes), zeros(TR, length(branches)))
 end
-DCPowerFlow(nodes::AbstractVector{<:Bus}, branches::AbstractVector{<:Branch}, idx::Dict{<:Int,<:Int}) =
-    DCPowerFlow(get_bus_idx.(branches, [idx]), PowerSystems.get_series_susceptance.(branches), length(nodes), find_slack(nodes)[1])
+DCPowerFlow(nodes::AbstractVector{<:Bus}, branches::AbstractVector{<:Branch}, idx::Dict{<:Int,<:Int}; 
+    slack::Integer=find_slack(nodes)[1], slack_array::AbstractVector{<:Real}=ones(Float64,1)) =
+    DCPowerFlow(get_bus_idx.(branches, [idx]), PowerSystems.get_series_susceptance.(branches), length(nodes), slack, slack_array=slack_array)
 
 function DCPowerFlow(sys::System)
     nodes = sort_components!(get_nodes(sys))
@@ -36,8 +38,10 @@ function DCPowerFlow(sys::System)
     return DCPowerFlow(nodes, branches, idx)
 end
 
-function DCPowerFlow(nodes::AbstractVector{<:Bus}, branches::AbstractVector{<:Branch}, idx::Dict{<:Int,<:Int}, Pᵢ::AbstractVector{<:Real})
-    pf = DCPowerFlow(nodes, branches, idx)
+function DCPowerFlow(nodes::AbstractVector{<:Bus}, branches::AbstractVector{<:Branch}, idx::Dict{<:Int,<:Int}, Pᵢ::AbstractVector{<:Real}; 
+    slack::Integer=find_slack(nodes)[1], slack_array::AbstractVector{<:Real}=ones(Float64,1), mgx::AbstractMatrix{<:Real}=ones(Float64,1,1))
+    slack_array = (slack_array' * mgx)'
+    pf = DCPowerFlow(nodes, branches, idx, slack=slack, slack_array=slack_array)
     run_pf!(pf, Pᵢ)
     calc_Pline!(pf)
     return pf

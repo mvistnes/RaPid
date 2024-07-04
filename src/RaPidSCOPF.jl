@@ -2,6 +2,9 @@
 
 module RaPidSCOPF
 
+using TimerOutputs
+const timeo = TimerOutput()
+
 using PowerSystems
 using JuMP
 # using Plots

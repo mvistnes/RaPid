@@ -57,10 +57,10 @@ mutable struct SemiDensePTDF{TI<:Integer, TR<:Real} <: SemiDenseMatrix{TR}
 end
 
 function SemiDensePTDF(K::KLU.KLUFactorization{TR,TI}, DA::SparseArrays.SparseMatrixCSC{TR,TI}; slack::TI=1, 
-    slack_array::AbstractVector{TR}=ones(TR,1), mgx::AbstractMatrix{TR}=ones(TR,1,1)
+    slack_array::AbstractVector{TR}=ones(TR,1)
     ) where {TI<:Integer, TR<:Real}
     @assert sum(slack_array) ≈ one(TR)
-    SemiDensePTDF{TI,TR}(fill(Vector{TR}(), size(DA,1)), falses(size(DA,1)), K, DA, slack, (slack_array' * mgx)')
+    SemiDensePTDF{TI,TR}(fill(Vector{TR}(), size(DA,1)), falses(size(DA,1)), K, DA, slack, slack_array)
 end
 
 Base.size(mx::SemiDensePTDF) = size(mx.DA)

@@ -46,15 +46,17 @@ function run_benders(
     silent=true,
     debug=false
 )
-    case = Case(opf_base(OPF(true, false, false, false, false), system, optimizer, voll=voll, contingencies=contingencies, prob=prob,
+    case = @timeit timeo "base" Case(opf_base(OPF(true, false, false, false, false), system, optimizer, voll=voll, contingencies=contingencies, prob=prob,
         dist_slack=dist_slack, time_limit_sec=time_limit_sec, ramp_minutes=ramp_minutes, ramp_mult=ramp_mult, max_shed=max_shed, max_curtail=max_curtail,
         short_term_multi=short_term_multi, long_term_multi=long_term_multi, p_failure=p_failure, silent=silent, debug=debug)...)
 
-    total_solve_time = constrain_branches!(case, 0.0)
+    total_solve_time = @timeit timeo "base" constrain_branches!(case, 0.0)
     if !type.P & !type.C1 & !type.C2 & !type.C2F
         return case, total_solve_time
     end
-    return run_benders!(type, case, total_solve_time, atol, max_itr, all_post_c)
+    res = @timeit timeo "contingencies" run_benders!(type, case, total_solve_time, atol, max_itr, all_post_c)
+    # show(timeo)
+    return res
 end
 
 run_benders!(type::OPF, case::Case, total_solve_time::Float64, atol=1e-6, max_itr=max(length(case.opf.contingencies), 5), all_post_c=true) =
@@ -88,7 +90,6 @@ function run_benders!(
     @debug "lower_bound = $(objective_value(m))"
 
     # Set variables
-    !isempty(oplim.dist_slack) && set_dist_slack!(pf.ϕ, opf.mgx, oplim.dist_slack)
     bd = benders(opf, m)
 
     brst = oplim.branch_rating * oplim.short_term_multi
@@ -97,6 +98,7 @@ function run_benders!(
     flow = zeros(length(pf.vb_tmp))
 
     if all_post_c
+        @timeit timeo "pre" begin
         for (i, c_obj) in enumerate(opf.contingencies)
             cont = typesort_component(c_obj, opf)
             # cont  = get_bus_idx(opf.contingencies[c], opf.idx)
@@ -112,6 +114,7 @@ function run_benders!(
 
         total_solve_time = update_model!(m, pf, oplim, brc_up, brc_down, bd, total_solve_time)
         !is_solved_and_feasible(m) && return Case(m, opf, pf, oplim, brc_up, brc_down, Pc, Pcc, Pccx), total_solve_time
+        end
     end
     old_obj = -1.0
 
@@ -147,6 +150,7 @@ function run_benders!(
 
         for (i, c_obj) in enumerate(opf.contingencies)
             cont = typesort_component(c_obj, opf)
+            @timeit timeo "split" begin
             if is_islanded(pf, cont[2], cont[1])
                 islands, island, island_b = handle_islands(pf.B, pf.DA, cont[2], cont[1], pf.slack)
                 inodes = islands[island]
@@ -158,7 +162,9 @@ function run_benders!(
                 empty!(island_b)
                 inodes = Int[]
             end
+            end
 
+            @timeit timeo "power flow" begin
             if type.P
                 olc = calculate_contingency_overload!(flow, brst, m, pf, bd, cont, i, c_obj, inodes, island_b, atol)
             end
@@ -171,6 +177,7 @@ function run_benders!(
             if type.C2F
                 olccx = calculate_contingency_overload!(flow, ΔPccx, brlt, Pccx, opf, m, pf, bd, cont, i, c_obj, inodes, island_b, atol)
             end
+            end
             if !isempty(olc) || !isempty(olcc) || !isempty(olccx) 
                 type.C1 && get(Pc, i, 0) == 0 && fill!(ΔPc, 0.0)
                 type.C2 && get(Pcc, i, 0) == 0 && fill!(ΔPcc, 0.0)
@@ -178,6 +185,7 @@ function run_benders!(
             end
 
             # Cannot change the model before all data is exctracted!
+            @timeit timeo "cut" begin
             if !isempty(olc)
                 if type.P
                     cut_added, pre = add_cut(ptdf, opf, pf, bx, m, bd, brst, olc, islands, island, island_b, c_obj, cont, cut_added, atol, pre)
@@ -191,12 +199,15 @@ function run_benders!(
             if !isempty(olccx)
                 cut_added, corr2f = add_cut(ptdf, Pccx, opf, pf, bx, oplim, m, bd, brlt, ΔPccx, olccx, islands, island, island_b, c_obj, cont, i, cut_added, atol, corr2f)
             end
+            end
         end
         if cut_added > 1
-            total_solve_time = update_model!(m, pf, oplim, brc_up, brc_down, bd, total_solve_time)
+            total_solve_time = @timeit timeo "update model" update_model!(m, pf, oplim, brc_up, brc_down, bd, total_solve_time)
             cut_added = 1
         end
-        !is_solved_and_feasible(m) && return Case(m, opf, pf, oplim, brc_up, brc_down, Pc, Pcc, Pccx), total_solve_time
+        if !is_solved_and_feasible(m) 
+            return Case(m, opf, pf, oplim, brc_up, brc_down, Pc, Pcc, Pccx), total_solve_time
+        end
     end
     @warn "Reached $(max_itr) iterations without a stable solution."
     return Case(m, opf, pf, oplim, brc_up, brc_down, Pc, Pcc, Pccx), total_solve_time
@@ -220,18 +231,18 @@ end
 """
 function calculate_contingency_line_flows!(flow::Vector{<:Real}, ΔP::Vector{<:Real}, P::Dict{<:Integer, T}, opf::OPFsystem, 
     m::Model, pf::DCPowerFlow, Pᵢ::AbstractVector{<:Real}, cont::Tuple{Real, Tuple{Real,Real}}, 
-    c::Integer, c_obj::Component, island::Vector, island_b::Vector{<:Integer}
+    c::Integer, c_obj::Component, island::Vector, island_b::Vector{<:Integer}; to=0
 ) where {T}
     if get(P, c, 0) == 0
         return calculate_contingency_line_flows!(flow, m, pf, Pᵢ, cont, c, c_obj, island, island_b)
     end
-    get_ΔP!(ΔP, m, opf, P, c)
+    @timeit timeo "ΔP" get_ΔP!(ΔP, m, opf, P, c)
     if iszero(ΔP)
         # calculate_line_flows!(flow, pf, cont[2], cont[1], nodes=island, branches=island_b)
-        calc_Pline!(flow, pf.vn_tmp, pf, cont[2], cont[1], nodes=island, branches=island_b)
+        @timeit timeo "Calculate flow" calc_Pline!(flow, pf.vn_tmp, pf, cont[2], cont[1], nodes=island, branches=island_b)
     else
         # calculate_line_flows!(flow, pf, cont[2], cont[1], Pᵢ=(Pᵢ .+ ΔP), nodes=island, branches=island_b)
-        calc_Pline!(flow, pf.vn_tmp, pf, cont[2], cont[1], Pᵢ=(Pᵢ .+ ΔP), nodes=island, branches=island_b)
+        @timeit timeo "Calculate flow" calc_Pline!(flow, pf.vn_tmp, pf, cont[2], cont[1], Pᵢ=(Pᵢ .+ ΔP), nodes=island, branches=island_b)
     end
     return flow
 end
@@ -242,9 +253,9 @@ function calculate_contingency_line_flows!(flow::Vector{<:Real}, ΔP::Vector{<:R
     if get(P, c, 0) == 0
         return calculate_contingency_line_flows!(flow, m, pf, Pᵢ, cont, c, c_obj, island, island_b)
     end
-    get_ΔP!(ΔP, m, opf, P, c)
+    @timeit timeo "ΔP" get_ΔP!(ΔP, m, opf, P, c)
     ΔP[cont[2]] -= get_ΔP(m, cont, c_obj, P, c)
-    LinearAlgebra.mul!(flow, pf.ϕ, (Pᵢ .+ ΔP))
+    @timeit timeo "Calculate flow" LinearAlgebra.mul!(flow, pf.ϕ, (Pᵢ .+ ΔP))
     return flow
 end
 
@@ -256,14 +267,14 @@ function calculate_contingency_line_flows!(flow::Vector{<:Real},
     island::Vector, island_b::Vector{<:Integer}, val=0.0
 )
     # return calculate_line_flows!(flow, pf, cont[2], cont[1], nodes=island, branches=island_b)
-    return calc_Pline!(flow, pf.vn_tmp, pf, cont[2], cont[1], nodes=island, branches=island_b)
+    return @timeit timeo "Calculate flow" calc_Pline!(flow, pf.vn_tmp, pf, cont[2], cont[1], nodes=island, branches=island_b)
 end
 function calculate_contingency_line_flows!(flow::Vector{<:Real}, 
     m::Model, pf::DCPowerFlow, P::Vector{<:Real}, cont::Tuple{Real,Real}, c::Integer, c_obj::StaticInjection,
     island::Vector, island_b::Vector{<:Integer}, val=get_ΔP(m, cont, c_obj)
 )
     P[cont[2]] -= val
-    LinearAlgebra.mul!(flow, pf.ϕ, P)
+    @timeit timeo "Calculate flow" LinearAlgebra.mul!(flow, pf.ϕ, P)
     P[cont[2]] += val
     return flow
 end

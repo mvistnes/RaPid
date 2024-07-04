@@ -144,6 +144,7 @@ get_system(fname::String) = System(joinpath("data", fname))
 
 function create_model(optimizer; time_limit_sec::Integer=10000, silent::Bool=true, debug::Bool=false)
     m = direct_model(optimizer)
+    # m = Model(() -> optimizer)
     set_string_names_on_creation(m, debug)
     MOI.set(m, MOI.Silent(), silent) # supress output from the solver
     set_time_limit_sec(m, time_limit_sec)

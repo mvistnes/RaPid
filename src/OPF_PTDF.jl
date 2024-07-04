@@ -11,7 +11,6 @@ struct Oplimits{TR<:Real}
     pg_lim_max::Vector{TR}
     rampup::Vector{TR}
     rampdown::Vector{TR}
-    dist_slack::Vector{TR}
     pr_lim::Vector{TR}
     max_curtail::Union{TR,Vector{TR}}
     dc_lim_min::Vector{TR}
@@ -25,7 +24,6 @@ function oplimits(
     opf::OPFsystem,
     max_shed::Union{TR,Vector{TR}},
     max_curtail::Union{TR,Vector{TR}},
-    dist_slack::Vector{TR},
     ramp_mult::TR,
     ramp_minutes::TR,
     p_failure::TR,
@@ -38,9 +36,6 @@ function oplimits(
     pr_lim::Vector{TR} = get_active_power.(opf.renewables)
     (dc_lim_min::Vector{TR}, dc_lim_max::Vector{TR}) = split_pair(get_active_power_limits_from.(opf.dc_branches))
     pd_lim::Vector{TR} = get_active_power.(opf.demands)
-    if !isempty(dist_slack)
-        dist_slack = dist_slack / sum(dist_slack)
-    end
     if any(pg_lim_min .< 0.0)
         @error "Negative pg_lim_min, enable min limits on generators!"
     end
@@ -49,13 +44,12 @@ function oplimits(
     replace!(pg_lim_max, NaN=>0.0)
     replace!(rampup, NaN=>0.0)
     replace!(rampdown, NaN=>0.0)
-    replace!(dist_slack, NaN=>0.0)
     replace!(pr_lim, NaN=>0.0)
     replace!(dc_lim_min, NaN=>0.0)
     replace!(dc_lim_max, NaN=>0.0)
     replace!(pd_lim, NaN=>0.0)
     return Oplimits{TR}(ramp_mult, ramp_minutes, p_failure, branch_rating, short_term_multi, long_term_multi, 
-        zeros(length(pg_lim_max)), pg_lim_max, rampup, rampdown, dist_slack, pr_lim, max_curtail, dc_lim_min, dc_lim_max, pd_lim, max_shed)
+        zeros(length(pg_lim_max)), pg_lim_max, rampup, rampdown, pr_lim, max_curtail, dc_lim_min, dc_lim_max, pd_lim, max_shed)
 end
 
 mutable struct Case{TR<:Real,TI<:Integer}
@@ -92,7 +86,7 @@ function opf_base(type::OPF, system::System, optimizer;
     @assert !type.C2F | !iszero(p_failure)
     m = create_model(optimizer, time_limit_sec=time_limit_sec, silent=silent, debug=debug)
     opf = isempty(voll) ? opfsystem(system) : opfsystem(system, voll, contingencies, prob, ramp_mult)
-    pf = DCPowerFlow(opf.nodes, opf.branches, opf.idx)
+    pf = isempty(dist_slack) ? DCPowerFlow(opf.nodes, opf.branches, opf.idx) : DCPowerFlow(opf.nodes, opf.branches, opf.idx, slack_array=dist_slack / sum(dist_slack))
     
     brc_up = Dict{Int64,ConstraintRef}()
     brc_down = Dict{Int64,ConstraintRef}()
@@ -100,7 +94,7 @@ function opf_base(type::OPF, system::System, optimizer;
     Pcc = Dict{Int64,ExprCC}()
     Pccx = Dict{Int64,ExprCCX}()
 
-    oplim = oplimits(opf, max_shed, max_curtail, dist_slack, ramp_mult, ramp_minutes, p_failure, short_term_multi, long_term_multi)
+    oplim = oplimits(opf, max_shed, max_curtail, ramp_mult, ramp_minutes, p_failure, short_term_multi, long_term_multi)
 
     @variables(m, begin
         p0[n in 1:length(opf.nodes)]
@@ -213,7 +207,6 @@ function add_all_contingencies!(type::OPF, opf::OPFsystem, oplim::Oplimits, m::M
     Pc::Dict{<:Integer,ExprC}, Pcc::Dict{<:Integer,ExprCC}, Pccx::Dict{<:Integer,ExprCCX}
 )
     obj = objective_function(m)
-    !isempty(oplim.dist_slack) && set_dist_slack!(pf.ϕ, opf.mgx, oplim.dist_slack)
     for (i, c_obj) in enumerate(opf.contingencies)
         cont = typesort_component(c_obj, opf)
         if is_islanded(pf, cont[2], cont[1])
@@ -551,10 +544,10 @@ function calc_slack_cost(case::Case)
     pf = case.pf
     costs = zeros(length(opf.contingencies))
     pg0 = get_value(m, :pg0)
-    if isempty(case.oplim.dist_slack)
+    if isempty(case.pf.ϕ.slack_array)
         slack_cost = sum(last.(get_generator_cost.(opf.ctrl_generation[opf.mgx[:,pf.slack].nzind])))
     else
-        slack_cost = opf.mgx' * (getproperty.(opf.cost_ctrl_gen, :ramp) .* case.oplim.dist_slack .* pg0)
+        slack_cost = opf.mgx' * (getproperty.(opf.cost_ctrl_gen, :ramp) .* case.pf.ϕ.slack_array .* pg0)
     end
     pg0 = opf.mgx' * pg0
     pr = opf.mrx' * (get_value(m, :pr) - get_value(m, :pr0))
