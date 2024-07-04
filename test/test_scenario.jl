@@ -105,22 +105,22 @@ for max_shed in 2.5:5.0
         ["Scen_Prev", "Scen_Prob", "N-1_Prev", "N-1_Prob", "N-0"])...)) 
     FileIO.save("results/"*name*".jld2", "Scen_Prev", res_prev, "Scen_Prob", res, "N-1_Prev", res_prev_n1, "N-1_Prob", res_n1, "N-0", res_base)
 
-    Plots.savefig(Plots.plot(base_costs, labels=labels, 
-        line=:steppre, xlabel="Time", ylabel="Cost", palette = Plots.palette(:seaborn_colorblind6), thickness_scaling=1.2),
+    Plots.savefig(Plots.plot(base_costs.*100, labels=labels, 
+        line=:steppre, xlabel="Time [h]", ylabel="Cost [\$/h]", palette = Plots.palette(:seaborn_colorblind6), thickness_scaling=1.2),
         "results/"*name*"_base_cost.pdf")
 
-    Plots.savefig(Plots.plot(corrective_costs,labels=labels, 
-        line=:steppre, xlabel="Time", ylabel="Cost", palette = Plots.palette(:seaborn_colorblind6), thickness_scaling=1.2),
+    Plots.savefig(Plots.plot(corrective_costs.*100, labels=labels, 
+        line=:steppre, xlabel="Time [h]", ylabel="Cost [\$/h]", palette = Plots.palette(:seaborn_colorblind6), thickness_scaling=1.2),
         "results/"*name*"_corrective_cost.pdf")
 
-    Plots.savefig(Plots.plot(base_costs + corrective_costs,  labels=labels, 
-        line=:steppre, xlabel="Time", ylabel="Cost", palette = Plots.palette(:seaborn_colorblind6), thickness_scaling=1.2),
+    Plots.savefig(Plots.plot((base_costs + corrective_costs).*100,  labels=labels, 
+        line=:steppre, xlabel="Time [h]", ylabel="Cost [\$/h]", palette = Plots.palette(:seaborn_colorblind6), thickness_scaling=1.2),
         "results/"*name*"_objective.pdf")
 
     max_renewable = sum(get_active_power(g) for g in gen if typeof(g) <: RenewableGen)
-    Plots.savefig(Plots.plot([[SCOPF.get_all_type_prod(system, r)[3,:] for r in [res_prev, res, res_prev_n1, res_n1, res_base]]... fill(max_renewable, size(scenarioes_n1,1))], 
+    Plots.savefig(Plots.plot([[SCOPF.get_all_type_prod(system, r)[3,:] for r in [res_prev, res, res_prev_n1, res_n1, res_base]]... fill(max_renewable, size(scenarioes_n1,1))].*100, 
         label=[labels... "Max renewable"], 
-        line=:steppre, xlabel="Time", ylabel="Amount", palette = Plots.palette(:seaborn_colorblind6), leg=:topright, thickness_scaling=1.2),
+        line=:steppre, xlabel="Time [h]", ylabel="Generation [MWh]", palette = Plots.palette(:seaborn_colorblind6), leg=:topright, thickness_scaling=1.2),
         "results/"*name*"_renewable.pdf")
     
     res2 = []
@@ -139,12 +139,12 @@ for max_shed in 2.5:5.0
     base_costs2 = [[isnan(x[:obj_val]) ? NaN : x[:costs][1,:Base] for x in r] for r in [res2_prev, res2, res2_prev_n1, res2_n1, res2_base]]
     corrective_costs2 = [[isnan(x[:obj_val]) ? NaN : (x[:costs][1,:r] + sum(p[2] .* (x[:costs][:,:Pc] + x[:costs][:,:Pcc]))) for (x,p) in zip(r,scenarioes2_n1)] for r in [res2_prev,res2,res2_prev_n1,res2_n1,res2_base]]    
 
-    Plots.plot(corrective_costs, labels=labels, line=(:steppre, :dash), alpha=0.5, xlabel="Time", ylabel="Cost", palette = Plots.palette(:seaborn_colorblind6)[1:5])
-    Plots.plot!(corrective_costs2, labels=labels.*" S2", line=:steppre, xlabel="Time", ylabel="Cost", palette = Plots.palette(:seaborn_colorblind6)[1:5], leg=:topright, thickness_scaling=1.2)
+    Plots.plot(corrective_costs.*100, labels=labels, line=(:steppre, :dash), alpha=0.5, xlabel="Time [h]", ylabel="Cost [\$/h]", palette = Plots.palette(:seaborn_colorblind6)[1:5])
+    Plots.plot!(corrective_costs2.*100, labels=labels.*" S2", line=:steppre, xlabel="Time [h]", ylabel="Cost [\$/h]", palette = Plots.palette(:seaborn_colorblind6)[1:5], leg=:topright, thickness_scaling=1.2)
     Plots.savefig("results/"*name*"_corrective_cost_s2.pdf")
 
-    Plots.plot(base_costs + corrective_costs, labels=labels, line=(:steppre, :dash), alpha=0.5, xlabel="Time", ylabel="Cost", palette = Plots.palette(:seaborn_colorblind6)[1:5])
-    Plots.plot!(base_costs2 + corrective_costs2, labels=labels.*" S2", line=:steppre, xlabel="Time", ylabel="Cost", palette = Plots.palette(:seaborn_colorblind6)[1:5], leg=:topright, thickness_scaling=1.2)
+    Plots.plot((base_costs + corrective_costs).*100, labels=labels, line=(:steppre, :dash), alpha=0.5, xlabel="Time [h]", ylabel="Cost [\$/h]", palette = Plots.palette(:seaborn_colorblind6)[1:5])
+    Plots.plot!((base_costs2 + corrective_costs2).*100, labels=labels.*" S2", line=:steppre, xlabel="Time [h]", ylabel="Cost [\$/h]", palette = Plots.palette(:seaborn_colorblind6)[1:5], leg=:topright, thickness_scaling=1.2)
     Plots.savefig("results/"*name*"_objective_s2.pdf")
     
     CSV.write("results/"*name*"_base_cost.csv", DataFrames.DataFrame(([base_costs... base_costs2...], 

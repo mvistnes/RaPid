@@ -15,7 +15,7 @@ function calc_X(X::AbstractMatrix{T}, A::AbstractMatrix{<:Real}, D::AbstractMatr
     G = D[branches, branches]
     XF = X * H'
     cinv = inv(G) - H * XF
-    if isapprox(cinv, zero(T); atol=atol)
+    if isapprox(LinearAlgebra.det(cinv), zero(T); atol=atol)
         return throw(DivideError())
     end
     mx = X + XF * inv(cinv) * XF'
