@@ -252,6 +252,7 @@ function calc_isf(K::KLU.KLUFactorization{T,<:Integer}, DA::AbstractMatrix{T}, s
     ϕ = Matrix(DA')
     KLU.solve!(K, ϕ)
     ϕ[slack, :] .= zero(T)
+    set_tol_zero!(ϕ)
     return ϕ'
 end
 function calc_isf!(B::SparseArrays.SparseMatrixCSC{T,<:Integer}, DA::AbstractMatrix{T}, slack::Integer
@@ -264,6 +265,20 @@ function calc_isf(branches::AbstractVector{<:Branch}, nodes::AbstractVector{<:Bu
     DA = calc_DA(A, PowerSystems.get_series_susceptance.(branches))
     B = calc_B(A, DA)
     return calc_isf!(B, DA, slack)
+end
+
+""" Make a isf-vector """
+function calc_isf_vec!(ϕ::AbstractVector{<:Real}, K::KLU.KLUFactorization{T,<:Integer}, DA::AbstractMatrix{T}, slack::Integer, branch::Integer
+) where {T<:Real}
+    ϕ .= DA[branch,:]
+    KLU.solve!(K, ϕ)
+    ϕ[slack] = zero(T)
+    set_tol_zero!(ϕ)
+    return ϕ
+end
+function calc_isf_vec!(B::SparseArrays.SparseMatrixCSC{T,<:Integer}, DA::AbstractMatrix{T}, slack::Integer, branch::Integer
+) where {T<:Real}
+    return calc_isf_vec!(Vector{T}(undef, size(DA,2)), calc_klu(B, slack), DA, slack, branch)
 end
 
 """ Find voltage angles from the factorization of the B-matrix and injected power. Change both θ and K """

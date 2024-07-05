@@ -112,6 +112,19 @@ calc_isf(DA::AbstractMatrix{T}, B::AbstractMatrix{<:Real}, cont::Tuple{Integer,I
     cont_branch::Integer, slack::Integer) where {T<:Real} =
     calc_isf!(Matrix{T}(undef, size(DA)), calc_klu!(B, slack), DA, B, cont, cont_branch, slack)
 
+function calc_isf_vec!(ϕ::AbstractVector{<:Real}, K::KLU.KLUFactorization{T,<:Integer}, DA::AbstractMatrix{<:Real}, 
+    B0::AbstractMatrix{<:Real}, cont::Tuple{Integer,Integer}, cont_branch::Integer, slack::Integer, branch::Integer
+) where {T<:Real}
+    B = calc_cont_B(DA, B0, cont, cont_branch, slack)
+    KLU.klu!(K, B)
+    calc_isf_vec!(ϕ, K, DA, slack, branch)
+    ϕ[cont_branch] = 0.0
+    return ϕ
+end
+calc_isf_vec(DA::AbstractMatrix{T}, B::AbstractMatrix{<:Real}, cont::Tuple{Integer,Integer},
+    cont_branch::Integer, slack::Integer, branch::Integer) where {T<:Real} =
+    calc_isf_vec!(Vector{T}(undef, size(DA,2)), calc_klu!(B, slack), DA, B, cont, cont_branch, slack, branch)
+    
 function calc_cont_B(DA::AbstractMatrix{<:Real}, B0::AbstractMatrix{T}, cont::Tuple{Integer,Integer}, cont_branch::Integer,
     slack::Integer
 ) where {T<:Real}
@@ -155,11 +168,11 @@ function calc_isf(pf::DCPowerFlow, cont::Tuple{Real,Real}, c::Integer, islands::
     return calc_isf!(similar(pf.ϕ), pf.ϕ, islands[island], island_b)
 end
 
-function calc_isf_vec!(ϕ::AbstractVector{T}, ϕ₀::AbstractMatrix{T}, i::Integer,
+function calc_isf_vec!(ϕ::AbstractVector{T}, ϕ₀::AbstractMatrix{T}, branch::Integer,
     nodes::AbstractVector{<:Integer}, branches::AbstractVector{<:Integer}
 ) where {T<:Real}
-    if i ∈ branches
-        copy!(ϕ, ϕ₀[i,:])
+    if branch ∈ branches
+        copy!(ϕ, ϕ₀[branch,:])
         zero_not_in_array!(ϕ, nodes, Val(1))
     else
         ϕ .= zero(T)
@@ -167,10 +180,10 @@ function calc_isf_vec!(ϕ::AbstractVector{T}, ϕ₀::AbstractMatrix{T}, i::Integ
     return ϕ
 end
 
-function calc_isf_vec(pf::DCPowerFlow, i::Integer, cont::Tuple{Real,Real}, c::Integer, islands::Vector, 
+function calc_isf_vec(pf::DCPowerFlow, branch::Integer, cont::Tuple{Real,Real}, c::Integer, islands::Vector, 
     island::Integer, island_b::Vector{<:Integer}
 )
-    return calc_isf_vec!(similar(pf.vb_tmp), pf.ϕ, i, islands[island], island_b)
+    return calc_isf_vec!(similar(pf.vb_tmp), pf.ϕ, branch, islands[island], island_b)
 end
 
 function calculate_line_flows!(F::AbstractVector{T}, ϕ::AbstractMatrix{<:Real}, ϕ₀::AbstractMatrix{<:Real}, Pᵢ::AbstractVector{<:Real}, 

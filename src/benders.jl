@@ -111,10 +111,10 @@ function run_benders!(
                 @debug "Island: Contingency $(string(typeof(c_obj))) $(get_name(c_obj))"
             end
         end
+        end
 
         total_solve_time = update_model!(m, pf, oplim, brc_up, brc_down, bd, total_solve_time)
         !is_solved_and_feasible(m) && return Case(m, opf, pf, oplim, brc_up, brc_down, Pc, Pcc, Pccx), total_solve_time
-        end
     end
     old_obj = -1.0
 
@@ -202,7 +202,7 @@ function run_benders!(
             end
         end
         if cut_added > 1
-            total_solve_time = @timeit timeo "update model" update_model!(m, pf, oplim, brc_up, brc_down, bd, total_solve_time)
+            total_solve_time = update_model!(m, pf, oplim, brc_up, brc_down, bd, total_solve_time)
             cut_added = 1
         end
         if !is_solved_and_feasible(m) 
@@ -214,7 +214,7 @@ function run_benders!(
 end
 
 """ Solve model and update the power flow object """
-function update_model!(m::Model, pf::DCPowerFlow, oplim::Oplimits, brc_up::Dict{<:Integer, ConstraintRef}, 
+@timeit timeo "update model" function update_model!(m::Model, pf::DCPowerFlow, oplim::Oplimits, brc_up::Dict{<:Integer, ConstraintRef}, 
     brc_down::Dict{<:Integer, ConstraintRef}, bd::Benders, total_solve_time::Real
 )
     # set_warm_start!(m, :pg0) # query of information then edit of model, else OptimizeNotCalled errors
