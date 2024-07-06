@@ -270,10 +270,13 @@ end
 """ Make a isf-vector """
 function calc_isf_vec!(ϕ::AbstractVector{<:Real}, K::KLU.KLUFactorization{T,<:Integer}, DA::AbstractMatrix{T}, slack::Integer, branch::Integer
 ) where {T<:Real}
-    ϕ .= DA[branch,:]
-    KLU.solve!(K, ϕ)
-    ϕ[slack] = zero(T)
-    set_tol_zero!(ϕ)
+    if slack == branch
+        ϕ .= zero(T)
+    else
+        ϕ .= DA[branch,:]
+        KLU.solve!(K, ϕ)
+        set_tol_zero!(ϕ)
+    end
     return ϕ
 end
 function calc_isf_vec!(B::SparseArrays.SparseMatrixCSC{T,<:Integer}, DA::AbstractMatrix{T}, slack::Integer, branch::Integer

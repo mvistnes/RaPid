@@ -158,7 +158,7 @@ function calc_isf_vec!(ϕ::AbstractVector{T}, DA::AbstractMatrix{<:Real}, B0::Ab
     B = calc_cont_B(DA, B0, cont, cont_branch, nodes)
     # ϕ[sorted_missing(branches, size(ϕ,1)), sorted_missing(nodes, size(ϕ,2))] .= zero(T)
     fill!(ϕ, zero(T))
-    ϕ[nodes] = calc_isf_vec!(B, view(DA, branches, nodes), searchsortedfirst(nodes, slack), branch)
+    ϕ[nodes] = calc_isf_vec!(B, view(DA, branches, nodes), searchsortedfirst(nodes, slack), searchsortedfirst(branches, branch))
     return ϕ
 end
 calc_isf_vec(DA::AbstractMatrix{T}, B0::AbstractMatrix{<:Real}, cont::Tuple{Integer,Integer},
