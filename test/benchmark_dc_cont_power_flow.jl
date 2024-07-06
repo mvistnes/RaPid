@@ -80,16 +80,16 @@ println("        IMML flow; IMML thet; imml ptdf;      hack;     hack2; inv thet
 @printf("Min:    %9.0f; %9.0f; %9.0f; %9.0f; %9.0f; %9.0f; %9.0f\n", minimum(immlF).time, minimum(imml_theta).time, minimum(imml_ptdf).time, minimum(inv_theta).time, minimum(inv_ptdf).time)
 @printf("Median: %9.0f; %9.0f; %9.0f; %9.0f; %9.0f; %9.0f; %9.0f\n", median(immlF).time, median(imml_theta).time, median(imml_ptdf).time, median(inv_theta).time, median(inv_ptdf).time)
 
-# CONTINGENCY WITH ISLANDING, ONLY PTDF-VECTOR
+# CONTINGENCY WITHOUT AND WITH ISLANDING, ONLY PTDF-VECTOR
 imml_ptdfvec = @benchmark SCOPF.calc_ptdf_vec!($pf.vn_tmp, $pf, $c1, $cont1[1], $cont1[2], 1, $bx[1][1], $bx[1][2]) # IMML ptdf-vec
 inv_ptdfvec = @benchmark SCOPF.calc_isf_vec!($pf.vn_tmp, $K, $pf.DA, $pf.B, $cont1, $c1, $pf.slack, 1) # inverse with ptdf-vec
 imml_ptdf = @benchmark SCOPF.calc_isf!($ϕ, $X, $pf.X, $pf.B, $pf.DA, $cont1, $c1) # IMML ptdf
 inv_ptdf = @benchmark SCOPF.calc_isf!($ϕ, $K, $pf.DA, $pf.B, $cont1, $c1, $pf.slack) # inverse with ptdf_pc
 
-inv_ptdfvec_i = @benchmark SCOPF.calc_isf_vec!($pf.vn_tmp, $pf.ϕ, $1, $islands[island], $island_b) # inverse with ptdf-vec
+inv_ptdfvec_i = @benchmark SCOPF.calc_isf_vec!($pf.vn_tmp, $pf.DA, $pf.B, $cont2, $c2, $pf.slack, $islands[island], $island_b, 1) # inverse with ptdf-vec
 inv_ptdf_i = @benchmark SCOPF.calc_isf!($ϕ, $pf.DA, $pf.B, $cont2, $c2, $pf.slack, $islands[island], $island_b) # inverse with ptdf
 imml_ptdf_i = @benchmark SCOPF.calc_isf!($ϕ, $X, $pf.X, $pf.B, $pf.DA, $cont2, $c2) # IMML ptdf
 
-println("        imml vec; inv vec; imml; inv;   inv island vec; inv island; imml island")
+println("         imml vec;   inv vec;       imml;        inv; inv island vec; inv island; imml island")
 @printf("Min:    %9.0f; %9.0f; %9.0f; %9.0f; %9.0f; %9.0f; %9.0f\n", minimum(imml_ptdfvec).time, minimum(inv_ptdfvec).time, minimum(imml_ptdf).time, minimum(inv_ptdf).time, minimum(inv_ptdfvec_i).time, minimum(inv_ptdf_i).time, minimum(imml_ptdf_i).time)
 @printf("Median: %9.0f; %9.0f; %9.0f; %9.0f; %9.0f; %9.0f; %9.0f\n", median(imml_ptdfvec).time, median(inv_ptdfvec).time, median(imml_ptdf).time, median(inv_ptdf).time, median(inv_ptdfvec_i).time, median(inv_ptdf_i).time, median(imml_ptdf_i).time)

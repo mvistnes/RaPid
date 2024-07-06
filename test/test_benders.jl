@@ -55,10 +55,20 @@ end
 
 function setup_ieee_rts(fname::String)
     system = SCOPF.System(fname)
-    SCOPF.set_rate!.(SCOPF.get_branches(system), SCOPF.get_rate.(SCOPF.get_branches(system)) * 0.8)
-    SCOPF.set_operation_cost!.(SCOPF.get_gens_h(system), [15.0, 16.0, 17.0, 18.0, 19.0, 20.0])
+    costh = [15.0, 16.0, 17.0, 18.0, 19.0, 20.0]
+    for (i,g) in enumerate(SCOPF.get_gens_h(system))
+        SCOPF.set_operation_cost!(g, costh[mod(i,length(costh))+1])
+    end
 
-    voll = [4304.0, 5098.0, 5245.0, 5419.0, 4834.0, 5585.0, 5785.0, 5192.0, 4575.0, 5244.0, 4478.0, 5698.0, 4465.0, 4859.0, 5032.0, 5256.0, 4598.0]
+    # voll = [4304.0, 5098.0, 5245.0, 5419.0, 4834.0, 5585.0, 5785.0, 5192.0, 4575.0, 5244.0, 4478.0, 5698.0, 4465.0, 4859.0, 5032.0, 5256.0, 4598.0]
+    base_voll = [6.20 4.89 5.30 5.62 6.11 5.50 5.41 5.40 2.30 4.14 5.39 3.41 3.01 3.54 3.75 2.29 3.64] * 100
+    if length(SCOPF.get_demands(system)) == length(base_voll)
+        voll = vec(base_voll)
+        SCOPF.set_rate!.(SCOPF.get_branches(system), SCOPF.get_rate.(SCOPF.get_branches(system)) * 0.8)
+    else
+        voll = vec([base_voll... base_voll... base_voll...])
+        SCOPF.set_renewable_prod!(system, 0.2)
+    end
     branches = SCOPF.sort_components!(SCOPF.get_branches(system))
     contingencies = branches
     prob =
@@ -69,10 +79,13 @@ function setup_ieee_rts(fname::String)
         ]
     # prob /= 8760
     prob /= 100
+    if length(contingencies) > length(prob)
+        prob = [prob[mod(i,length(prob))+1] for i in 1:length(contingencies)]
+    end
     short = 1.2
     long = 1.0
     ramp_minutes = 10.0
-    max_shed = 0.1
+    max_shed = sum(get_active_power.(SCOPF.get_demands(system)))/100*10
     ramp_mult = 2.0
     time_limit_sec = 100
     return system, voll, contingencies, prob, short, long, ramp_minutes, ramp_mult, max_shed, time_limit_sec
@@ -155,7 +168,7 @@ end
 function run_tests(system, voll, prob, contingencies, max_shed, ramp_mult, ramp_minutes, short, long, dist_slack, time_limit_sec; all_post_c=true)
     result = []
     logrange(start,stepmul,length) = start .* stepmul .^ (0:(length-1))
-    for x in logrange(1, 5, 5)
+    for x in logrange(0.1, 2, 10)
         push!(result, x => run_test_scopf_simple(system, voll*x, prob, contingencies, max_shed, ramp_mult, ramp_minutes, short, 
             long, dist_slack, time_limit_sec, all_post_c=all_post_c))
     end
@@ -258,7 +271,9 @@ function make_dataframe_big(result)
     end
     return df
 end
-    
+
+af_categorical_colours = ["#12436D" "#28A197" "#801650" "#F46A25" "#3D3D3D" "#A285D1"]
+
 function scatter_plot(df::DataFrames.DataFrame, x::Symbol, y::Symbol, mark::Symbol=:none)
     if mark == :none
         Plots.scatter(df[!,x], df[!,y],  

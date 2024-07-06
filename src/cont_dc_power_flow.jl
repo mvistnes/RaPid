@@ -118,7 +118,6 @@ function calc_isf_vec!(ϕ::AbstractVector{<:Real}, K::KLU.KLUFactorization{T,<:I
     B = calc_cont_B(DA, B0, cont, cont_branch, slack)
     KLU.klu!(K, B)
     calc_isf_vec!(ϕ, K, DA, slack, branch)
-    ϕ[cont_branch] = 0.0
     return ϕ
 end
 calc_isf_vec(DA::AbstractMatrix{T}, B::AbstractMatrix{<:Real}, cont::Tuple{Integer,Integer},
@@ -153,6 +152,19 @@ calc_isf(DA::AbstractMatrix{T}, B0::AbstractMatrix{<:Real}, cont::Tuple{Integer,
     cont_branch::Integer, slack::Integer, nodes::AbstractVector{<:Integer}, branches::AbstractVector{<:Integer}
 ) where {T<:Real} = calc_isf!(Matrix{T}(undef, size(DA)), DA, B0, cont, cont_branch, slack, nodes, branches)
 
+function calc_isf_vec!(ϕ::AbstractVector{T}, DA::AbstractMatrix{<:Real}, B0::AbstractMatrix{<:Real}, cont::Tuple{Integer,Integer},
+    cont_branch::Integer, slack::Integer, nodes::AbstractVector{<:Integer}, branches::AbstractVector{<:Integer}, branch::Integer
+) where {T<:Real}
+    B = calc_cont_B(DA, B0, cont, cont_branch, nodes)
+    # ϕ[sorted_missing(branches, size(ϕ,1)), sorted_missing(nodes, size(ϕ,2))] .= zero(T)
+    fill!(ϕ, zero(T))
+    ϕ[nodes] = calc_isf_vec!(B, view(DA, branches, nodes), searchsortedfirst(nodes, slack), branch)
+    return ϕ
+end
+calc_isf_vec(DA::AbstractMatrix{T}, B0::AbstractMatrix{<:Real}, cont::Tuple{Integer,Integer},
+    cont_branch::Integer, slack::Integer, nodes::AbstractVector{<:Integer}, branches::AbstractVector{<:Integer}, branch::Integer
+) where {T<:Real} = calc_isf_vec!(Vector{T}(undef, size(DA,2)), DA, B0, cont, cont_branch, slack, nodes, branches, branch)
+
 function calc_isf!(ϕ::AbstractMatrix{<:Real}, ϕ₀::AbstractMatrix{<:Real},
     nodes::AbstractVector{<:Integer}, branches::AbstractVector{<:Integer}
 )
@@ -166,24 +178,6 @@ function calc_isf(pf::DCPowerFlow, cont::Tuple{Real,Real}, c::Integer, islands::
     island::Integer, island_b::Vector{<:Integer}
 )
     return calc_isf!(similar(pf.ϕ), pf.ϕ, islands[island], island_b)
-end
-
-function calc_isf_vec!(ϕ::AbstractVector{T}, ϕ₀::AbstractMatrix{T}, branch::Integer,
-    nodes::AbstractVector{<:Integer}, branches::AbstractVector{<:Integer}
-) where {T<:Real}
-    if branch ∈ branches
-        copy!(ϕ, ϕ₀[branch,:])
-        zero_not_in_array!(ϕ, nodes, Val(1))
-    else
-        ϕ .= zero(T)
-    end
-    return ϕ
-end
-
-function calc_isf_vec(pf::DCPowerFlow, branch::Integer, cont::Tuple{Real,Real}, c::Integer, islands::Vector, 
-    island::Integer, island_b::Vector{<:Integer}
-)
-    return calc_isf_vec!(similar(pf.vb_tmp), pf.ϕ, branch, islands[island], island_b)
 end
 
 function calculate_line_flows!(F::AbstractVector{T}, ϕ::AbstractMatrix{<:Real}, ϕ₀::AbstractMatrix{<:Real}, Pᵢ::AbstractVector{<:Real}, 

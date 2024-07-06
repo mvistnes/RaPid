@@ -368,7 +368,7 @@ function add_cut(ptdf::AbstractVector, opf::OPFsystem, pf::DCPowerFlow, bx::Vect
 )
     for (i, ol) in overloads
         if is_islanded(pf, cont[2], cont[1])
-            calc_isf_vec!(ptdf, pf.ϕ, i, islands[island], island_b)
+            calc_isf_vec!(ptdf, pf.DA, pf.B, cont[2], cont[1], pf.slack, islands[island], island_b, 1)
             # ptdf = calc_isf(pf, cont[2], cont[1], islands, island, island_b)
         else
             # ptdf = calc_isf(pf, cont[2], cont[1])
@@ -398,7 +398,7 @@ function add_cut(ptdf::AbstractVector, P::Dict{<:Integer, <:ContExpr}, opf::OPFs
     end
     for (i, ol) in overloads
         if is_islanded(pf, cont[2], cont[1])
-            calc_isf_vec!(ptdf, pf.ϕ, i, islands[island], island_b)
+            calc_isf_vec!(ptdf, pf.DA, pf.B, cont[2], cont[1], pf.slack, islands[island], island_b, 1)
             # ptdf = calc_isf(pf, cont[2], cont[1], islands, island, island_b)
         else
             # ptdf = calc_isf(pf, cont[2], cont[1])
