@@ -166,7 +166,7 @@ function run_benders!(
 
             @timeit timeo "power flow" begin
             if type.P
-                olc = calculate_contingency_overload!(flow, brst, m, pf, bd, cont, i, c_obj, inodes, island_b, atol)
+                olc = calculate_contingency_overload!(flow, brlt, m, pf, bd, cont, i, c_obj, inodes, island_b, atol)
             end
             if type.C1
                 olc = calculate_contingency_overload!(flow, ΔPc, brst, Pc, opf, m, pf, bd, cont, i, c_obj, inodes, island_b, atol)
@@ -188,7 +188,7 @@ function run_benders!(
             @timeit timeo "cut" begin
             if !isempty(olc)
                 if type.P
-                    cut_added, pre = add_cut(ptdf, opf, pf, bx, m, bd, brst, olc, islands, island, island_b, c_obj, cont, cut_added, atol, pre)
+                    cut_added, pre = add_cut(ptdf, opf, pf, bx, m, bd, brlt, olc, islands, island, island_b, c_obj, cont, cut_added, atol, pre)
                 elseif type.C1
                     cut_added, corr1 = add_cut(ptdf, Pc, opf, pf, bx, oplim, m, bd, brst, ΔPc, olc, islands, island, island_b, c_obj, cont, i, cut_added, atol, corr1)
                 end
