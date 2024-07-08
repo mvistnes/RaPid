@@ -238,8 +238,8 @@ function add_contingency!(opf::OPFsystem, pf::DCPowerFlow, oplim::Oplimits, m::M
 )
     p = @variable(m, [n in 1:length(opf.nodes)], base_name = "p"*string(c))
     @constraint(m, m[:inj_p0] .== p)
-    add_branch_constraints!(m, ptdf, p, brc_up, brc_down, oplim.branch_rating * oplim.short_term_multi)
-    # add_branch_constraints!(m, opf, pf, p, oplim.branch_rating * oplim.short_term_multi, c)
+    add_branch_constraints!(m, ptdf, p, brc_up, brc_down, oplim.branch_rating * oplim.long_term_multi)
+    # add_branch_constraints!(m, opf, pf, p, oplim.branch_rating * oplim.long_term_multi, c)
 end
 
 function add_contingency!(Pc::Dict{<:Integer,ExprC}, opf::OPFsystem, pf::DCPowerFlow, oplim::Oplimits, m::Model, 

@@ -33,7 +33,7 @@ prob /= 100
 short = 1.2
 long = 1.0
 ramp_minutes = 10.
-max_shed = 0.1
+max_shed = 1.
 ramp_mult = 2.
 
 function test_benders(system, optimizer, voll, contingencies, prob, max_shed,ramp_mult, ramp_minutes, short, long)
