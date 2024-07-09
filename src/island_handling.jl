@@ -171,7 +171,7 @@ end
 function handle_islands(B::AbstractMatrix, contingency::Tuple{Integer,Integer}, slack::Integer)
     islands = island_detection(B, contingency[1], contingency[2])
     island = find_ref_island(islands, slack)
-    return length(islands[island]) > 0 ? (islands, islands) : Vector{Vector{Int64}}(undef, 0), 0
+    return length(islands[island]) > 0 ? (islands, islands) : (Vector{Vector{Int64}}(undef, 0), 0)
     # Need at least one node to make a valid system
 end
 

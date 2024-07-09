@@ -155,7 +155,8 @@ end
 
 function run_test_scopf_simple(system, voll, prob, contingencies, max_shed, ramp_mult, ramp_minutes, short, long, dist_slack, time_limit_sec; all_post_c=true)
     result = Dict()
-    for type in [SCOPF.Base_SCOPF, SCOPF.P_SCOPF, SCOPF.OPF(true, false, true, false, false), SCOPF.OPF(true, false, false, true, false), SCOPF.PC_SCOPF, SCOPF.PC2_SCOPF]
+    # for type in [SCOPF.Base_SCOPF, SCOPF.P_SCOPF, SCOPF.OPF(true, false, true, false, false), SCOPF.OPF(true, false, false, true, false), SCOPF.PC_SCOPF, SCOPF.PC2_SCOPF]
+    for type in [SCOPF.Base_SCOPF, SCOPF.P_SCOPF, SCOPF.PC2_SCOPF]
         println(type)
         case, _ = SCOPF.run_benders(type, system, Gurobi.Optimizer(GRB_ENV), voll, prob, contingencies, max_shed=max_shed, 
             ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, dist_slack=dist_slack, 
@@ -168,7 +169,7 @@ end
 function run_tests(system, voll, prob, contingencies, max_shed, ramp_mult, ramp_minutes, short, long, dist_slack, time_limit_sec; all_post_c=true)
     result = []
     logrange(start,stepmul,length) = start .* stepmul .^ (0:(length-1))
-    for x in logrange(0.1, 2, 10)
+    for x in logrange(0.1, 5, 6)
         push!(result, x => run_test_scopf_simple(system, voll*x, prob, contingencies, max_shed, ramp_mult, ramp_minutes, short, 
             long, dist_slack, time_limit_sec, all_post_c=all_post_c))
     end
@@ -212,7 +213,6 @@ function run_random(system, voll, prob, contingencies, all_post_c, iterations)
         ramp_minutes = 10.
         short = rand(1.25:0.01:1.5)
         long = rand(1.0:0.01:1.25)
-        reset_timer!(Main.to)
         case, tot_t = SCOPF.run_benders(SCOPF.PC2_SCOPF, system, Gurobi.Optimizer(GRB_ENV), voll*x, prob*y, contingencies, max_shed=max_shed, ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=0.00, all_post_c=all_post_c);
         vals = SCOPF.extract_results(case)
         vals[:t] = tot_t
