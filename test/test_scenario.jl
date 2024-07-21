@@ -6,12 +6,22 @@ Random.seed!(53715)
 # system = include("data/RTS_GMLC/config.jl")
 
 df = DataFrames.DataFrame(CSV.File("data/RTS_GMLC/branch.csv"))
+df_n = DataFrames.DataFrame(CSV.File("data/RTS_GMLC/bus.csv"))
 branches = SCOPF.sort_components!(SCOPF.get_branches(system));
 ia_br = SCOPF.get_interarea(branches)
 brc = reduce(vcat, [ia_br, branches[findall(x->x.name ∈ ["A30", "A21", "B30", "B21", "C30", "C21"], branches)]])
 
+max_lng = maximum(df_n[!,:lng])
+delay = Dict{String, Float64}()
+for b in brc
+    fbus = df[df.UID .== b.name, "From Bus"][1]
+    tbus = df[df.UID .== b.name, "To Bus"][1]
+    delay[b.name] = round.((max_lng - df_n[df_n."Bus ID" .== fbus,:lng][1] + max_lng - df_n[df_n."Bus ID" .== tbus,:lng][1]) / 2)
+end
+
 prob = reduce(vcat, [[df[!,"Perm OutRate"][i] for i in 1:length(branches) if x == branches[i].name] for x in df.UID])
 w = [branches[i] ∈ brc ? Storm(x/100/8760, 0.02*(0.5+rand()), rand(20:25), rand(1:3), rand(10:14), rand(10:14)) : storm() for (i,x) in enumerate(prob)]
+# w = [branches[i] ∈ brc ? Storm(x/100/8760, 0.02*(0.5+rand()), 20+delay[branches[i].name], rand(1:3), rand(10:14), rand(10:14)) : storm() for (i,x) in enumerate(prob)]
 w2 = [branches[i] ∈ brc ? Storm(x/100/8760, 0.02*(0.5+rand()), rand(25:30), rand(1:3), rand(10:14), rand(10:14)) : storm() for (i,x) in enumerate(prob)]
 p = generate_p_from_weather(prob/8760, 60, w)
 p2 = generate_p_from_weather(prob/8760, 60, w2)
@@ -35,10 +45,10 @@ for (i,x) in enumerate(vals)
         outs[i,j] = y
     end
 end
-StatsPlots.groupedbar([sum(outs[:,1:3], dims=2) outs[:,4:end]], bar_position = :stack, xlabel="Time", ylabel="Probability", 
-    palette = Plots.palette(:seaborn_colorblind6, rev=true), labels=["N-k > 3" "N-3" "N-2" "N-1" "N-0"], leg=:bottomright)
-Plots.plot(cumsum([outs[:,1:4] sum(outs[:,5:end], dims=2)], dims = 2)[:,end:-1:1], fill=0, lc=:black, legend=:none, 
-    xlabel="Time", ylabel="Probability", palette = Plots.palette(:seaborn_colorblind6, rev=true), leg=:bottomright, 
+StatsPlots.groupedbar([sum(outs[:,1:3], dims=2) outs[:,4:end]], bar_position = :stack, xlabel="Time [h]", ylabel="Probability", 
+    palette = Plots.palette(:seaborn_colorblind6, rev=true), labels=["N-k > 3" "N-3" "N-2" "N-1" "N-0"], leg=:bottomright, grid=:none)
+Plots.plot(cumsum([outs[:,1:4] sum(outs[:,5:end], dims=2)], dims = 2)[:,end:-1:1], fill=0, lc=:black, legend=:none, grid=:none,
+    xlabel="Time [h]", ylabel="Probability", palette = Plots.palette(:seaborn_colorblind6, rev=true), leg=:bottomright,
     annotation=[(27, 0.2, ("N-0", 10)), (27, 0.6, ("N-1", 10)), (27, 0.83, ("N-2", 10)), (27, 0.96, ("N-3", 10)), (27, 1.03, ("N-k > 3", 10))])
 Plots.plot([collect(values(sort(SCOPF.countmemb(length.(last.(x[1]))), by=i->i[1]))) for x in scenarioes])
 Plots.plot([collect(values(sort(SCOPF.sumvals(length.(last.(x[1])), x[2]), by=i->i[1]))) for x in scenarioes])
@@ -93,8 +103,8 @@ for max_shed in 2.5:5.0
     set_active_power!.(demands, get_active_power.(demands)*demand_mult)
     set_time_series_value!(renewables, t)
     set_active_power!.(renewables, get_active_power.(renewables)*renew_mult)
-    # res, res_prev, res_prev_n1, res_n1, res_base = run_cases(system, scenarioes_n1, voll, prob, contingencies, max_shed, ramp_mult, renew_cost, renew_ramp, ramp_minutes, short, long, prev_lim);
-    res_prev, res, res_prev_n1, res_n1, res_base = FileIO.load("results/"*name*".jld2", "Scen_Prev", "Scen_Prob","N-1_Prev", "N-1_Prob", "N-0");
+    res, res_prev, res_prev_n1, res_n1, res_base = run_cases(system, scenarioes_n1, voll, prob, contingencies, max_shed, ramp_mult, renew_cost, renew_ramp, ramp_minutes, short, long, prev_lim);
+    # res_prev, res, res_prev_n1, res_n1, res_base = FileIO.load("results/"*name*".jld2", "Scen_Prev", "Scen_Prob","N-1_Prev", "N-1_Prob", "N-0");
 
     base_costs = [[isnan(x[:obj_val]) ? NaN : x[:costs][1,:Base] for x in r] for r in [res_prev, res, res_prev_n1, res_n1, res_base]]
     corrective_costs = [[isnan(x[:obj_val]) ? NaN : (x[:costs][1,:r] + sum(p[2] .* (x[:costs][:,:Pc] + x[:costs][:,:Pcc]))) for (x,p) in zip(r,scenarioes_n1)] for r in [res_prev,res,res_prev_n1,res_n1,res_base]]

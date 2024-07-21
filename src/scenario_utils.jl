@@ -83,3 +83,38 @@ function plot_contingency_data(results::Vector{<:Vector}, state::Symbol, propert
     pl = Plots.plot(data.*100, labels=labels, leg=:topright, xaxis=[1,xmax], xlabel="Contingency", ylabel="Load shed [MWh/h]", thickness_scaling=1.2)
     return pl, data
 end
+
+function plot_probability_contingency_data(results::Vector{<:Vector}, state::Symbol, property::Symbol, labels::Matrix{String}, forced_ls::Vector{<:Dict}, scenarioes)
+    xax = reduce(vcat, last.(scenarioes))
+    data = [[zeros(length(s[2])) for s in scenarioes] for _ in 1:length(results)]
+    for (i,r) in enumerate(results)
+        for (j,t) in enumerate(scenarioes)
+            for (k,c) in enumerate(t[2])
+                if get(r[j][state], k, 0) != 0
+                    if get(forced_ls[j], k, 0) != 0
+                        data[i][j][k] = sum(r[j][state][k][property]) - forced_ls[j][k]
+                    else
+                        data[i][j][k] = sum(r[j][state][k][property])
+                    end
+                end
+            end
+        end
+    end
+    data = reduce.(vcat, data)
+    # data = [reduce(vcat, [[sum(i[property]) - (get(forced_ls[t], c, 0) == 0 ? 0 : forced_ls[t][c]) for (c,i) in x[state]] for (t,x) in enumerate(r)]) for r in results]
+    perm = sortperm.(data, rev=true)
+    xax = cumsum.(getindex.([xax], perm))./sum(xax).*100
+    xmax = maximum(filter(x->!isnothing(x), findfirst.(x->x<1e-3, data)); init=0)
+    pl = Plots.plot(xax, getindex.(data, perm).*100, labels=labels, leg=:topright, xaxis=[0,2.5], xlabel="Total cumulative probability [%]", ylabel="Load shed [MWh/h]", thickness_scaling=1.2)
+    return pl, data
+end
+
+function plot_contingency_data(results::Vector, state::Symbol, property::Symbol, labels::Matrix{String}, forced_ls::Vector{<:Dict}, scenarioes)
+    data = [[sum(i[property]) - (get(forced_ls[t], c, 0) == 0 ? 0 : forced_ls[t][c]) for (c,i) in x[state]] for (t,x) in enumerate(results)]
+    perm = sortperm.(data, rev=true)
+    xax = reduce(vcat, last.(scenarioes))
+    xax = cumsum.(getindex.([xax], perm))
+    xmax = maximum(filter(x->!isnothing(x), findfirst.(x->x<1e-3, data)); init=0)
+    pl = Plots.plot(xax, getindex.(data, perm).*100, leg=:none, xlabel="Contingency", ylabel="Load shed [MWh/h]", thickness_scaling=1.2)
+    return pl, data
+end

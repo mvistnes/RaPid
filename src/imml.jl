@@ -72,9 +72,9 @@ function calc_isf_vec!(
         G = pf.D[cbranches, cbranches]
         XF = pf.X * H'
         cinv = inv(G) - H * XF
-        if isapprox(cinv, zero(T); atol=atol)
-            return throw(DivideError())
-        end
+        # if isapprox(LinearAlgebra.det(cinv), zero(T); atol=atol)
+        #     return throw(DivideError())
+        # end
         ϕ .= pf.ϕ[branch,:] + pf.DA[branch,nodes[1]] * (XF * inv(cinv) * (XF'[:,nodes[1]] - XF'[:,nodes[2]]))
         set_tol_zero!(ϕ)
     end
@@ -350,9 +350,9 @@ function calculate_line_flows!(
     Ab = A[branches,:]
     XF = X * Ab' * change
     c⁻¹ = LinearAlgebra.Diagonal(inv.(getindex.([DA], branches, fnodes))) - Ab * XF
-    if isapprox(LinearAlgebra.det(c⁻¹), zero(T); atol=atol)
-        return throw(DivideError())
-    end
+    # if isapprox(LinearAlgebra.det(c⁻¹), zero(T); atol=atol)
+    #     return throw(DomainError(branches))
+    # end
     LinearAlgebra.mul!(Pl, ϕ, (Pᵢ .+ Ab'inv(c⁻¹) * XF'Pᵢ))
     Pl[branches] .= zero(T)
     return Pl

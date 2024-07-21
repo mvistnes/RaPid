@@ -25,6 +25,17 @@ function generate_states(p::Matrix{<:Real}, λ::Real)
     for s in axes(states,1)
         state = generate_state(p[s,:])
         duration = generate_duration(λ, state)
+        # for i in axes(p,2)
+        #     if p[s,i] > 0.0005 && !state[i] && duration[i] > 0
+        #         add = 0
+        #         j = s
+        #         while j < size(p,2) && p[j,i] > 0.0005
+        #             add += 1
+        #             j += 1 
+        #         end
+        #         duration[i] += add
+        #     end
+        # end
         for (i,d) in enumerate(duration)
             if d > 0
                 c_end = s+d > l ? l : s+d
