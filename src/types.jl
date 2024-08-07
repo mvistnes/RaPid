@@ -38,11 +38,11 @@ const PC2_SCOPF = OPF(true, false, true, true, false)
 "OPF with preventive and corrective actions for two post-contingency state with corrective failures"
 const PC2F_SCOPF = OPF(true, false, true, true, true)
 
-function assert(opf::OPF)
-    @assert opf.P ⊼ opf.C1
-    @assert !opf.C2F | (opf.C2 & opf.C2F)
-    return
-end
+# function assert(opf::OPF)
+#     @assert opf.P ⊼ opf.C1
+#     @assert !opf.C2F | (opf.C2 & opf.C2F)
+#     return
+# end
 
 function +(x::OPF, y::OPF)
     return OPF(x.Base | y.Base, x.P | y.P, x.C1 | y.C1, x.C2 | y.C2, x.C2F | y.C2F)

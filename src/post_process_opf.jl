@@ -51,10 +51,11 @@ function extract_results(case::Case)
     pgru = get_value(case.model, :pgru)
     pgrd = get_value(case.model, :pgrd)
     ls0 = get_value(case.model, :ls0)
+    pen = get_value(case.model, :pen)
     Pc = extract_results(case.model, case.Pc)
     Pcc = extract_results(case.model, case.Pcc)
     obj_val = is_solved_and_feasible(case.model) ? JuMP.objective_value(case.model) : NaN
-    return Dict([:costs, :p0, :pg0, :pfdc0, :pgru, :pgrd, :ls0, :Pc, :Pcc, :obj_val] .=> [costs, p0, pg0, pfdc0, pgru, pgrd, ls0, Pc, Pcc, obj_val])
+    return Dict([:costs, :p0, :pg0, :pfdc0, :pgru, :pgrd, :ls0, :pen, :Pc, :Pcc, :obj_val] .=> [costs, p0, pg0, pfdc0, pgru, pgrd, ls0, pen, Pc, Pcc, obj_val])
 end
 
 function calc_forced_ls(case::Case, prob=case.opf.prob, contingencies=case.opf.contingencies)

@@ -39,6 +39,7 @@ function run_benders(
     renew_ramp::Number=1000.0,
     max_shed::Number=1.0, 
     max_curtail::Number=1.0, 
+    reserve=0.02,
     atol::Number=1e-6,
     short_term_multi::Real=1.5, 
     long_term_multi::Real=1.2, 
@@ -49,7 +50,7 @@ function run_benders(
 )
     case = Case(opf_base(OPF(true, false, false, false, false), system, optimizer, voll=voll, contingencies=contingencies, prob=prob,
         dist_slack=dist_slack, time_limit_sec=time_limit_sec, ramp_minutes=ramp_minutes, ramp_mult=ramp_mult, renew_cost=renew_cost, 
-        renew_ramp=renew_ramp, max_shed=max_shed, max_curtail=max_curtail, short_term_multi=short_term_multi, long_term_multi=long_term_multi, 
+        renew_ramp=renew_ramp, max_shed=max_shed, max_curtail=max_curtail, reserve=reserve, short_term_multi=short_term_multi, long_term_multi=long_term_multi, 
         p_failure=p_failure, silent=silent, debug=debug)...)
 
     total_solve_time = constrain_branches!(case, 0.0)
@@ -79,11 +80,10 @@ function run_benders!(
     atol::Number=1e-6,
     max_itr::Integer=10
 )
-    assert(type)
+    # assert(type)
     # @assert !type.C1 || isempty(Pc)
     # @assert !type.C2 || isempty(Pcc)
     # @assert !type.C2F || isempty(Pccx)
-    
     total_solve_time = solve_time(m)
     !is_solved_and_feasible(m) && return Case(m, opf, pf, oplim, brc_up, brc_down, Pc, Pcc, Pccx), total_solve_time
     @debug "lower_bound = $(objective_value(m))"
@@ -91,6 +91,10 @@ function run_benders!(
     # Set variables
     !isempty(oplim.dist_slack) && set_dist_slack!(pf.ϕ, opf.mgx, oplim.dist_slack)
     bd = benders(opf, m)
+    if type.P
+        @constraint(m, sum(m[:pgru]) >= oplim.reserve)
+        @constraint(m, sum(m[:pgrd]) >= oplim.reserve)
+    end
 
     ΔPc = zeros(length(bd.Pg))
     ΔPcc = zeros(length(bd.Pg))
@@ -103,6 +107,7 @@ function run_benders!(
     brst = oplim.branch_rating * oplim.short_term_multi
     brlt = oplim.branch_rating * oplim.long_term_multi
 
+    olp = Vector{Tuple{Int64,Float64}}()
     olc = Vector{Tuple{Int64,Float64}}()
     olcc = Vector{Tuple{Int64,Float64}}()
     olccx = Vector{Tuple{Int64,Float64}}()
@@ -127,6 +132,7 @@ function run_benders!(
                 if !isempty(islands)
                     for (island, island_b) in zip(islands, islands_b)
                         s = find_slack(island, pf.slack, oplim.pg_lim_max, opf.mgx)
+                        s < 1 && continue
                         calculate_line_flows!(pf.vb_tmp, pf.vn_tmp, pf.DA, pf.B, bd.Pᵢ, c_n, c_i, s, island, island_b)
                         push!(overload, filter_overload(pf.vb_tmp, brst))
                     end
@@ -180,28 +186,28 @@ function run_benders!(
             end
 
             if type.P
-                olc = [calculate_contingency_overload!(brst, pf, bd.Pᵢ, c_n, c_i, inodes, ibranches, s, atol) for (inodes, ibranches, s) in zip(islands, islands_b, slack)]
-            elseif type.C1
-                olc = [calculate_contingency_overload!(ΔPc, brst, Pc, opf, m, pf, bd, c_n, c_i, c, inodes, ibranches, s, atol) for (inodes, ibranches, s) in zip(islands, islands_b, slack)]
+                olp = [s > 0 ? calculate_contingency_overload!(brst, pf, bd.Pᵢ, c_n, c_i, inodes, ibranches, s, atol) : [] for (inodes, ibranches, s) in zip(islands, islands_b, slack) if isempty(inodes)]
+            end
+            if type.C1
+                olc = [s > 0 ? calculate_contingency_overload!(ΔPc, brst, Pc, opf, m, pf, bd, c_n, c_i, c, inodes, ibranches, s, atol) : [] for (inodes, ibranches, s) in zip(islands, islands_b, slack)]
             end
             if type.C2
-                olcc = [calculate_contingency_overload!(ΔPcc, brlt, Pcc, opf, m, pf, bd, c_n, c_i, c, inodes, ibranches, s, atol) for (inodes, ibranches, s) in zip(islands, islands_b, slack)]
+                olcc = [s > 0 ? calculate_contingency_overload!(ΔPcc, brlt, Pcc, opf, m, pf, bd, c_n, c_i, c, inodes, ibranches, s, atol) : [] for (inodes, ibranches, s) in zip(islands, islands_b, slack)]
             end
             if type.C2F
-                olccx = [calculate_contingency_overload!(ΔPccx, brlt, Pccx, opf, m, pf, bd, c_n, c_i, c, inodes, ibranches, s, atol) for (inodes, ibranches, s) in zip(islands, islands_b, slack)]
+                olccx = [s > 0 ? calculate_contingency_overload!(ΔPccx, brlt, Pccx, opf, m, pf, bd, c_n, c_i, c, inodes, ibranches, s, atol) : [] for (inodes, ibranches, s) in zip(islands, islands_b, slack)]
             end
 
             # Cannot change the model before all data is exctracted!
+            if sum(.!isempty.(olp)) > 0
+                for (j,ol) in enumerate(olp)
+                    pre = add_cut(pf, m, brst, ptdf, ol, c_obj, cut_added, atol, pre, islands, j, islands_b, c_n, c_i)
+                end
+            end
             if sum(.!isempty.(olc)) > 0
-                type.C1 && get(Pc, c, 0) == 0 && fill!(ΔPc, 0.0)
-                if type.P
-                    for (j,ol) in enumerate(olc)
-                        pre = add_cut(pf, m, brst, ptdf, ol, c_obj, cut_added, atol, pre, islands, j, islands_b, c_n, c_i)
-                    end
-                elseif type.C1
-                    for (j,ol) in enumerate(olc)
-                        corr1 = add_cut(Pc, pf, opf, oplim, m, bd, brst, ptdf, ol, islands, j, islands_b, c_n, c_i, c_obj, c, cut_added, atol, corr1)
-                    end
+                get(Pc, c, 0) == 0 && fill!(ΔPc, 0.0)
+                for (j,ol) in enumerate(olc)
+                    corr1 = add_cut(Pc, pf, opf, oplim, m, bd, brst, ptdf, ol, islands, j, islands_b, c_n, c_i, c_obj, c, cut_added, atol, corr1)
                 end
             end
             if sum(.!isempty.(olcc)) > 0

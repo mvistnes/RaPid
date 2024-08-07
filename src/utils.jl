@@ -421,6 +421,7 @@ function find_slack(nodes::AbstractVector{<:Integer}, slack::Integer, pg_lim_max
     s = searchsorted(nodes, slack)
     if length(s) == 0
         gens = reduce(vcat, [mgx[:,i].nzind for i in nodes]) # generators in island
+        isempty(gens) && return 0
         _, sg = findmax(pg_lim_max[gens]) # slack generator (biggest in island)
         si = mgx[gens[sg], :].nzind[1] # slack node
         s = searchsorted(nodes, si)

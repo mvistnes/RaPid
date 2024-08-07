@@ -16,6 +16,7 @@ struct Oplimits{TR<:Real}
     dc_lim_max::Vector{TR}
     pd_lim::Vector{TR}
     max_shed::Union{TR,Vector{TR}}
+    reserve::TR
 end
 
 """ Constructor for Oplimits """
@@ -23,6 +24,7 @@ function oplimits(
     system::System,
     max_shed::Union{TR,Vector{TR}},
     max_curtail::Union{TR,Vector{TR}},
+    reserve::TR,
     dist_slack::Vector{TR},
     ramp_minutes::TR,
     p_failure::TR,
@@ -47,8 +49,9 @@ function oplimits(
     if !isempty(dist_slack)
         dist_slack = dist_slack / sum(dist_slack)
     end
+    reserve = reserve * sum(pd_lim)
     return Oplimits{TR}(ramp_minutes, p_failure, branch_rating, short_term_multi, long_term_multi, 
-        zeros(length(pg_lim_min)), pg_lim_max, rampup, rampdown, dist_slack, max_curtail, dc_lim_min, dc_lim_max, pd_lim, max_shed)
+        zeros(length(pg_lim_min)), pg_lim_max, rampup, rampdown, dist_slack, max_curtail, dc_lim_min, dc_lim_max, pd_lim, max_shed, reserve)
 end
 
 mutable struct Case{TR<:Real,TI<:Integer}
@@ -76,6 +79,7 @@ function opf_base(type::OPF, system::System, optimizer;
     renew_ramp::Number=1000.0,
     max_shed=1.0,
     max_curtail=1.0,
+    reserve=0.02,
     short_term_multi=1.5,
     long_term_multi=1.2,
     p_failure=0.0,
@@ -83,13 +87,17 @@ function opf_base(type::OPF, system::System, optimizer;
     debug=false
 )
     @assert type.Base
-    assert(type)
+    # assert(type)
     @assert !type.C2F | !iszero(p_failure)
     m = create_model(optimizer, time_limit_sec=time_limit_sec, silent=silent, debug=debug)
     opf = isempty(voll) ? opfsystem(system) : opfsystem(system, voll, contingencies, prob; ramp_mult=ramp_mult, renew_cost=renew_cost, renew_ramp=renew_ramp)
     pf = DCPowerFlow(system)
-    oplim = oplimits(system, max_shed, max_curtail, dist_slack, ramp_minutes, p_failure, short_term_multi, long_term_multi)
+    oplim = oplimits(system, max_shed, max_curtail, reserve, dist_slack, ramp_minutes, p_failure, short_term_multi, long_term_multi)
     m, opf, pf, oplim = add_base_constraints!(opf, oplim, m, pf)
+    if type.P
+        @constraint(m, sum(m[:pgru]) >= oplim.reserve)
+        @constraint(m, sum(m[:pgrd]) >= oplim.reserve)
+    end
 
     brc_up = Dict{Int64,ConstraintRef}()
     brc_down = Dict{Int64,ConstraintRef}()
@@ -117,16 +125,22 @@ function add_base_constraints!(opf::OPFsystem, oplim::Oplimits, m::Model, pf::DC
         pd[d in 1:size(opf.mdx, 1)]
         0.0 <= ls0[i in 1:size(opf.mdx, 1)] <= oplim.pd_lim[i] * (typeof(oplim.max_shed) <: Real ? 1.0 : oplim.max_shed[i])
         # demand curtailment variables
+        0.0 <= pen
+        # penalty for exeeding max_shed
     end)
 
     # @objective(m, Min, sum(c.var * (g + ru + rd) for (c, g, ru, rd) in zip(opf.cost_gen, pg0, pgru, pgrd)) + sum(opf.voll' * ls0))
-    @objective(m, Min, sum((c.var * g + c.ramp * (ru + rd)) for (c, g, ru, rd) in zip(opf.cost_gen, pg0, pgru, pgrd)) + sum(opf.voll' * ls0))
+    @objective(m, Min, sum((c.var * g + c.ramp * (ru + rd)) for (c, g, ru, rd) in zip(opf.cost_gen, pg0, pgru, pgrd)) 
+        + sum(opf.voll' * ls0) + maximum(opf.voll)*10*pen)
     # @objective(m, Min, sum(c[1] * g^2 + c[2] * g for (c, g) in zip(opf.cost_gen, pg0)) + sum(opf.voll' * ls0) 
 
     JuMP.fix.(pd, oplim.pd_lim)
     if typeof(oplim.max_shed) <: Real
-        @constraint(m, sum_max_shed, sum(ls0) <= oplim.max_shed)
+        @constraint(m, sum_max_shed, sum(ls0) <= oplim.max_shed + pen)
     end
+    
+    @constraint(m, pg0 .+ pgru .<= oplim.pg_lim_max)
+    @constraint(m, pg0 .- pgrd .>= oplim.pg_lim_min)
 
     @expression(m, inj_p0, opf.mgx' * pg0)
     add_to_expression!.(inj_p0, opf.mdcx' * pfdc0)
@@ -344,28 +358,43 @@ function init_P!(Pc::Dict{<:Integer,ExprC}, opf::OPFsystem, oplim::Oplimits, m::
     add_to_expression!.(balance_pc, -pgd)
     @constraint(m, balance_pc == 0.0)
     if isempty(islands[1])
-        @constraint(m, m[:pg0] .+ pgu .- pgd .>= oplim.pg_lim_min)
-        @constraint(m, m[:pg0] .+ pgu .- pgd .<= oplim.pg_lim_max)
         @constraint(m, m[:pgru] .>= pgu)
         @constraint(m, m[:pgrd] .>= pgd)
         if typeof(oplim.max_shed) <: Real
-            @constraint(m, sum(lsc) <= oplim.max_shed)
+            @constraint(m, sum(lsc) <= oplim.max_shed + m[:pen])
         end
     else
-        for itr in islands, n in itr, g = opf.mgx[:,n].nzind
-            @constraints(m, begin
-                m[:pg0][g] + pgu[g] - pgd[g] >= oplim.pg_lim_min[g]
-                m[:pg0][g] + pgu[g] - pgd[g] <= oplim.pg_lim_max[g]
-                m[:pgru][g] >= pgu[g]
-                m[:pgrd][g] >= pgd[g]
-            end)
-        end
         if typeof(oplim.max_shed) <: Real
             expr = AffExpr()
-            for itr in islands, n in itr, d in opf.mdx[:,n].nzind
-                add_to_expression!(expr, lsc[d])
+        end
+        for itr in islands
+            balance_pc = @expression(m, AffExpr())
+            for n in itr, g = opf.mgx[:,n].nzind
+                @constraints(m, begin
+                    m[:pgru][g] >= pgu[g]
+                    m[:pgrd][g] >= pgd[g]
+                end)
+                add_to_expression!(balance_pc, m[:pg0][g])
+                add_to_expression!(balance_pc, pgu[g])
+                add_to_expression!(balance_pc, -pgd[g])
             end
-            @constraint(m, expr <= oplim.max_shed)
+            if typeof(oplim.max_shed) <: Real
+                expr = AffExpr()
+                for n in itr, d in opf.mdx[:,n].nzind
+                    add_to_expression!(expr, lsc[d])
+                    add_to_expression!(balance_pc, -m[:pd][d])
+                    add_to_expression!(balance_pc, lsc[d])
+                end
+            else
+                for n in itr, d in opf.mdx[:,n].nzind
+                    add_to_expression!(balance_pc, -m[:pd][d])
+                    add_to_expression!(balance_pc, lsc[d])
+                end
+            end
+            @constraint(m, balance_pc == 0.0)
+        end
+        if typeof(oplim.max_shed) <: Real
+            @constraint(m, expr <= oplim.max_shed + m[:pen])
         end
         itr = 1:size(opf.mgx, 2)
         for island in islands
@@ -426,20 +455,38 @@ function init_P!(Pcc::Dict{<:Integer,ExprCC}, opf::OPFsystem, oplim::Oplimits, m
             m[:pg0] .+ pgu .- pgd .<= oplim.pg_lim_max
         end)
         if typeof(oplim.max_shed) <: Real
-            @constraint(m, sum(lscc) <= oplim.max_shed)
+            @constraint(m, sum(lscc) <= oplim.max_shed + m[:pen])
         end
     else
-        for itr in islands, n in itr, g in opf.mgx[:,n].nzind
-            expr = @expression(m, m[:pg0][g] + pgu[g] - pgd[g])
-            @constraint(m, expr >= oplim.pg_lim_min[g])
-            @constraint(m, expr <= oplim.pg_lim_max[g])
-        end
         if typeof(oplim.max_shed) <: Real
             expr = AffExpr()
-            for itr in islands, n in itr, d in opf.mdx[:,n].nzind
-                add_to_expression!(expr, lscc[d])
+        end
+        for itr in islands
+            balance_pcc = @expression(m, AffExpr())
+            for n in itr, g in opf.mgx[:,n].nzind
+                expr = @expression(m, m[:pg0][g] + pgu[g] - pgd[g])
+                @constraint(m, expr >= oplim.pg_lim_min[g])
+                @constraint(m, expr <= oplim.pg_lim_max[g])
+                add_to_expression!(balance_pcc, m[:pg0][g])
+                add_to_expression!(balance_pcc, pgu[g])
+                add_to_expression!(balance_pcc, -pgd[g])
             end
-            @constraint(m, expr <= oplim.max_shed)
+            if typeof(oplim.max_shed) <: Real
+                for n in itr, d in opf.mdx[:,n].nzind
+                    add_to_expression!(expr, lscc[d])
+                    add_to_expression!(balance_pcc, -m[:pd][d])
+                    add_to_expression!(balance_pcc, lscc[d])
+                end
+            else
+                for n in itr, d in opf.mdx[:,n].nzind
+                    add_to_expression!(balance_pcc, -m[:pd][d])
+                    add_to_expression!(balance_pcc, lscc[d])
+                end
+            end
+            @constraint(m, balance_pcc == 0.0)
+        end
+        if typeof(oplim.max_shed) <: Real
+            @constraint(m, expr <= oplim.max_shed + m[:pen])
         end
         itr = 1:size(opf.mgx, 2)
         for island in islands
@@ -480,15 +527,18 @@ function init_P!(Pccx::Dict{<:Integer,ExprCCX}, opf::OPFsystem, oplim::Oplimits,
     if isempty(islands[1])
         @constraint(m, m[:pg0] .- pgd .>= 0.0)
     else
-        for itr in islands, n in itr, g = opf.mgx[:,n].nzind
-            @constraint(m, m[:pg0][g] - pgd[g] >= 0.0)
-        end
-        if typeof(oplim.max_shed) <: Real
-            expr = AffExpr()
-            for itr in islands, n in itr, d in opf.mdx[:,n].nzind
-                add_to_expression!(expr, lscc[d])
+        for itr in islands
+            balance_pccx = @expression(m, AffExpr())
+            for n in itr, g = opf.mgx[:,n].nzind
+                @constraint(m, m[:pg0][g] - pgd[g] >= 0.0)
+                add_to_expression!(balance_pccx, m[:pg0][g])
+                add_to_expression!(balance_pccx, -pgd[g])
             end
-            @constraint(m, expr <= oplim.max_shed)
+            for n in itr, d in opf.mdx[:,n].nzind
+                add_to_expression!(balance_pccx, -m[:pd][d])
+                add_to_expression!(balance_pccx, lscc[d])
+            end
+            @constraint(m, balance_pccx == 0.0)
         end
         itr = 1:size(opf.mgx, 2)
         for island in islands
@@ -600,7 +650,7 @@ calc_objective(m::Model, opf::OPFsystem) =
     calc_cost(m, opf, m[:pg0]) + calc_cens(m, opf, m[:ls0])
 
 calc_reserves(m::Model, opf::OPFsystem) =
-    calc_cost(m, opf, m[:pgru], :ramp) + calc_cost(m, opf, m[:pgrd], :ramp)
+    calc_cost(m, opf, m[:pgru], :ramp) + calc_cost(m, opf, m[:pgrd], :ramp) + maximum(opf.voll) * 10 * value(m[:pen])
 
 """ Calculate the short term state cost """
 calc_objective(m::Model, opf::OPFsystem, expr::ExprC) =
