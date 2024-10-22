@@ -5,7 +5,9 @@ const GRB_ENV = Gurobi.Env()
 Random.seed!(53715)
 
 ## Run this line in REPL
-# system = include("data/RTS_GMLC/config.jl")
+system = include(joinpath(pwd(), "data", "RTS_GMLC", "config.jl"))
+include(joinpath(pwd(), "src", "scenario.jl"))
+include(joinpath(pwd(), "src", "scenario_utils.jl"))
 
 df = DataFrames.DataFrame(CSV.File("data/RTS_GMLC/branch.csv"))
 df_n = DataFrames.DataFrame(CSV.File("data/RTS_GMLC/bus.csv"))
@@ -35,8 +37,8 @@ style = Plots.supported_styles()[2:end]
 style = reshape(style, 1, length(style))
 bnames = first.(sort(get_name.(branches) .=> w, by=x->x[2].max)[1:11])
 Plots.plot([[last(sort(x[2])) for x in scenarioes] [last(sort(x[2])) for x in scenarioes2]], labels=[])
-Plots.plot(reduce(hcat, generate_weather.([60], sort(w, by=x->x.max)[1:11])), label=permutedims(bnames), 
-    xlabel="Time", ylabel="Probability", palette = Plots.palette(:seaborn_colorblind6))
+Plots.plot(reduce(hcat, generate_weather.([60], sort(w, by=x->x.max)[1:11])).*100, label=permutedims(bnames), 
+    xlabel="Time [h]", ylabel="Outage probability [%]", palette = Plots.palette(:seaborn_colorblind6), size=(500,250))
 Plots.boxplot(reduce(hcat, generate_weather.([60], sort(w2, by=x->x.max)[1:11]))', 
     xlabel="Time", ylabel="Probability", palette = Plots.palette([:lightgrey],1), leg=:none)
 
@@ -50,25 +52,14 @@ for (i,x) in enumerate(vals)
 end
 StatsPlots.groupedbar([sum(outs[:,1:3], dims=2) outs[:,4:end]], bar_position = :stack, xlabel="Time [h]", ylabel="Probability", 
     palette = Plots.palette(:seaborn_colorblind6, rev=true), labels=["N-k > 3" "N-3" "N-2" "N-1" "N-0"], leg=:bottomright, grid=:none)
-Plots.plot(cumsum([outs[:,1:4] sum(outs[:,5:end], dims=2)], dims = 2)[:,end:-1:1], fill=0, lc=:black, legend=:none, grid=:none,
-    xlabel="Time [h]", ylabel="Probability", palette = Plots.palette(:seaborn_colorblind6, rev=true), leg=:bottomright,
-    annotation=[(27, 0.2, ("N-0", 10)), (27, 0.6, ("N-1", 10)), (27, 0.83, ("N-2", 10)), (27, 0.96, ("N-3", 10)), (27, 1.03, ("N-k > 3", 10))])
+Plots.plot(cumsum([outs[:,1:4] sum(outs[:,5:end], dims=2)], dims = 2)[:,end:-1:1].*100, fill=0, lc=:black, legend=:none, grid=:none,
+    xlabel="Time [h]", ylabel="Probability [%]", palette = Plots.palette(:seaborn_colorblind6, rev=true), size=(500,300),
+    annotation=[(27, 20, ("N-0", 8)), (27, 60, ("N-1", 8)), (27, 85, ("N-2", 8)), (27, 97, ("N-3", 8)), (27, 103, ("N-k > 3", 8))])
 Plots.plot([collect(values(sort(SCOPF.countmemb(length.(last.(x[1]))), by=i->i[1]))) for x in scenarioes])
 Plots.plot([collect(values(sort(SCOPF.sumvals(length.(last.(x[1])), x[2]), by=i->i[1]))) for x in scenarioes])
 
-function scenario_plus_n1(scenarioes)
-    scenarioes_n1 = deepcopy(scenarioes)
-    for (i,x) in enumerate(scenarioes)
-        diff = setdiff(1:120, reduce(vcat, [x for x in getindex.(x[1], 2) if length(x) == 1]))
-        for c in diff
-            push!(scenarioes_n1[i][1], "branch" => [c])
-            push!(scenarioes_n1[i][2], prob[c]/8760)
-        end
-    end
-    return scenarioes_n1
-end
-scenarioes_n1 = scenario_plus_n1(scenarioes)
-scenarioes2_n1 = scenario_plus_n1(scenarioes2)
+scenarioes_n1 = scenario_plus_n1(scenarioes, length(branches))
+scenarioes2_n1 = scenario_plus_n1(scenarioes2, length(branches))
 
 contingencies = ["branch" => [i] for i in 1:length(SCOPF.get_branches(system))]
 demands = SCOPF.sort_components!(SCOPF.get_demands(system))
@@ -96,52 +87,59 @@ i = 9
 t = Dates.DateTime("2020-04-11T13:00:00")
 # t = Dates.DateTime("2020-08-25T14:00:00")
 time_limit_sec = length(contingencies)^2 + 10
-labels = ["N-k-C" "N-k-P" "N-1-C" "N-1-P" "N-0"]
+labels = ["NkC" "NkCz" "NkCz2" "NkP" "N1C" "N1P" "N0"]
 # xguidefont=fsize, yguidefont=fsize, xtickfont=fsize, ytickfont=fsize, legendfont=fsize
 name = Printf.@sprintf "prev%d_ls%d_pd%d_pr%d_ramp%d_r%d_%s" prev_lim*100 max_shed*100 demand_mult*100 renew_mult*100 renew_ramp reserve*100 string(t)[1:end-6]
 println("\n\n"*name*"\n")
-results = run_plotsave_weather(name, system, labels, demand_mult, renew_mult, t, scenarioes_n1, voll, prob, contingencies, max_shed, reserve, ramp_mult, renew_cost, renew_ramp, ramp_minutes, short, long, prev_lim);
-run_plotsave_weather2!(results, name, system, labels, scenarioes2_n1, voll, prob, contingencies, max_shed, reserve, ramp_mult, renew_cost, renew_ramp, ramp_minutes, short, long, prev_lim);
-results2 = run_plotsave_weather("w2_"*name, system, labels, demand_mult, renew_mult, t, scenarioes2_n1, voll, prob, contingencies, max_shed, reserve, ramp_mult, renew_cost, renew_ramp, ramp_minutes, short, long, prev_lim);
+results = run_plotsave_weather(name, system, labels, scenarioes_n1, voll, prob, contingencies, max_shed, reserve, ramp_mult, renew_cost, renew_ramp, ramp_minutes, short, long, prev_lim, demands, demand_mult, renewables, renew_mult, t);
+results_w2 = run_plotsave_weather2(results, "s2"*name, system, labels[1:6], scenarioes2_n1, voll, prob, contingencies, max_shed, reserve, ramp_mult, renew_cost, renew_ramp, ramp_minutes, short, long, prev_lim);
+results2 = run_plotsave_weather("w2_"*name, system, labels, scenarioes2_n1, voll, prob, contingencies, max_shed, reserve, ramp_mult, renew_cost, renew_ramp, ramp_minutes, short, long, prev_lim, demands, demand_mult, renewables, renew_mult, t);
 
-df_results = table_results(results, system, scenarioes_n1, labels)
+sx = repeat(["W1", "W2"], inner = length(results))
+df_results = table_results(results, system, scenarioes_n1)
 costs = distributed_costs(results, case.opf, scenarioes_n1)
-StatsPlots.groupedbar(Matrix(costs)[:,[1,2,3,4,6,7,8,9]],
-        bar_position = :stack, bar_width=0.7, xticks=(1:length(labels), labels),
-        label=[L"p_\mathcal{G}^0" L"\ell_\mathcal{D}^0" L"r_\mathcal{G}^+" L"r_\mathcal{G}^-" L"\ell_\mathcal{D}^{S,\mathcal{K}}" L"p_\mathcal{G}^{L+,\mathcal{K}}" L"p_\mathcal{G}^{L-,\mathcal{K}}" L"\ell_\mathcal{D}^0"],
-        ylabel="Cost [\$]", palette = Plots.palette(:seaborn_colorblind), thickness_scaling=1.2)
+StatsPlots.groupedbar!(Matrix(costs)[:,[9,8,7,6,4,3,2,1]]./10,
+        bar_position = :stack, bar_width=0.5, xticks=(1:length(results), getindex.(results, 1)), leg=:outertopright,
+        label=reverse([L"G^0" L"\ell^0" L"G^{r+}" L"G^{r-}" L"\ell^{S,\mathcal{K}}" L"G^{L+,\mathcal{K}}" L"G^{L-,\mathcal{K}}" L"\ell^{L-,\mathcal{K}}"]),
+        # label=[L"p_\mathcal{G}^0" L"\ell_\mathcal{D}^0" L"r_\mathcal{G}^+" L"r_\mathcal{G}^-" L"\ell_\mathcal{D}^{S,\mathcal{K}}" L"p_\mathcal{G}^{L+,\mathcal{K}}" L"p_\mathcal{G}^{L-,\mathcal{K}}" L"\ell_\mathcal{D}^0"],
+        ylabel="Cost [k\$]", palette = Plots.palette(:seaborn_colorblind, rev=true)[[10,1,2,3,4,5,6,7,8,9]], size=(500,200), xrotation = 45, bottommargin=5*Plots.Measures.mm)
+StatsPlots.groupedbar(sum(Matrix(costs2)[:,[9,8,7,6,4,3,2,1]]./10, dims=2), label=:none, bar_width=0.8, 
+        xticks=(1:length(results), getindex.(results, 1)), palette = Plots.palette(:Greys_3, rev=true))
 forced_ls = [SCOPF.calc_forced_ls(case, x[2], x[1]) for x in scenarioes_n1];
-pl, xax, data = plot_probability_contingency_data(last.(results), :Pc, :lsc, labels, forced_ls, scenarioes_n1)
+pl, xax, data = plot_probability_contingency_data(results, :Pc, :lsc, labels, forced_ls, scenarioes_n1)
 
-for max_shed in [1.5, 3.0], demand_mult in [1.0, 1.5], renew_mult in [0.5, 1.0], renew_ramp in [0.0, 10.0]
+# for max_shed in [1.5, 3.0], demand_mult in [1.0, 1.5], renew_mult in [0.5, 1.0], renew_ramp in [0.0, 10.0]
+labels = ["N-k-C" "N-k-zC" "N-k-zVOLL"]
+for demand_mult in 0.5:0.25:1.5, renew_mult in 0.0:0.25:1.0
     name = Printf.@sprintf "prev%d_ls%d_pd%d_pr%d_ramp%d_r%d_%s" prev_lim*100 max_shed*100 demand_mult*100 renew_mult*100 renew_ramp reserve*100 string(t)[1:end-6]
     println("\n\n"*name*"\n")
-    results = run_plotsave_weather(name, system, labels, demand_mult, renew_mult, t, scenarioes_n1, voll, prob, contingencies, max_shed, reserve, ramp_mult, renew_cost, renew_ramp, ramp_minutes, short, long, prev_lim)
+    # results = run_plotsave_weather(name, system, labels, scenarioes_n1, voll, prob, contingencies, max_shed, reserve, ramp_mult, renew_cost, renew_ramp, ramp_minutes, short, long, prev_lim, demands, demand_mult, renewables, renew_mult, t)
+    results = run_plotsave_weather_zc("zc_"*name, system, labels, scenarioes_n1, voll, prob, contingencies, max_shed, reserve, ramp_mult, renew_cost, renew_ramp, ramp_minutes, short, long, demands, demand_mult, renewables, renew_mult, t)
 end
 for max_shed in 0.0:5.0
     name = Printf.@sprintf "prev%d_ls%d_pd%d_pr%d_ramp%d_r%d_%s" prev_lim*100 max_shed*100 demand_mult*100 renew_mult*100 renew_ramp reserve*100 string(t)[1:end-6]
     println("\n\n"*name*"\n")
-    results = run_plotsave_weather(name, system, labels, demand_mult, renew_mult, t, scenarioes_n1, voll, prob, contingencies, max_shed, reserve, ramp_mult, renew_cost, renew_ramp, ramp_minutes, short, long, prev_lim)
+    results = run_plotsave_weather(name, system, labels, scenarioes_n1, voll, prob, contingencies, max_shed, reserve, ramp_mult, renew_cost, renew_ramp, ramp_minutes, short, long, prev_lim, demands, demand_mult, renewables, renew_mult, t)
 end
 for renew_mult in 0.0:0.25:1.5
     name = Printf.@sprintf "prev%d_ls%d_pd%d_pr%d_ramp%d_r%d_%s" prev_lim*100 max_shed*100 demand_mult*100 renew_mult*100 renew_ramp reserve*100 string(t)[1:end-6]
     println("\n\n"*name*"\n")
-    results = run_plotsave_weather(name, system, labels, demand_mult, renew_mult, t, scenarioes_n1, voll, prob, contingencies, max_shed, reserve, ramp_mult, renew_cost, renew_ramp, ramp_minutes, short, long, prev_lim)
+    results = run_plotsave_weather(name, system, labels, scenarioes_n1, voll, prob, contingencies, max_shed, reserve, ramp_mult, renew_cost, renew_ramp, ramp_minutes, short, long, prev_lim, demands, demand_mult, renewables, renew_mult, t)
 end
 for prev_lim in 0.6:0.2:1.4
     name = Printf.@sprintf "prev%d_ls%d_pd%d_pr%d_ramp%d_r%d_%s" prev_lim*100 max_shed*100 demand_mult*100 renew_mult*100 renew_ramp reserve*100 string(t)[1:end-6]
     println("\n\n"*name*"\n")
-    results = run_plotsave_weather(name, system, labels, demand_mult, renew_mult, t, scenarioes_n1, voll, prob, contingencies, max_shed, reserve, ramp_mult, renew_cost, renew_ramp, ramp_minutes, short, long, prev_lim)
+    results = run_plotsave_weather(name, system, labels, scenarioes_n1, voll, prob, contingencies, max_shed, reserve, ramp_mult, renew_cost, renew_ramp, ramp_minutes, short, long, prev_lim, demands, demand_mult, renewables, renew_mult, t)
 end
 for renew_ramp in [0.0, 1.0, 10.0, 100.0, 1000.0]
     name = Printf.@sprintf "prev%d_ls%d_pd%d_pr%d_ramp%d_r%d_%s" prev_lim*100 max_shed*100 demand_mult*100 renew_mult*100 renew_ramp reserve*100 string(t)[1:end-6]
     println("\n\n"*name*"\n")
-    results = run_plotsave_weather(name, system, labels, demand_mult, renew_mult, t, scenarioes_n1, voll, prob, contingencies, max_shed, reserve, ramp_mult, renew_cost, renew_ramp, ramp_minutes, short, long, prev_lim)
+    results = run_plotsave_weather(name, system, labels, scenarioes_n1, voll, prob, contingencies, max_shed, reserve, ramp_mult, renew_cost, renew_ramp, ramp_minutes, short, long, prev_lim, demands, demand_mult, renewables, renew_mult, t)
 end
 for reserve in 0.0:0.01:0.1
     name = Printf.@sprintf "prev%d_ls%d_pd%d_pr%d_ramp%d_r%d_%s" prev_lim*100 max_shed*100 demand_mult*100 renew_mult*100 renew_ramp reserve*100 string(t)[1:end-6]
     println("\n\n"*name*"\n")
-    results = run_plotsave_weather(name, system, labels, demand_mult, renew_mult, t, scenarioes_n1, voll, prob, contingencies, max_shed, reserve, ramp_mult, renew_cost, renew_ramp, ramp_minutes, short, long, prev_lim)
+    results = run_plotsave_weather(name, system, labels, scenarioes_n1, voll, prob, contingencies, max_shed, reserve, ramp_mult, renew_cost, renew_ramp, ramp_minutes, short, long, prev_lim, demands, demand_mult, renewables, renew_mult, t)
 end
 
 sensitivity = []
@@ -168,7 +166,7 @@ function load_costs(prev_lim, max_shed, demand_mult, renew_mult, renew_ramp, res
     name = Printf.@sprintf "prev%d_ls%d_pd%d_pr%d_ramp%d_r%d_%s" prev_lim*100 max_shed*100 demand_mult*100 renew_mult*100 renew_ramp reserve*100 string(t)[1:end-6]
     results = FileIO.load("results/"*name*".jld2", "results");
     base_costs, corrective_costs = calc_costs(results, scenarioes_n1)
-    return getindex.(last.(base_costs),25) .+ getindex.(last.(corrective_costs),25)
+    return getindex.(last.(base_costs),26) .+ getindex.(last.(corrective_costs),26)
     # return (sum.(last.(base_costs)) .+ sum.(last.(corrective_costs))) ./1000
 end
 
@@ -178,26 +176,27 @@ for renew_mult in rm_itr
     push!(rm_vals, load_costs(prev_lim, max_shed, demand_mult, renew_mult, renew_ramp, reserve, t, scenarioes_n1))
 end
 rm = reduce(hcat, rm_vals)'
-a = Plots.plot(rm, labels=:none, xlabel="Renewable availability [%]", ylabel="Cost [\$]", xticks=(1:length(rm_itr), Int.(rm_itr.*100)))
+a = Plots.plot(rm, labels=:none, xlabel="Availability [%]", ylabel="Cost [\$]", xticks=(1:length(rm_itr), Int.(rm_itr.*100)))
 
-for prev_lim in pl_itr
-    push!(pl_vals, load_costs(prev_lim, max_shed, demand_mult, renew_mult, renew_ramp, reserve, t, scenarioes_n1))
-end
-pl = reduce(hcat, pl_vals)'
-b = Plots.plot(pl, labels=:none, xlabel="Preventive limit [%]", xticks=(1:length(pl_itr), Int.(pl_itr.*100)))
+# for prev_lim in pl_itr
+#     push!(pl_vals, load_costs(prev_lim, max_shed, demand_mult, renew_mult, renew_ramp, reserve, t, scenarioes_n1))
+# end
+# pl = reduce(hcat, pl_vals)'
+# b = Plots.plot(pl, labels=:none, xlabel="Preventive limit [%]", xticks=(1:length(pl_itr), Int.(pl_itr.*100)))
 
-for max_shed in ms_itr
-    push!(ms_vals, load_costs(prev_lim, max_shed, demand_mult, renew_mult, renew_ramp, reserve, t, scenarioes_n1))
-end
-ms = reduce(hcat, ms_vals)'
-c = Plots.plot(ms, labels=:none, xlabel="Load shed limit [MW]", xticks=(1:length(ms_itr), Int.(ms_itr.*100)))
+# for max_shed in ms_itr
+#     push!(ms_vals, load_costs(prev_lim, max_shed, demand_mult, renew_mult, renew_ramp, reserve, t, scenarioes_n1))
+# end
+# ms = reduce(hcat, ms_vals)'
+# c = Plots.plot(ms, labels=:none, xlabel="Load shed limit [MW]", xticks=(1:length(ms_itr), Int.(ms_itr.*100)))
 
 for renew_ramp in rr_itr
     push!(rr_vals, load_costs(prev_lim, max_shed, demand_mult, renew_mult, renew_ramp, reserve, t, scenarioes_n1))
 end
 rr = reduce(hcat, rr_vals)'
-d = Plots.plot(rr, labels=labels, leg=:outertopright, xlabel="Renewable corr. cost [\$/MWh]", xticks=(1:length(rr_itr), Int.(rr_itr)))
-Plots.plot(a,b,c,d, layout=Plots.grid(1,4, widths=(5/17,4/17,4/17,4/17)), size=(1200,300), yaxis=[0,500], 
+d = Plots.plot(rr, labels=labels, leg=:outertopright, xlabel="Corr. cost [\$/MWh]", xticks=(1:length(rr_itr), Int.(rr_itr)))
+# Plots.plot(a,b,c,d, layout=Plots.grid(1,4, widths=(5/17,4/17,4/17,4/17)), size=(1200,300), yaxis=[0,500], 
+Plots.plot(a,d, layout=Plots.grid(1,2, widths=(4/8,4/8)), size=(500,300), yaxis=[0,500], 
     bottom_margin=7Measures.mm, left_margin=7Measures.mm, palette = Plots.palette(:seaborn_colorblind6), thickness_scaling=1.0)
 
 ty = [["short", "long"], [0.5, 5.0], [1.5, 1.0], [0.0, 1000.0]]
@@ -232,22 +231,45 @@ function make_heatmap(vals)
 end
 dm1r05 = vals[vals.demand_mult .== 1.0 .&& vals.renew_mult .== 0.5 .&& vals.prev_lim .== 1.0,:]
 a = make_heatmap(dm1r05)
-Plots.plot!(a, ylabel="Renew 50%")
+Plots.plot!(a, ylabel="Renew 50%, 2348 MW")
 dm15r05 = vals[vals.demand_mult .== 1.5 .&& vals.renew_mult .== 0.5 .&& vals.prev_lim .== 1.0,:]
 b = make_heatmap(dm15r05)
 dm1r1 = vals[vals.demand_mult .== 1.0 .&& vals.renew_mult .== 1.0 .&& vals.prev_lim .== 1.0,:]
 c = make_heatmap(dm1r1)
-Plots.plot!(c, ylabel="Renew 100%", xlabel="Load 100%")
+Plots.plot!(c, ylabel="Renew 100%, 4697 MW", xlabel="Load 100%, 3616 MW")
 dm15r1 = vals[vals.demand_mult .== 1.5 .&& vals.renew_mult .== 1.0 .&& vals.prev_lim .== 1.0,:]
 d = make_heatmap(dm15r1)
-Plots.plot!(d, xlabel="Load 150%")
+Plots.plot!(d, xlabel="Load 150%, 5424 MW")
 Plots.plot(a,b,c,d, size=(700,750), layout=Plots.grid(2,2), thickness_scaling=1.2)
+
+# Single heatmap
+vals = DataFrames.DataFrame(demand_mult=Float64[], renew_mult=Float64[], i=Int64[], Nk_C=Float64[], Nk_zC=Float64[], Nk_zVOLL=Float64[])
+for demand_mult in 0.5:0.25:1.5, renew_mult in 0.0:0.25:1.0
+    name = Printf.@sprintf "zc_prev%d_ls%d_pd%d_pr%d_ramp%d_r%d_%s" prev_lim*100 max_shed*100 demand_mult*100 renew_mult*100 renew_ramp reserve*100 string(t)[1:end-6]
+    valb = CSV.read("results/"*name*"_base_cost.csv", DataFrames.DataFrame)
+    valc = CSV.read("results/"*name*"_corrective_cost.csv", DataFrames.DataFrame)
+    # push!(vals, (prev_lim, max_shed, demand_mult, renew_mult, renew_ramp, i, valb[1,1:5]..., valc[1,1:5]...), promote=true)
+    push!(vals, (demand_mult, renew_mult, i, Matrix(valb .+ valc)[27,:][1:3]...), promote=true)
+    # push!(vals, (demand_mult, renew_mult, i, sum(Matrix(valb .+ valc), dims=1)[1:3]...), promote=true)
+end
+max_pd = sum(get_active_power.(demands))
+max_renewable = sum(get_active_power(g) for g in SCOPF.sort_components!(SCOPF.get_generation(system)) if typeof(g) <: RenewableGen)
+sort!(vals, :demand_mult)
+data = reshape(Matrix(vals[!,r"Nk_zVOLL"]), (5,5)) ./ 10
+pl = Plots.heatmap(data', 
+    yticks=(1:5,Int.(round.(vals[!,:demand_mult][1:5:end].*max_pd.*100, digits=0))), 
+    xticks=(1:size(data,1),Int.(round.(vals[!,:renew_mult][1:5].*max_renewable.*100, digits=0))), 
+    c=Plots.cgrad(:vik), colorbar_scale=:log10, colorbar_title="Total cost [k\$]",
+    xlabel="Renewable penetration [MW]", ylabel="Load level [MW]", size=(430,400), rightmargin=0*Plots.Measures.mm, aspect_ratio=:equal)
+Plots.annotate!([(j,i,Plots.text(Int(round(data[j,i], digits=0)), 8, :black, :center)) for j in 1:size(data,1) for i in 1:size(data,2)], linecolor=:white)
 
 
 bx = SCOPF.get_bus_idx.(SCOPF.sort_components!(SCOPF.get_branches(system)), [SCOPF.get_nodes_idx(SCOPF.sort_components!(SCOPF.get_nodes(system)))]);
 forced_ls = [SCOPF.calc_forced_ls(case, x[2], x[1]) for x in scenarioes_n1]
-Plots.plot([count(SCOPF.is_islanded(case.pf, bx[c[2]], c[2]) for c in s[1] if length(c[2]) > 0) for s in scenarioes_n1], xlabel="Time", ylabel="Count of islands", leg=:none)
-Plots.plot!(Plots.twinx(), c=:red, sum.(forced_ls), leg=:none, ylabel="Forced load shed by islands")
+Plots.plot([sum(p * SCOPF.is_islanded(case.pf, bx[c[2]], c[2]) for (c,p) in zip(s...) if length(c[2]) > 0) for s in scenarioes_n1].*100, xlabel="Time [h]", ylabel="Post-contingency islanding [%]", labels="Left", leg=:topleft)
+Plots.plot!(Plots.twinx(), c=:red, [sum(s[2][i]*x for (i,x) in l) for (s,l) in zip(scenarioes_n1,forced_ls)].*100, labels="Right", leg=:topright, size=(500,250), ylabel="Forced load shed [MW]")
+# Plots.plot([count(SCOPF.is_islanded(case.pf, bx[c[2]], c[2]) for c in s[1] if length(c[2]) > 0) for s in scenarioes_n1], xlabel="Time [h]", ylabel="Count of islands", labels="Left", leg=:topleft)
+# Plots.plot!(Plots.twinx(), c=:red, sum.(x for (i,x) in forced_ls), labels="Right", leg=:topright, size=(500,300), ylabel="Forced load shed [MW]")
 
 res_new = []
 for (i,(r, s)) in enumerate(zip(res, scenarioes_n1))

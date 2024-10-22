@@ -373,17 +373,17 @@ function find_component(val::Component, list::AbstractVector{<:Component})
     return i
 end
 
-typesort_component(val::Generator, opf::OPFsystem) =
-    (find_component(val, get_generation(opf)), get_bus_idx(val, opf.idx))
+typesort_component(val::Generator, system::System, idx::Dict{<:Int,<:Int}) =
+    (find_component(val, get_generation(system)), get_bus_idx(val, idx))
 
-typesort_component(val::StaticLoad, opf::OPFsystem) =
-    (find_component(val, get_demands(opf)), get_bus_idx(val, opf.idx))
+typesort_component(val::StaticLoad, system::System, idx::Dict{<:Int,<:Int}) =
+    (find_component(val, get_demands(system)), get_bus_idx(val, idx))
 
-typesort_component(val::ACBus, opf::OPFsystem) =
-    (find_component(val, get_nodes(opf)), get_bus_idx(val, opf.idx))
+typesort_component(val::ACBus, system::System, idx::Dict{<:Int,<:Int}) =
+    (find_component(val, get_nodes(system)), get_bus_idx(val, idx))
 
-typesort_component(val::ACBranch, opf::OPFsystem) =
-    (find_component(val, get_branches(opf)), get_bus_idx(val, opf.idx))
+typesort_component(val::ACBranch, system::System, idx::Dict{<:Int,<:Int}) =
+    (find_component(val, get_branches(system)), get_bus_idx(val, idx))
 
 function typesort_component(val::Pair{String, <:Any}, opf::OPFsystem)
     if first(val) == "branch"
@@ -574,11 +574,26 @@ zip_pair(val1::AbstractVector, val2::AbstractVector) = zip_pair((val1, val2))
 find_overload(flow::T, rate::Real, atol::Real=1e-6) where {T<:Real} =
     abs(flow) - rate > atol ? sign(flow) * (abs(flow) - rate) : zero(T)
 
-filter_overload(flow::AbstractVector{<:Real}, linerating::AbstractVector{<:Real}, atol::Real=1e-6) =
-    [(i, ol) for (i, ol) in enumerate(find_overload.(flow, linerating)) if abs(ol) > atol]
+function filter_overload(flow::AbstractVector{T}, linerating::AbstractVector{<:Real}, atol::Real=1e-6) where {T<:Real}
+    res = Vector{Tuple{Int64, T}}()
+    for (i, (f, l)) in enumerate(zip(flow, linerating)) 
+        ol = find_overload(f, l)
+        if abs(ol) > atol
+            push!(res, (i, ol))
+        end
+    end
+    return res
+end
 
-filter_overload(Δflow::AbstractVector{<:Tuple}, linerating::AbstractVector{<:Real}, atol::Real=1e-6) =
-    [(i, find_overload(ol, linerating[i])) for (i, ol) in Δflow if abs(find_overload(ol, linerating[i])) > atol]
+function filter_overload(Δflow::AbstractVector{<:Tuple}, linerating::AbstractVector{<:Real}, atol::Real=1e-6)
+    res = Vector{Tuple{Int64, T}}()
+    for (i, ol) in Δflow 
+        if abs(find_overload(ol, linerating[i])) > atol
+            push!(res, (i, find_overload(ol, linerating[i])))
+        end
+    end
+    return res
+end
 
 find_overloaded_branches(flow::AbstractVector{<:Real}, linerating::AbstractVector{<:Real}, atol::Real=1e-6) =
     findall(abs.(flow) .- linerating .> atol)

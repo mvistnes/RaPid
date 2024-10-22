@@ -132,3 +132,15 @@ generate_contingency_probabilities(p::Vector{<:Real}, λ::Real, num::Integer, l:
     generate_contingency_probabilities(generate_p(p, l), λ, num)
 generate_contingency_probabilities(p::Vector{<:Real}, λ::Real, num::Integer, l::Integer, weather::Vector{Storm}) =
     generate_contingency_probabilities(generate_p_from_weather(p, l, weather), λ, num)
+    
+function scenario_plus_n1(scenarioes, num_branches)
+    scenarioes_n1 = deepcopy(scenarioes)
+    for (i,x) in enumerate(scenarioes)
+        diff = setdiff(1:num_branches, reduce(vcat, [x for x in getindex.(x[1], 2) if length(x) == 1]))
+        for c in diff
+            push!(scenarioes_n1[i][1], "branch" => [c])
+            push!(scenarioes_n1[i][2], prob[c]/8760)
+        end
+    end
+    return scenarioes_n1
+end
