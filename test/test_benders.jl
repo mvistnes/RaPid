@@ -286,3 +286,9 @@ function scatter_plot(df::DataFrames.DataFrame, x::Symbol, y::Symbol, mark::Symb
             leg=:none)
     end
 end
+
+import CSV, Statistics, Measures, Plots
+df = DataFrames.DataFrame(CSV.File("results/500bus_random_no_split.csv"))
+df = filter(:obj_val => x -> !any(f -> f(x), (ismissing, isnothing, isnan)), df)
+Plots.heatmap(Statistics.cor(Matrix(df)), xticks=(1:length(names(df)), names(df)), yticks=(1:length(names(df)), names(df)), xrotation=90, right_margin=7Measures.mm, bottom_margin=7Measures.mm, aspect_ratio=1, 
+size=(500,500))
