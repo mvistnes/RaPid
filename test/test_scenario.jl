@@ -284,7 +284,10 @@ Plots.plot(base_costs[2] + corrective_costs[2], labels=labels, line=(:steppre, :
 Plots.plot!(base_costs_new + corrective_costs_new, labels=labels.*" no corr cost", line=:steppre, xlabel="Time", ylabel="Cost", palette = Plots.palette(:seaborn_colorblind6)[1:5], leg=:topright)
 Plots.savefig("results/"*name*"_objective_no-corr-cost.pdf")
 
-
+# For SINTEF-blog plot
+res = [b[2] + c[2] for (b,c) in zip(base_costs[[1, 6, 7]], corrective_costs[[1, 6, 7]])]
+res = res ./ maximum(maximum(res)) .* 100
+Plots.plot(res, line=:steppre, labels=["Sannsynbasert" "N-1" "N-0"], xlabel="Tid [timer]", ylabel="Kostnad [%]", palette = Plots.palette(:seaborn_colorblind6)[1:5])
 
 consequences = Dict()
 for (s, case) in zip(scenarioes_n1, res_sn1)
