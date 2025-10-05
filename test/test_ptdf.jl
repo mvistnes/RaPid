@@ -32,32 +32,32 @@ K = SCOPF.calc_klu(B, pf.slack)
 cont1 = bx[c1]
 
 # CONTINGENCY WITHOUT ISLANDING
-SCOPF.calc_isf!(ϕ1, X, pf.X, pf.B, pf.DA, cont1, c1); # IMML
-SCOPF.calc_isf!(ϕ2, K, pf.DA, pf.B, cont1, c1, pf.slack); # inverse
+SCOPF.calc_ptdf!(ϕ1, X, pf.X, pf.B, pf.DA, cont1, c1); # IMML
+SCOPF.calc_ptdf!(ϕ2, K, pf.DA, pf.B, cont1, c1, pf.slack); # inverse
 @test ϕ1 ≈ ϕ2
 
 # CONTINGENCY WITHOUT ISLANDING, ONLY PTDF-VECTOR
 SCOPF.calc_ptdf_vec!(pf.vn_tmp, pf, c1, cont1[1], cont1[2], 3, bx[3][1], bx[3][2]) # IMML vec
 @test ϕ1[3,:] ≈ pf.vn_tmp
 
-SCOPF.calc_isf_vec!(pf.vn_tmp, K, pf.DA, pf.B, cont1, c1, pf.slack, 3) # inverse vec
+SCOPF.calc_ptdf_vec!(pf.vn_tmp, K, pf.DA, pf.B, cont1, c1, pf.slack, 3) # inverse vec
 @test ϕ1[3,:] ≈ pf.vn_tmp
 
 # CONTINGENCY WITHOUT ISLANDING AND WITH DISTRIBUTED SLACK
 SCOPF.set_dist_slack!(pf.ϕ, opf.mgx, oplim.pg_lim_max)
-SCOPF.calc_isf!(ϕ1, X, pf.X, pf.B, pf.DA, cont1, c1); # IMML
-SCOPF.calc_isf!(ϕ2, pf.K, pf.DA, pf.B, cont1, c1, pf.slack); # inverse 
+SCOPF.calc_ptdf!(ϕ1, X, pf.X, pf.B, pf.DA, cont1, c1); # IMML
+SCOPF.calc_ptdf!(ϕ2, pf.K, pf.DA, pf.B, cont1, c1, pf.slack); # inverse 
 @test ϕ1 ≈ ϕ2
 
 # CONTINGENCY WITH ISLANDING
 cont2 = bx[c2]
 islands, island, island_b = SCOPF.handle_islands(pf.B, pf.DA, cont2, c2, pf.slack)
-SCOPF.calc_isf!(ϕ1, pf.DA, pf.B, cont2, c2, pf.slack, islands[island], island_b); # inverse 
-SCOPF.calc_isf!(ϕ2, X, pf.X, pf.B, pf.DA, cont2, c2); # IMML
+SCOPF.calc_ptdf!(ϕ1, pf.DA, pf.B, cont2, c2, pf.slack, islands[island], island_b); # inverse 
+SCOPF.calc_ptdf!(ϕ2, X, pf.X, pf.B, pf.DA, cont2, c2); # IMML
 @test ϕ1 ≈ ϕ2
 
 # CONTINGENCY WITH ISLANDING, ONLY PTDF-VECTOR
-SCOPF.calc_isf_vec!(pf.vn_tmp, pf.DA, pf.B, cont2, c2, pf.slack, islands[island], island_b, 3) # inverse vec
+SCOPF.calc_ptdf_vec!(pf.vn_tmp, pf.DA, pf.B, cont2, c2, pf.slack, islands[island], island_b, 3) # inverse vec
 @test ϕ1[3,:] ≈ pf.vn_tmp
 
 end

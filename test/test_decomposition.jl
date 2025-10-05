@@ -29,17 +29,17 @@ function run_timed_contingency_select_types(types, optimizer, sys, voll, prob, c
     return run_time
 end
 
-function run_timed_benders_types(types, optimizer, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long; p_failure=0.00, time_limit_sec=600)
+function run_timed_decomposition_types(types, optimizer, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long; p_failure=0.00, time_limit_sec=600)
     run_time = []
     for type in types
-        t = @timed case, tot_t = SCOPF.run_benders(type, sys, optimizer, voll, prob, cont, max_shed=max_shed,
+        t = @timed case, tot_t = SCOPF.run_decomposed_optimization(type, sys, optimizer, voll, prob, cont, max_shed=max_shed,
             ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=p_failure, time_limit_sec=time_limit_sec)
         push!(run_time, (t.time, tot_t))
     end
     return run_time
 end
 
-" func= run_types! or run_contingency_select_types! or run_benders_types!"
+" func= run_types! or run_contingency_select_types! or run_decomposed_optimization_types!"
 function run_all(systems, optimizer, types, func)
     result = SCOPF.SystemRunData(4, length(systems))
     Logging.disable_logging(Logging.Info)
@@ -106,7 +106,7 @@ function setup_system(fname::String)
     return system, voll, contingencies, prob, short, long, ramp_minutes, ramp_mult, max_shed, time_limit_sec
 end
 
-function run_test_benders()
+function run_test_decomposition()
     optimizer = JuMP.optimizer_with_attributes(Gurobi.Optimizer, "Threads" => Threads.nthreads())
     # optimizer = JuMP.optimizer_with_attributes(GLPK.Optimizer, "msg_lev" => GLPK.GLP_MSG_ON)
     systems = []
@@ -120,10 +120,10 @@ function run_test_benders()
     # push!(systems, setup_system(joinpath("data","matpower","case_ACTIVSg10k.m")))
 
     # types = [SCOPF.Base_SCOPF, SCOPF.P_SCOPF, SCOPF.OPF(true, false, true, false, false), SCOPF.PC2_SCOPF]
-    # results1 = run_all(systems, optimizer, types, SCOPF.run_benders_types!)
+    # results1 = run_all(systems, optimizer, types, SCOPF.run_decomposed_optimization_types!)
     # # results2 = run_all_contingency_select(systems, optimizer, types);
     # results3 = run_all(systems, optimizer, types, SCOPF.run_types!)
-    # println("Benders")
+    # println("SCOPF decomposition")
     # SCOPF.print_data(results1)
     # println("Cont")
     # SCOPF.print_data(results2)
@@ -137,7 +137,7 @@ function run_test_benders()
         # push!(rt, "ptdf" => t)
         # t = run_timed_contingency_select_types(types, optimizer, system, voll, prob, contingencies, max_shed, ramp_mult, ramp_minutes, short, long, time_limit_sec=time_limit_sec)
         # push!(rt, "cont"=>t)
-        # t = run_timed_benders_types(types, optimizer, system, voll, prob, contingencies, max_shed, ramp_mult, ramp_minutes, short, long, time_limit_sec=time_limit_sec)
+        # t = run_timed_decomposition_types(types, optimizer, system, voll, prob, contingencies, max_shed, ramp_mult, ramp_minutes, short, long, time_limit_sec=time_limit_sec)
         rt[length(get_components(ACBus, system))] = run_test_scopf(system, voll, prob, contingencies, max_shed, ramp_mult, ramp_minutes, short, long, time_limit_sec)
     end
     return rt
@@ -147,7 +147,7 @@ function run_test_scopf(system, voll, prob, contingencies, max_shed, ramp_mult, 
     result = Dict()
     for type in [SCOPF.Base_SCOPF, SCOPF.P_SCOPF, SCOPF.PC2_SCOPF]
         println(type)
-        SCOPF.run_benders_type!(result, type, SCOPF.PC2_SCOPF, Gurobi.Optimizer(GRB_ENV), Gurobi.Optimizer(GRB_ENV), 
+        SCOPF.run_decomposed_optimization_type!(result, type, SCOPF.PC2_SCOPF, Gurobi.Optimizer(GRB_ENV), Gurobi.Optimizer(GRB_ENV), 
             system, voll, prob, contingencies, max_shed, ramp_mult, ramp_minutes, short, long, dist_slack, time_limit_sec)
     end
     return result
@@ -158,7 +158,7 @@ function run_test_scopf_simple(system, voll, prob, contingencies, max_shed, ramp
     # for type in [SCOPF.Base_SCOPF, SCOPF.P_SCOPF, SCOPF.OPF(true, false, true, false, false), SCOPF.OPF(true, false, false, true, false), SCOPF.PC_SCOPF, SCOPF.PC2_SCOPF]
     for type in [SCOPF.Base_SCOPF, SCOPF.P_SCOPF, SCOPF.PC2_SCOPF]
         println(type)
-        case, _ = SCOPF.run_benders(type, system, Gurobi.Optimizer(GRB_ENV), voll, prob, contingencies, max_shed=max_shed, 
+        case, _ = SCOPF.run_decomposed_optimization(type, system, Gurobi.Optimizer(GRB_ENV), voll, prob, contingencies, max_shed=max_shed, 
             ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, dist_slack=dist_slack, 
             time_limit_sec=time_limit_sec, all_post_c=all_post_c);
         result[type] = SCOPF.extract_results(case)
@@ -180,7 +180,7 @@ function run_range(system, voll, prob, contingencies, max_shed, ramp_mult, ramp_
     result = []
     logrange(start,stepmul,length) = start .* stepmul .^ (0:(length-1))
     for x in logrange(0.1, 2, 10)
-        case, tot_t = SCOPF.run_benders(SCOPF.PC2_SCOPF, system, Gurobi.Optimizer(GRB_ENV), voll*x, prob, contingencies, 
+        case, tot_t = SCOPF.run_decomposed_optimization(SCOPF.PC2_SCOPF, system, Gurobi.Optimizer(GRB_ENV), voll*x, prob, contingencies, 
             max_shed=max_shed, ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, 
             dist_slack=dist_slack, time_limit_sec=time_limit_sec, all_post_c=all_post_c);
         push!(result, x => SCOPF.extract_results(case))
@@ -213,7 +213,7 @@ function run_random(system, voll, prob, contingencies, all_post_c, iterations)
         ramp_minutes = 10.
         short = rand(1.25:0.01:1.5)
         long = rand(1.0:0.01:1.25)
-        case, tot_t = SCOPF.run_benders(SCOPF.PC2_SCOPF, system, Gurobi.Optimizer(GRB_ENV), voll*x, prob*y, contingencies, max_shed=max_shed, ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=0.00, all_post_c=all_post_c);
+        case, tot_t = SCOPF.run_decomposed_optimization(SCOPF.PC2_SCOPF, system, Gurobi.Optimizer(GRB_ENV), voll*x, prob*y, contingencies, max_shed=max_shed, ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=0.00, all_post_c=all_post_c);
         vals = SCOPF.extract_results(case)
         vals[:t] = tot_t
         push!(result, (i, x, y, max_shed, ramp_mult, ramp_minutes, short, long) => vals)
@@ -232,7 +232,7 @@ function run_random_p(system, voll, prob, contingencies, all_post_c, iterations)
         short = rand(1.0:0.01:1.25)
         long = 1.0
         reset_timer!(Main.to)
-        case, tot_t = SCOPF.run_benders(SCOPF.P_SCOPF, system, Gurobi.Optimizer(GRB_ENV), voll*x, prob*y, contingencies, max_shed=max_shed, ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=0.00, all_post_c=all_post_c);
+        case, tot_t = SCOPF.run_decomposed_optimization(SCOPF.P_SCOPF, system, Gurobi.Optimizer(GRB_ENV), voll*x, prob*y, contingencies, max_shed=max_shed, ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=0.00, all_post_c=all_post_c);
         vals = SCOPF.extract_results(case)
         vals[:t] = tot_t
         push!(result, (i, x, y, max_shed, ramp_mult, ramp_minutes, short, long) => vals)

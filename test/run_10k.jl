@@ -40,7 +40,7 @@ function run_random(system, voll, prob, contingencies, all_post_c, iterations, f
         short = rand(1.25:0.01:1.5)
         long = rand(1.0:0.01:1.25)
         # reset_timer!(Main.to)
-        case, tot_t = SCOPF.run_benders(SCOPF.PC2_SCOPF, system, Gurobi.Optimizer(GRB_ENV), voll*x, prob*y, contingencies, max_shed=max_shed, ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=0.00, all_post_c=all_post_c);
+        case, tot_t = SCOPF.run_decomposed_optimization(SCOPF.PC2_SCOPF, system, Gurobi.Optimizer(GRB_ENV), voll*x, prob*y, contingencies, max_shed=max_shed, ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=0.00, all_post_c=all_post_c);
         vals = SCOPF.extract_results(case)
         vals[:t] = tot_t
         push!(result, (i, x, y, max_shed, ramp_mult, ramp_minutes, short, long) => vals)

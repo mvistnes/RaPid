@@ -199,7 +199,7 @@ end
 
 function get_power_flow(opf::OPFsystem, m::Model; subset::AbstractVector{<:Integer}=Int64[])
     br_names = PowerSystems.get_name.(opf.branches)
-    flow = calculate_line_flows(calc_isf(opf.branches, opf.nodes), get_net_Pᵢ(m))
+    flow = calculate_line_flows(calc_ptdf(opf.branches, opf.nodes), get_net_Pᵢ(m))
     rate = get_rate.(opf.branches)
     if !isempty(subset)
         br_names = br_names[subset]
@@ -362,7 +362,7 @@ function print_generation_results(case::Case)
 end
 
 
-function print_benders_results(case::Case, lim::Real=1e-14)
+function print_decomposition_results(case::Case, lim::Real=1e-14)
     function print_c(itr, symb::String, x::Int, lim::Real)
         for i in 1:length(case.opf.contingencies)
             c = get(itr, i, 0)

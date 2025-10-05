@@ -52,12 +52,12 @@ export add_system_data_to_json, get_system, OPFmodel, opfmodel, beta, solve_mode
     DC power flow functions.
 =#
 include("dc_power_flow.jl")
-export DCPowerFlow, calc_Pᵢ, build_adjacency, connectivitymatrix, calc_A, calc_X, calc_isf,
-    calc_B, calc_D, get_isf, get_ptdf, find_overload, filter_overload, calculate_line_flows,
+export DCPowerFlow, calc_Pᵢ, build_adjacency, connectivitymatrix, calc_A, calc_X, calc_ptdf,
+    calc_B, calc_D, get_ptdf, get_ptdf, find_overload, filter_overload, calculate_line_flows,
     calculate_line_flows!, calc_Pline, run_pf
 
 include("cont_dc_power_flow.jl")
-export get_isf, get_ptdf, calculate_line_flows, calculate_line_flows!
+export get_ptdf, get_ptdf, calculate_line_flows, calculate_line_flows!
     
 #=
     AC power flow functions.
@@ -69,7 +69,7 @@ export calc_Ybus, calc_B_mark, calc_B_doublemark
     Functions using the Inverse Matrix Modification Lemma.
 =#
 include("imml.jl")
-export IMML, get_changed_angles, calc_Pline, get_changed_X, get_isf, calculate_line_flows,
+export IMML, get_changed_angles, calc_Pline, get_changed_X, get_ptdf, calculate_line_flows,
     calculate_line_flows!, get_overload, get_lodf
 
 include("FDLF.jl")
@@ -104,10 +104,10 @@ export opf
 # export sl_scopf, c_scopf
 
 #=
-    A formulation of a PC_SCOPF using Benders' decomposition.
+    A formulation of a PC_SCOPF using decomposition.
 =#
-include("benders.jl")
-export run_benders, find_system_state!, update_model!, find_overloads, print_benders_results
+include("decomposition.jl")
+export run_decomposed_optimization, find_system_state!, update_model!, find_overloads
 
 include("contingency_select.jl")
 export run_contingency_select

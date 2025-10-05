@@ -43,9 +43,9 @@ F₂ = pf.DA * θ₂
 SCOPF.calculate_line_flows!(flow1, pf, cont1, c1) # IMML flow
 SCOPF.calculate_line_flows!(flow2, θ, B, pf.DA, pf.B, Pᵢ, cont1, c1, pf.slack) # inverse with theta
 @test flow1 ≈ flow2
-SCOPF.calc_isf!(ϕ, X, pf.X, pf.B, pf.DA, cont1, c1); LinearAlgebra.mul!(flow3, ϕ, Pᵢ); # IMML ptdf
+SCOPF.calc_ptdf!(ϕ, X, pf.X, pf.B, pf.DA, cont1, c1); LinearAlgebra.mul!(flow3, ϕ, Pᵢ); # IMML ptdf
 @test flow2 ≈ flow3
-SCOPF.calc_isf!(ϕ, K, pf.DA, pf.B, cont1, c1, pf.slack); LinearAlgebra.mul!(flow4, ϕ, Pᵢ); # inverse with ptdf
+SCOPF.calc_ptdf!(ϕ, K, pf.DA, pf.B, cont1, c1, pf.slack); LinearAlgebra.mul!(flow4, ϕ, Pᵢ); # inverse with ptdf
 @test flow3 ≈ flow4
 SCOPF.calc_Pline!(flow5, θ, pf.X, pf.B, pf.DA, pf.θ, cont1, c1) # IMML theta
 @test flow4 ≈ flow5 
@@ -56,9 +56,9 @@ SCOPF.calculate_line_flows!(flow2, θ, B, pf.DA, pf.B, (Pᵢ .+ ΔPc), cont1, c1
 @test flow1 ≈ flow2
 SCOPF.calc_Pline!(flow3, θ, pf.X, pf.B, pf.DA, θ₂, cont1, c1) # IMML theta
 @test flow2 ≈ flow3
-SCOPF.calc_isf!(ϕ, X, pf.X, pf.B, pf.DA, cont1, c1); LinearAlgebra.mul!(flow4, ϕ, (Pᵢ .+ ΔPc)); # IMML ptdf
+SCOPF.calc_ptdf!(ϕ, X, pf.X, pf.B, pf.DA, cont1, c1); LinearAlgebra.mul!(flow4, ϕ, (Pᵢ .+ ΔPc)); # IMML ptdf
 @test flow3 ≈ flow4
-SCOPF.calc_isf!(ϕ, K, pf.DA, pf.B, cont1, c1, pf.slack); LinearAlgebra.mul!(flow5, ϕ, (Pᵢ .+ ΔPc)); # inverse with ptdf
+SCOPF.calc_ptdf!(ϕ, K, pf.DA, pf.B, cont1, c1, pf.slack); LinearAlgebra.mul!(flow5, ϕ, (Pᵢ .+ ΔPc)); # inverse with ptdf
 @test flow4 ≈ flow5
 
 # CONTINGENCY WITH POWER INJECTION CHANGE AND ISLANDING
@@ -67,11 +67,11 @@ islands, island, island_b = SCOPF.handle_islands(pf.B, pf.DA, cont2, c2, pf.slac
 SCOPF.calculate_line_flows!(flow1, pf, cont2, c2, Pᵢ=(Pᵢ .+ ΔPc), nodes=islands[island], branches=island_b) # IMML flow
 SCOPF.calculate_line_flows!(flow2, θ, pf.DA, pf.B, (Pᵢ .+ ΔPc), cont2, c2, pf.slack, islands[island], island_b) # inverse with theta
 @test flow1 ≈ flow2
-SCOPF.calc_isf!(ϕ, pf.DA, pf.B, cont2, c2, pf.slack, islands[island], island_b); LinearAlgebra.mul!(flow3, ϕ, (Pᵢ .+ ΔPc)); # inverse with ptdf
+SCOPF.calc_ptdf!(ϕ, pf.DA, pf.B, cont2, c2, pf.slack, islands[island], island_b); LinearAlgebra.mul!(flow3, ϕ, (Pᵢ .+ ΔPc)); # inverse with ptdf
 @test flow2 ≈ flow3 
 SCOPF.calc_Pline!(flow4, θ, pf, cont2, c2, Pᵢ=(Pᵢ .+ ΔPc), nodes=islands[island], branches=island_b) # IMML theta
 @test flow3 ≈ flow4
-SCOPF.calc_isf!(ϕ, X, pf.X, pf.B, pf.DA, cont2, c2); LinearAlgebra.mul!(flow5, ϕ, (Pᵢ .+ ΔPc)); # IMML ptdf
+SCOPF.calc_ptdf!(ϕ, X, pf.X, pf.B, pf.DA, cont2, c2); LinearAlgebra.mul!(flow5, ϕ, (Pᵢ .+ ΔPc)); # IMML ptdf
 @test flow4 ≈ flow5 
 
 # CONTINGENCY WITH POWER INJECTION CHANGE, ISLANDING, AND DISTRIBUTED SLACK
@@ -79,9 +79,9 @@ SCOPF.set_dist_slack!(pf.ϕ, opf.mgx, oplim.pg_lim_max)
 SCOPF.calculate_line_flows!(flow1, pf, cont1, c1, Pᵢ=(Pᵢ .+ ΔPc)) # IMML flow
 SCOPF.calculate_line_flows!(flow2, θ, B, pf.DA, pf.B, (Pᵢ .+ ΔPc), cont1, c1, pf.slack) # inverse with theta
 @test flow1 ≈ flow2
-SCOPF.calc_isf!(ϕ, X, pf.X, pf.B, pf.DA, cont1, c1); LinearAlgebra.mul!(flow3, ϕ, (Pᵢ .+ ΔPc)); # IMML ptdf
+SCOPF.calc_ptdf!(ϕ, X, pf.X, pf.B, pf.DA, cont1, c1); LinearAlgebra.mul!(flow3, ϕ, (Pᵢ .+ ΔPc)); # IMML ptdf
 @test flow2 ≈ flow3
-SCOPF.calc_isf!(ϕ, pf.K, pf.DA, pf.B, cont1, c1, pf.slack); LinearAlgebra.mul!(flow4, ϕ, (Pᵢ .+ ΔPc)); # inverse with ptdf
+SCOPF.calc_ptdf!(ϕ, pf.K, pf.DA, pf.B, cont1, c1, pf.slack); LinearAlgebra.mul!(flow4, ϕ, (Pᵢ .+ ΔPc)); # inverse with ptdf
 @test flow3 ≈ flow4
 dist_slack = getproperty.(get_active_power_limits.(opf.ctrl_generation), [:max])
 slack_array = dist_slack / sum(dist_slack)

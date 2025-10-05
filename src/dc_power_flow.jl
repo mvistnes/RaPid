@@ -1,21 +1,53 @@
+"""
+    Power flow top type
+"""
 abstract type PowerFlow end
 
-mutable struct DCPowerFlow{TI<:Integer,TR<:Real} <: PowerFlow
-    DA::SparseArrays.SparseMatrixCSC{TR,TI} # Diagonal admittance matrix times the connectivity matrix
-    B::SparseArrays.SparseMatrixCSC{TR,TI} # The admittance matrix
-    K::KLU.KLUFactorization{TR, TI} # A factorization of the admittance matrix
-    X::SemiDenseX{TI, TR} # Inverse of the admittance matrix
-    ϕ::SemiDensePTDF{TI, TR} # PTDF matrix
-    θ::Vector{TR} # Bus voltage angles
-    F::Vector{TR} # Line power flow
-    slack::TI # Reference bus
-    slack_array::Vector{TR} # Distributed slack
+"""
+    DCPowerFlow{TI<:Integer,TR<:Real}
 
-    K_tmp::KLU.KLUFactorization{TR, TI} # A temp factorization of the admittance matrix
-    vn_tmp::Vector{TR} # bus vector
-    vb_tmp::Vector{TR} # branch vector
+    Structure for holding matrices and vectors for DC power flow calculations.
+    
+    Fields:
+    - `DA::SparseArrays.SparseMatrixCSC{TR,TI}`: Diagonal admittance matrix times the connectivity matrix
+    - `B::SparseArrays.SparseMatrixCSC{TR,TI}`: The admittance matrix
+    - `K::KLU.KLUFactorization{TR, TI}`: A factorization of the admittance matrix
+    - `X::SemiDenseX{TI, TR}`: Inverse of the admittance matrix
+    - `ϕ::SemiDensePTDF{TI, TR}`: PTDF matrix
+    - `θ::Vector{TR}`: Bus voltage angles
+    - `F::Vector{TR}`: Line power flow
+    - `slack::TI`: Reference bus
+    - `slack_array::Vector{TR}`: Distributed slack
+    - `K_tmp::KLU.KLUFactorization{TR, TI}`: Temporary storage for the factorization of the admittance matrix
+    - `vn_tmp::Vector{TR}`: Temporary storage for a bus vector
+    - `vb_tmp::Vector{TR}`: Temporary storage for a branch vector
+"""
+mutable struct DCPowerFlow{TI<:Integer,TR<:Real} <: PowerFlow
+    DA::SparseArrays.SparseMatrixCSC{TR,TI} 
+    B::SparseArrays.SparseMatrixCSC{TR,TI} 
+    K::KLU.KLUFactorization{TR, TI}
+    X::SemiDenseX{TI, TR}
+    ϕ::SemiDensePTDF{TI, TR}
+    θ::Vector{TR}
+    F::Vector{TR}
+    slack::TI
+    slack_array::Vector{TR}
+
+    K_tmp::KLU.KLUFactorization{TR, TI}
+    vn_tmp::Vector{TR}
+    vb_tmp::Vector{TR}
 end
 
+"""
+    Constructor for the DCPowerFlow struct.
+    
+    Arguments:
+    - `branches::AbstractVector{<:Tuple{TI,TI}}`: Vector of tuples with (from, to) bus indices for each branch
+    - `susceptance::AbstractVector{TR}`: Vector of branch susceptances
+    - `numnodes::Integer`: Number of nodes in the system
+    - `slack::Integer`: Index of the slack bus
+    - `slack_array::AbstractVector{TR}`: Vector defining the distributed slack bus (default is a single slack bus)
+"""
 function DCPowerFlow(branches::AbstractVector{<:Tuple{TI,TI}}, susceptance::AbstractVector{TR}, numnodes::Integer, slack::Integer; slack_array::AbstractVector{TR}=ones(TR,1)
 ) where {TI<:Integer,TR<:Real}
     A = calc_A(branches, numnodes)
@@ -27,10 +59,27 @@ function DCPowerFlow(branches::AbstractVector{<:Tuple{TI,TI}}, susceptance::Abst
     return DCPowerFlow{TI,TR}(DA, B, K, X, ϕ, zeros(TR, numnodes), zeros(TR, length(branches)), slack, slack_array,
         calc_klu(B, slack), zeros(TR, numnodes), zeros(TR, length(branches)))
 end
+
+"""
+    Constructor for the DCPowerFlow struct.
+    
+    Arguments:
+    - `nodes::AbstractVector{<:Bus}`: Vector of buses in the system
+    - `branches::AbstractVector{<:Branch}`: Vector of branches in the system
+    - `idx::Dict{<:Int,<:Int}`: Dictionary mapping bus numbers to indices
+    - `slack::Integer`: Index of the slack bus (default is the first slack bus found)
+    - `slack_array::AbstractVector{TR}`: Vector defining the distributed slack bus (default is a single slack bus)
+"""
 DCPowerFlow(nodes::AbstractVector{<:Bus}, branches::AbstractVector{<:Branch}, idx::Dict{<:Int,<:Int}; 
     slack::Integer=find_slack(nodes)[1], slack_array::AbstractVector{<:Real}=ones(Float64,1)) =
     DCPowerFlow(get_bus_idx.(branches, [idx]), PowerSystems.get_series_susceptance.(branches), length(nodes), slack, slack_array=slack_array)
 
+
+"""
+    DCPowerFlow(sys::System)
+
+    Constructor for the DCPowerFlow struct.
+"""
 function DCPowerFlow(sys::System)
     nodes = sort_components!(get_nodes(sys))
     branches = sort_components!(get_branches(sys))
@@ -38,6 +87,21 @@ function DCPowerFlow(sys::System)
     return DCPowerFlow(nodes, branches, idx)
 end
 
+"""
+    DCPowerFlow(nodes::AbstractVector{<:Bus}, branches::AbstractVector{<:Branch}, idx::Dict{<:Int,<:Int}, Pᵢ::AbstractVector{<:Real}; 
+        slack::Integer=find_slack(nodes)[1], slack_array::AbstractVector{<:Real}=ones(Float64,1), mgx::AbstractMatrix{<:Real}=ones(Float64,1,1))
+
+    Constructor for the DCPowerFlow struct that also runs a power flow given the power injections.
+
+    Arguments:
+    - `nodes::AbstractVector{<:Bus}`: Vector of buses in the system
+    - `branches::AbstractVector{<:Branch}`: Vector of branches in the system
+    - `idx::Dict{<:Int,<:Int}`: Dictionary mapping bus numbers to indices
+    - `Pᵢ::AbstractVector{<:Real}`: Vector of power injections at each bus
+    - `slack::Integer`: Index of the slack bus (default is the first slack bus found)
+    - `slack_array::AbstractVector{TR}`: Vector defining the distributed slack bus (default is a single slack bus)
+    - `mgx::AbstractMatrix{<:Real}`: Matrix defining the generator bus relationships (default is a 1x1 matrix with value 1)
+"""
 function DCPowerFlow(nodes::AbstractVector{<:Bus}, branches::AbstractVector{<:Branch}, idx::Dict{<:Int,<:Int}, Pᵢ::AbstractVector{<:Real}; 
     slack::Integer=find_slack(nodes)[1], slack_array::AbstractVector{<:Real}=ones(Float64,1), mgx::AbstractMatrix{<:Real}=ones(Float64,1,1))
     slack_array = (slack_array' * mgx)'
@@ -56,11 +120,13 @@ get_ϕ(pf::DCPowerFlow) = pf.ϕ
 get_θ(pf::DCPowerFlow) = pf.θ
 
 calc_X_vec(pf::DCPowerFlow, bus::Integer) = getindex(pf.X, bus)
-calc_isf_vec(pf::DCPowerFlow, bus::Integer) = getindex(pf.ϕ, bus)
+calc_ptdf_vec(pf::DCPowerFlow, bus::Integer) = getindex(pf.ϕ, bus)
 
 set_θ!(pf::DCPowerFlow, model::Model) = copy!(pf.θ, get_sorted_angles(model))
 
-""" Calculate the net power for each node from the voltage angles """
+"""
+    Basic calculation of the net power for each node from the voltage angles.
+"""
 function calc_Pᵢ(branches::AbstractVector{<:Branch}, θ::AbstractVector{<:Real}, numnodes::Integer,
     idx::Dict{<:Int,<:Int}, outage::Tuple{<:Integer,<:Integer}=(0, 0)
 )
@@ -76,7 +142,9 @@ function calc_Pᵢ(branches::AbstractVector{<:Branch}, θ::AbstractVector{<:Real
     return P
 end
 
-""" Calculate the net power for each node from the power flow """
+"""
+    Basic calculation of the net power for each node from the power flow.
+"""
 function calc_Pᵢ_from_flow(branches::AbstractVector{<:Branch}, F::AbstractVector{<:Real}, numnodes::Integer, idx::Dict{<:Int,<:Int})
     P = zeros(numnodes)
     for (i, branch) in enumerate(branches)
@@ -87,7 +155,14 @@ function calc_Pᵢ_from_flow(branches::AbstractVector{<:Branch}, F::AbstractVect
     return P
 end
 
-""" Distributed slack """
+"""
+    Set a distributed slack for the PTDF matrix.   
+        
+    Arguments:
+    - `ϕ::Matrix{<:Real}`: PTDF matrix to modify
+    - `mgx::AbstractMatrix{<:Real}`: Matrix defining the generator bus relationships
+    - `dist_slack::AbstractVector{<:Real}`: Vector defining the distributed slack bus
+"""
 function set_dist_slack!(ϕ::Matrix{<:Real}, mgx::AbstractMatrix{<:Real}, dist_slack::AbstractVector{<:Real})
     @assert !iszero(sum(dist_slack))
     slack_array = dist_slack / sum(dist_slack)
@@ -100,13 +175,26 @@ function set_dist_slack!(pf::DCPowerFlow, opf::OPFsystem, dist_slack::AbstractVe
     set_dist_slack!(pf.ϕ, opf.mgx, dist_slack)
 end
 
-""" Make the component connectivity matrix """
+""" 
+    Make the component connectivity matrix
+    
+    Arguments:
+    - `vals::AbstractVector{<:StaticInjection}`: Vector of components to map
+    - `numnodes::Integer`: Number of nodes in the system
+    - `idx::Dict{<:Int,<:Integer}`: Dictionary mapping bus numbers to indices    
+"""
 function calc_connectivity(vals::AbstractVector{<:StaticInjection}, numnodes::Integer, idx::Dict{<:Int,<:Integer})
     num = length(vals)
     return SparseArrays.sparse(1:num, get_bus_idx.(vals, [idx]), one(Int8), num, numnodes)
 end
 
-""" Make the branch connectivity matrix """
+"""
+    Make the branch connectivity matrix
+
+    Arguments:
+    - `branches::AbstractVector{<:Branch}`: Vector of branches in the system
+    - `numnodes::Integer`: Number of nodes in the system
+"""
 function calc_A(branches::AbstractVector{<:Tuple{Integer,Integer}}, numnodes::Integer)
     num_b = length(branches)
 
@@ -131,10 +219,12 @@ calc_A(branches::AbstractVector{<:Branch}, numnodes::Integer, idx::Dict{<:Int,<:
 calc_D(susceptance::AbstractVector{<:Real}) = LinearAlgebra.Diagonal(susceptance)
 calc_D(branches::AbstractVector{<:Branch}) = calc_D(PowerSystems.get_series_susceptance.(branches))
 
+""" Make the product of the diagonal suseptance matrix and the connectivity matrix """
 calc_DA(A::AbstractMatrix{<:Real}, susceptance::AbstractVector{<:Real}) = calc_D(susceptance) * A
 calc_DA(branches::AbstractVector{<:Branch}, numnodes::Integer, idx::Dict{<:Int,<:Integer}) = 
     calc_DA(calc_A(branches, idx), numnodes, PowerSystems.get_series_susceptance.(branches))
 
+""" Make the admittance matrix from the connectivity matrix and the diagonal suseptance matrix. """
 calc_B(A::AbstractMatrix{<:Real}, DA::AbstractMatrix{<:Real}) = A' * DA
 function calc_B(branches::AbstractVector{<:Tuple{Integer,Integer}}, numnodes::Integer, susceptance::AbstractVector{<:Real})
     A = calc_A(branches, numnodes)
@@ -197,8 +287,7 @@ function _add_B!(B::SparseArrays.SparseMatrixCSC, br::FixedAdmittance, idx::Dict
     return
 end
 
-# Slower than previous function
-# """ Builds an admittance matrix with the line series reactance of the lines. """
+""" Builds an admittance matrix with non-symmetries. """
 function calc_B(branches::AbstractVector{<:Branch}, idx::Dict{<:Int,<:Integer}, fixed::AbstractVector{FixedAdmittance})
     numnodes = length(idx)
     B = SparseArrays.spzeros(numnodes, numnodes)
@@ -211,6 +300,13 @@ function calc_B(branches::AbstractVector{<:Branch}, idx::Dict{<:Int,<:Integer}, 
     return B
 end
 
+"""
+    Make a KLU factorization of the admittance matrix.
+
+    Arguments:
+    - `A::SparseArrays.SparseMatrixCSC{T1, T2}`: Matrix to factorize
+    - `slack::Integer`: Index of the slack bus
+"""
 function calc_klu!(A::SparseArrays.SparseMatrixCSC{T1, T2}, slack::Integer) where {T1<:Real,T2<:Integer}
     A[:, slack] .= zero(T1)
     A[slack, :] .= zero(T1)
@@ -220,8 +316,15 @@ end
 calc_klu(A::SparseArrays.SparseMatrixCSC, slack::Integer) =
     calc_klu!(copy(A), slack)
 
-""" Calculate the inverse of the admittance matrix.
-    X must be filled with the values of B """
+""" 
+    Calculate the inverse of the admittance matrix.
+    X must be filled with the values of B
+
+    Arguments:
+    - `X::AbstractMatrix{T}`: Matrix to store the inverse
+    - `K::KLU.KLUFactorization{T,<:Integer}`: KLU factorization of the admittance matrix
+    - `slack::Integer`: Index of the slack bus
+"""
 function calc_X!(X::AbstractMatrix{T}, K::KLU.KLUFactorization{T,<:Integer}, slack::Integer
 ) where {T<:Real}
     fill!(X, zero(T))
@@ -242,12 +345,19 @@ end
 calc_X(B::AbstractMatrix{<:Real}, slack::Integer) = calc_X!(Matrix(B), B, slack)
 calc_X(K::KLU.KLUFactorization{T,<:Integer}, slack::Integer) where {T<:Real} = calc_X!(Matrix{T}(undef, size(K)), K, slack)
     
-calc_isf(DA::AbstractMatrix{<:Real}, X::AbstractMatrix{<:Real}) = DA * X
-calc_isf!(ϕ::AbstractMatrix{<:Real}, DA::AbstractMatrix{<:Real}, X::AbstractMatrix{<:Real}) =
+calc_ptdf(DA::AbstractMatrix{<:Real}, X::AbstractMatrix{<:Real}) = DA * X
+calc_ptdf!(ϕ::AbstractMatrix{<:Real}, DA::AbstractMatrix{<:Real}, X::AbstractMatrix{<:Real}) =
     LinearAlgebra.mul!(ϕ, DA, X)
 
-""" Make the isf-matrix """
-function calc_isf(K::KLU.KLUFactorization{T,<:Integer}, DA::AbstractMatrix{T}, slack::Integer
+"""
+    Calculate the ptdf-matrix 
+
+    Arguments:
+    - `K::KLU.KLUFactorization{T,<:Integer}`: KLU factorization of the admittance matrix
+    - `DA::AbstractMatrix{T}`: Branch-bus incidence matrix times diagonal matrix of branch susceptances
+    - `slack::Integer`: Index of the slack bus
+"""
+function calc_ptdf(K::KLU.KLUFactorization{T,<:Integer}, DA::AbstractMatrix{T}, slack::Integer
 ) where {T<:Real}
     ϕ = Matrix(DA')
     KLU.solve!(K, ϕ)
@@ -255,20 +365,29 @@ function calc_isf(K::KLU.KLUFactorization{T,<:Integer}, DA::AbstractMatrix{T}, s
     set_tol_zero!(ϕ)
     return ϕ'
 end
-function calc_isf!(B::SparseArrays.SparseMatrixCSC{T,<:Integer}, DA::AbstractMatrix{T}, slack::Integer
+function calc_ptdf!(B::SparseArrays.SparseMatrixCSC{T,<:Integer}, DA::AbstractMatrix{T}, slack::Integer
 ) where {T<:Real}
-    return calc_isf(calc_klu(B, slack), DA, slack)
+    return calc_ptdf(calc_klu(B, slack), DA, slack)
 end
-function calc_isf(branches::AbstractVector{<:Branch}, nodes::AbstractVector{<:Bus},
+function calc_ptdf(branches::AbstractVector{<:Branch}, nodes::AbstractVector{<:Bus},
     idx::Dict{<:Int,<:Integer}=get_nodes_idx(nodes), slack::Integer=find_slack(nodes)[1])
     A = calc_A(branches, length(nodes), idx)
     DA = calc_DA(A, PowerSystems.get_series_susceptance.(branches))
     B = calc_B(A, DA)
-    return calc_isf!(B, DA, slack)
+    return calc_ptdf!(B, DA, slack)
 end
 
-""" Make a isf-vector """
-function calc_isf_vec!(ϕ::AbstractVector{<:Real}, K::KLU.KLUFactorization{T,<:Integer}, DA::AbstractMatrix{T}, slack::Integer, branch::Integer
+"""
+    Calculate a ptdf-vector 
+
+    Arguments:
+    - `ϕ::AbstractVector{<:Real}`: Vector to store the PTDF values
+    - `K::KLU.KLUFactorization{T,<:Integer}`: KLU factorization of the admittance matrix
+    - `DA::AbstractMatrix{T}`: Branch-bus incidence matrix times diagonal matrix of branch susceptances
+    - `slack::Integer`: Index of the slack bus
+    - `branch::Integer`: Index of the branch for which to calculate the PTDF vector
+"""
+function calc_ptdf_vec!(ϕ::AbstractVector{<:Real}, K::KLU.KLUFactorization{T,<:Integer}, DA::AbstractMatrix{T}, slack::Integer, branch::Integer
 ) where {T<:Real}
     if slack == branch
         ϕ .= zero(T)
@@ -279,9 +398,9 @@ function calc_isf_vec!(ϕ::AbstractVector{<:Real}, K::KLU.KLUFactorization{T,<:I
     end
     return ϕ
 end
-function calc_isf_vec!(B::SparseArrays.SparseMatrixCSC{T,<:Integer}, DA::AbstractMatrix{T}, slack::Integer, branch::Integer
+function calc_ptdf_vec!(B::SparseArrays.SparseMatrixCSC{T,<:Integer}, DA::AbstractMatrix{T}, slack::Integer, branch::Integer
 ) where {T<:Real}
-    return calc_isf_vec!(Vector{T}(undef, size(DA,2)), calc_klu(B, slack), DA, slack, branch)
+    return calc_ptdf_vec!(Vector{T}(undef, size(DA,2)), calc_klu(B, slack), DA, slack, branch)
 end
 
 """ Find voltage angles from the factorization of the B-matrix and injected power. Change both θ and K """
@@ -299,7 +418,14 @@ _calc_θ!(θ::AbstractVector{T}, B::SparseArrays.SparseMatrixCSC{T,<:Integer}, P
 calc_θ!(B::AbstractMatrix{T}, P::AbstractVector{T}, slack::Integer) where {T<:Real} =
     _calc_θ!(Vector{T}(undef, length(P)), B, P, slack)
 
-""" Calculate the power flow on the lines from the voltage angles """
+"""
+    Calculate the power flow on the lines from the voltage angles
+    
+    Arguments:
+    - `branches::AbstractVector{<:Branch}`: Vector of branches in the system
+    - `θ::AbstractVector{<:Real}`: Vector of bus voltage angles
+    - `idx::Dict{<:Int,<:Int}`: Dictionary mapping bus numbers to indices    
+"""
 function calc_Pline(branches::AbstractVector{<:Branch}, θ::AbstractVector{<:Real}, idx::Dict{<:Int,<:Int})
     P = zeros(length(branches))
     for (i, branch) in enumerate(branches)
@@ -310,17 +436,17 @@ function calc_Pline(branches::AbstractVector{<:Branch}, θ::AbstractVector{<:Rea
 end
 
 """ 
-Calculate the power flow on the lines from the connectivity 
-and the diagonal admittance matrices and the voltage angles 
+    Calculate the power flow on the lines from the connectivity 
+    and the diagonal admittance matrices and the voltage angles 
 """
 calc_Pline(DA::AbstractMatrix{<:Real}, θ::AbstractVector{<:Real}) = DA * θ
 calc_Pline!(pf::DCPowerFlow) = LinearAlgebra.mul!(pf.F, pf.DA, pf.θ)
 
-""" DC line flow calculation using Injection Shift Factors and Power Injection vector"""
-calculate_line_flows(isf::AbstractMatrix{<:Real}, Pᵢ::AbstractVector{<:Real}) = isf * Pᵢ
+""" DC power flow calculation using PTDF and Power Injection vector"""
+calculate_line_flows(ptdf::AbstractMatrix{<:Real}, Pᵢ::AbstractVector{<:Real}) = ptdf * Pᵢ
 # calculate_line_flows!(pf::DCPowerFlow, Pᵢ::AbstractVector{<:Real}) = LinearAlgebra.mul!(pf.F, pf.ϕ, Pᵢ)
 
-""" DC power flow calculation using the Admittance matrix factorization and Power Injection vector returning the bus angles """
+""" DC power flow calculation using the Admittance matrix factorization and Power Injection vector """
 run_pf!(θ::AbstractVector{<:Real}, K::KLU.KLUFactorization, P::AbstractVector{<:Real}, slack::Integer) =
     _calc_θ!(θ, K, P, slack)
 run_pf(K::KLU.KLUFactorization, P::AbstractVector{<:Real}, slack::Integer) = run_pf!(similar(P), K, P, slack)
@@ -331,7 +457,7 @@ function run_pf!(pf::DCPowerFlow, Pᵢ::AbstractVector{<:Real})
     return pf.θ
 end
 
-""" DC power flow calculation using the inverse Admittance matrix and Power Injection vector returning the bus angles """
+""" DC power flow calculation using the inverse Admittance matrix and Power Injection vector """
 calc_θ(X::AbstractMatrix{<:Real}, P::AbstractVector{<:Real}) = X * P
 # calc_θ!(pf::DCPowerFlow, Pᵢ::AbstractVector{<:Real}) = LinearAlgebra.mul!(pf.θ, pf.X, Pᵢ)
 

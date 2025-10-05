@@ -1,3 +1,8 @@
+"""
+    Semi-dense matrix that calculates rows on demand and caches them.
+    Used for PTDF and sensitivity matrices.
+"""
+
 abstract type SemiDenseMatrix{TR} <: AbstractMatrix{TR} end
 
 function Base.getindex(mx::SemiDenseMatrix, bus::Integer)
@@ -25,6 +30,15 @@ Base.setindex!(mx::SemiDenseMatrix, val::Real, i::Integer, j::Integer) = mx.data
 #     return res
 # end
 
+"""
+    Semi-dense matrix for solving x in Kx=b, where K is a KLU factorization. 
+
+    Fields:
+    - `data::Vector{Vector{TR}}` Cached rows of the matrix
+    - `filled::Vector{Bool}` Indicator vector for which rows are cached
+    - `K::KLU.KLUFactorization{TR,TI}` KLU factorization of the admittance matrix
+    - `slack::TI` Index of the slack bus
+"""
 mutable struct SemiDenseX{TI<:Integer, TR<:Real} <: SemiDenseMatrix{TR}
     data::Vector{Vector{TR}}
     filled::Vector{Bool}
@@ -47,6 +61,19 @@ function _calc_vec(mx::SemiDenseX{TI,TR}, bus::Integer) where {TI<:Integer, TR<:
     return x
 end
 
+"""
+    Semi-dense PTDF matrix that calculates rows on demand and caches them.
+    The PTDF is calculated as ϕ = DA * K, where K is a KLU factorization of the admittance matrix
+    and DA is the branch-bus incidence matrix times the diagonal matrix of branch susceptances.
+
+    Fields:
+    - `data::Vector{Vector{TR}}` Cached rows of the matrix
+    - `filled::Vector{Bool}` Indicator vector for which rows are cached
+    - `K::KLU.KLUFactorization{TR,TI}` KLU factorization of the admittance matrix
+    - `DA::SparseArrays.SparseMatrixCSC{TR,TI}` Branch-bus incidence matrix times diagonal matrix of branch susceptances
+    - `slack::TI` Index of the slack bus
+    - `slack_array::Vector{TR}` Distributed slack bus vector
+"""
 mutable struct SemiDensePTDF{TI<:Integer, TR<:Real} <: SemiDenseMatrix{TR}
     data::Vector{Vector{TR}}
     filled::Vector{Bool}
@@ -78,6 +105,16 @@ function _calc_vec(mx::SemiDensePTDF{TI,TR}, branch::Integer) where {TI<:Integer
     return mx.data[branch]
 end
 
+"""
+    Set distributed slack buses for the PTDF matrix.
+    The slack bus distribution is given as a vector of weights that sum to 1.
+    The PTDF rows are updated to reflect the new slack bus distribution.
+
+    Parameters:
+    - `mx::SemiDensePTDF{TI,TR}` The PTDF matrix
+    - `mgx::AbstractMatrix{<:Real}` Generator to bus mapping matrix
+    - `dist_slack::AbstractVector{<:Real}` Distributed slack bus vector
+"""
 function set_dist_slack!(mx::SemiDensePTDF{TI,TR}, mgx::AbstractMatrix{<:Real}, dist_slack::AbstractVector{<:Real}
     ) where {TI<:Integer, TR<:Real}
     @assert !iszero(sum(dist_slack))

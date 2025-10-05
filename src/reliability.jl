@@ -28,7 +28,7 @@ function run_corrective_with_base(case::Case, vals)
     JuMP.fix.(case.model[:ls0], vals[:ls0], force=true)
     JuMP.fix.(case.model[:pr0], vals[:pr0], force=true)
     solve_model!(case.model)
-    case, tot_t = run_benders!(PC2_SCOPF - Base_SCOPF, case, 0.0)
+    case, tot_t = run_decomposed_optimization!(PC2_SCOPF - Base_SCOPF, case, 0.0)
     
     if JuMP.is_solved_and_feasible(case.model)
         return extract_results(case)
@@ -47,13 +47,13 @@ function run_corrective_with_base(case::Case, vals)
     end
 end
 
-function run_benders_type!(result, type, goal, optimizer, optimizer2, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long; p_failure=0.00, time_limit_sec=600)
-    case, tot_t = run_benders(type, sys, optimizer, voll, prob, cont, max_shed=max_shed,
+function run_decomposed_optimization_type!(result, type, goal, optimizer, optimizer2, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long; p_failure=0.00, time_limit_sec=600)
+    case, tot_t = run_decomposed_optimization(type, sys, optimizer, voll, prob, cont, max_shed=max_shed,
         ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, time_limit_sec=time_limit_sec)
     !is_solved_and_feasible(case.model) && return
     if type != goal
         vals = extract_results(case)
-        case_i, _ = run_benders(Base_SCOPF, sys, optimizer2, voll, prob, cont, max_shed=max_shed, ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, time_limit_sec=time_limit_sec);
+        case_i, _ = run_decomposed_optimization(Base_SCOPF, sys, optimizer2, voll, prob, cont, max_shed=max_shed, ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, time_limit_sec=time_limit_sec);
         result[type] = run_corrective_with_base(case_i, vals)
     else
         result[type] = extract_results(case)
@@ -61,14 +61,14 @@ function run_benders_type!(result, type, goal, optimizer, optimizer2, sys, voll,
     return result
 end
 
-function run_benders_types!(result, types, optimizer, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long; p_failure=0.00, time_limit_sec=600)
+function run_decomposed_optimization_types!(result, types, optimizer, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long; p_failure=0.00, time_limit_sec=600)
     for type in types
-        run_benders_type!(result, type, types[end], optimizer, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long, p_failure=p_failure, time_limit_sec=time_limit_sec)
+        run_decomposed_optimization_type!(result, type, types[end], optimizer, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long, p_failure=p_failure, time_limit_sec=time_limit_sec)
     end
     return result
 end
 
-function run_reliability_calculation_benders(types, optimizer, system, voll, prob, contingencies, max_shed, ramp_mult, ramp_minutes, short, long; p_failure=0.00, time_limit_sec=600)
+function run_reliability_calculation_decomposition(types, optimizer, system, voll, prob, contingencies, max_shed, ramp_mult, ramp_minutes, short, long; p_failure=0.00, time_limit_sec=600)
     # demands = sort_components!(get_demands(system))
     # pd = demands .|> get_active_power
     # hours = read_x_data("data\\ieee_std_load_profile.txt")
@@ -85,7 +85,7 @@ function run_reliability_calculation_benders(types, optimizer, system, voll, pro
         set_active_power!.(get_components(StaticLoad, system), (get_components(StaticLoad, system) .|> get_max_active_power) * h)
         # cont = sort_components!(get_branches(sys))
 
-        run_benders_types!(result, types, optimizer, system, voll, prob, contingencies, max_shed, ramp_mult, ramp_minutes, short, long, p_failure=p_failure, time_limit_sec=time_limit_sec)
+        run_decomposed_optimization_types!(result, types, optimizer, system, voll, prob, contingencies, max_shed, ramp_mult, ramp_minutes, short, long, p_failure=p_failure, time_limit_sec=time_limit_sec)
 
         print(i, " ")
     end

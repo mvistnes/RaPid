@@ -1,3 +1,9 @@
+"""
+    Extentions to the SCOPF with risk constraints, circuit breakers 
+    and unit commitment.
+"""
+
+
 """ Add unit commitment to thermal generation (not hydro) """
 function add_unit_commit!(opfm::OPFmodel)
     @variable(opfm.mod, u[g in get_name.(get_gens_t(opfm.sys))], Bin)

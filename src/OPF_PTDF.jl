@@ -1,4 +1,24 @@
-""" Operational limits type """
+""" 
+    Operational limits type 
+        
+    Parameters:
+    - `ramp_mult`: Multiplier for ramping limits.
+    - `ramp_minutes`: Ramping time in minutes.
+    - `p_failure`: Probability of failure of corrective actions.
+    - `branch_rating`: Thermal rating of branches.
+    - `short_term_multi`: Short-term multiplier for branch ratings.
+    - `long_term_multi`: Long-term multiplier for branch ratings.
+    - `pg_lim_min`: Minimum active power limits for generators.
+    - `pg_lim_max`: Maximum active power limits for generators.
+    - `rampup`: Ramp-up limits for generators.
+    - `rampdown`: Ramp-down limits for generators.
+    - `pr_lim`: Active power limits for renewables.
+    - `max_curtail`: Maximum curtailment limits for renewables.
+    - `dc_lim_min`: Minimum (negative) active power limits for DC branches.
+    - `dc_lim_max`: Maximum active power limits for DC branches.
+    - `pd_lim`: Active power limits for demands.
+    - `max_shed`: Maximum load shedding limits.
+    """
 struct Oplimits{TR<:Real}
     ramp_mult::TR
     ramp_minutes::TR
@@ -19,7 +39,19 @@ struct Oplimits{TR<:Real}
     max_shed::Union{TR,Vector{TR}}
 end
 
-""" Constructor for Oplimits """
+""" 
+    Constructor for Oplimits 
+    
+    Parameters:
+    - `opf`: An instance of `OPFsystem` containing the power system data.
+    - `max_shed`: Maximum load shedding limits, can be a single value or a vector.
+    - `max_curtail`: Maximum curtailment limits for renewables, can be a single value or a vector.
+    - `ramp_mult`: Multiplier for ramping limits.
+    - `ramp_minutes`: Ramping time in minutes.
+    - `p_failure`: Probability of failure of corrective actions.
+    - `short_term_multi`: Short-term multiplier for branch ratings, can be a single value or a vector.
+    - `long_term_multi`: Long-term multiplier for branch ratings, can be a single value or a vector.
+"""
 function oplimits(
     opf::OPFsystem,
     max_shed::Union{TR,Vector{TR}},
@@ -52,6 +84,22 @@ function oplimits(
         zeros(length(pg_lim_max)), pg_lim_max, rampup, rampdown, pr_lim, max_curtail, dc_lim_min, dc_lim_max, pd_lim, max_shed)
 end
 
+"""
+    Case{TR,TI} <: AbstractCase
+
+    A mutable struct representing a case for OPF analysis.
+    
+    Parameters:
+    - `model`: The optimization model.
+    - `opf`: The power system data.
+    - `pf`: The DC power flow object.
+    - `oplim`: Operational limits for the case.
+    - `brc_up`: Dictionary of upper branch constraints.
+    - `brc_down`: Dictionary of lower branch constraints.
+    - `Pc`: Dictionary of short-term corrective actions.
+    - `Pcc`: Dictionary of long-term corrective actions.
+    - `Pccx`: Dictionary of long-term corrective actions after failure of actions.
+"""
 mutable struct Case{TR<:Real,TI<:Integer}
     model::Model
     opf::OPFsystem{TR}
@@ -64,7 +112,30 @@ mutable struct Case{TR<:Real,TI<:Integer}
     Pccx::Dict{TI,ExprCCX}
 end
 
-""" Initialize an OPF of a power system """
+""" 
+    Initialize an OPF of a power system 
+
+    This function sets up the optimization model for the OPF problem, including variables, constraints, and objectives.
+
+    Parameters:
+    - `type`: The type of OPF to be solved.
+    - `system`: Power system data.
+    - `optimizer`: The optimizer to be used for solving the OPF.
+    - `voll`: Value of lost load.
+    - `contingencies`: List of contingencies to be considered.
+    - `prob`: Probability of each contingency.
+    - `dist_slack`: Distribution of generator slack.
+    - `time_limit_sec`: Time limit for the optimization.
+    - `ramp_minutes`: Ramping time in minutes.
+    - `ramp_mult`: Multiplier for ramping limits.
+    - `max_shed`: Maximum load shedding limits.
+    - `max_curtail`: Maximum curtailment limits for renewables.
+    - `short_term_multi`: Short-term multiplier for branch ratings.
+    - `long_term_multi`: Long-term multiplier for branch ratings.
+    - `p_failure`: Probability of failure of corrective actions.
+    - `silent`: Suppresses output messages.
+    - `debug`: Enables debug mode.
+    """
 function opf_base(type::OPF, system::System, optimizer;
     voll=Float64[],
     contingencies=Component[],
@@ -140,7 +211,17 @@ function opf_base(type::OPF, system::System, optimizer;
     return m, opf, pf, oplim, brc_up, brc_down, Pc, Pcc, Pccx
 end
 
-" Add all constraints to the model "
+""" 
+    Add all branch constraints to the model.
+    
+    Parameters:
+    - `m`: Optimization model.
+    - `ptdf`: PTDF matrix.
+    - `p`: Node active power injection.
+    - `brc_up`: Upper branch constraints.
+    - `brc_down`: Lower branch constraints.
+    - `rating`: Branch thermal ratings.
+"""
 function add_branch_constraints!(m::Model, ptdf::AbstractMatrix{<:Real}, p::AbstractVector{VariableRef}, 
     brc_up::Dict{<:Integer, ConstraintRef}, brc_down::Dict{<:Integer, ConstraintRef}, rating::AbstractVector{<:Real}
 )
@@ -156,11 +237,22 @@ function add_branch_constraints!(m::Model, ptdf::AbstractMatrix{<:Real}, p::Abst
     return mod
 end
 
-" Add a branch constraint for branch to the model "
+""" 
+    Add a branch constraint to the model.
+    
+    Parameters:
+    - `m`: Optimization model.
+    - `pf`: DC power flow object.
+    - `p`: Node active power injection.
+    - `brc_up`: Upper branch constraints.
+    - `brc_down`: Lower branch constraints.
+    - `branch`: Index of the branch constraint to add to the model.
+    - `rating`: Branch thermal ratings.
+"""
 function add_branch_constraint!(m::Model, pf::DCPowerFlow, p::AbstractVector{VariableRef}, 
     brc_up::Dict{<:Integer, ConstraintRef}, brc_down::Dict{<:Integer, ConstraintRef}, branch::Integer, rating::Real
 )
-    # ptdf = calc_isf_vec(pf, branch)
+    # ptdf = calc_ptdf_vec(pf, branch)
     # ptdf0 = GenericAffExpr(0.0, Pair.(p, ptdf[i,:])) 
     ptdf0 = @expression(m, AffExpr())
     add_to_expression!.(ptdf0, pf.ϕ[branch, :], p)
@@ -169,7 +261,18 @@ function add_branch_constraint!(m::Model, pf::DCPowerFlow, p::AbstractVector{Var
     return mod
 end
 
-" Add branch limits to overloaded branches "
+""" 
+    Iteratively add branch constraints to the model until all overloaded branches are constrained.
+    
+    Parameters:
+    - `m`: Optimization model.
+    - `pf`: DC power flow object.
+    - `oplim`: Operational limits for the case.
+    - `brc_up`: Upper branch constraints.
+    - `brc_down`: Lower branch constraints.
+    - `total_solve_time`: Total solve time for the model.
+    - `atol`: Absolute tolerance for branch overload detection.
+"""
 function constrain_branches!(m::Model, pf::DCPowerFlow, oplim::Oplimits, brc_up::Dict{<:Integer, ConstraintRef}, brc_down::Dict{<:Integer, ConstraintRef}, 
     total_solve_time::Real, atol::Real=1e-6
 )
@@ -189,10 +292,25 @@ function constrain_branches!(m::Model, pf::DCPowerFlow, oplim::Oplimits, brc_up:
     end
     return total_solve_time
 end
+""" 
+    Iteratively add branch constraints to the model until all overloaded branches are constrained.
+    
+    Parameters:
+    - `case`: A `Case` object.
+    - `total_solve_time`: Total solve time for the model.
+    - `atol`: Absolute tolerance for branch overload detection.
+"""
 constrain_branches!(case::Case, total_solve_time::Real, atol::Real=1e-6) = 
     constrain_branches!(case.model, case.pf, case.oplim, case.brc_up, case.brc_down, total_solve_time, atol)
 
-""" Solve model and update the power flow object """
+""" 
+    Solve model and update the power flow object 
+
+    Parameters:
+    - `m`: Optimization model.
+    - `pf`: DC power flow object.
+    - `total_solve_time`: Total solve time for the model.
+"""
 function update_model!(m::Model, pf::DCPowerFlow, total_solve_time::Real)
     solve_model!(m)
     total_solve_time += solve_time(m)
@@ -202,6 +320,21 @@ function update_model!(m::Model, pf::DCPowerFlow, total_solve_time::Real)
     return total_solve_time
 end
 
+"""
+    Add all contingencies to the model and update the power flow object.
+
+    Parameters:
+    - `type`: The type of OPF to be solved.
+    - `opf`: The power system data.
+    - `oplim`: Operational limits for the case.
+    - `m`: Optimization model.
+    - `pf`: DC power flow object.
+    - `brc_up`: Upper branch constraints.
+    - `brc_down`: Lower branch constraints.
+    - `Pc`: Short-term corrective actions.
+    - `Pcc`: Long-term corrective actions.
+    - `Pccx`: Long-term corrective actions after failure of actions.
+"""
 function add_all_contingencies!(type::OPF, opf::OPFsystem, oplim::Oplimits, m::Model,
     pf::DCPowerFlow, brc_up::Dict{<:Integer, ConstraintRef}, brc_down::Dict{<:Integer, ConstraintRef}, 
     Pc::Dict{<:Integer,ExprC}, Pcc::Dict{<:Integer,ExprCC}, Pccx::Dict{<:Integer,ExprCCX}
@@ -212,10 +345,10 @@ function add_all_contingencies!(type::OPF, opf::OPFsystem, oplim::Oplimits, m::M
         if is_islanded(pf, cont[2], cont[1])
             islands, island, island_b = handle_islands(pf.B, pf.DA, cont[2], cont[1], pf.slack)
             length(islands[island]) < 2 && continue
-            ptdf = calc_isf(pf, cont[2], cont[1], islands, island, island_b)
+            ptdf = calc_ptdf(pf, cont[2], cont[1], islands, island, island_b)
             set_tol_zero!(ptdf)
         else
-            ptdf = calc_isf(pf, cont[2], cont[1])
+            ptdf = calc_ptdf(pf, cont[2], cont[1])
             islands = Vector{Vector{Int64}}[]
             island = 0
         end
@@ -229,9 +362,31 @@ function add_all_contingencies!(type::OPF, opf::OPFsystem, oplim::Oplimits, m::M
     set_objective_function(m, obj)
     return m, opf, pf, oplim, brc_up, brc_down, Pc, Pcc, Pccx
 end
+
+"""
+    Add all contingencies to the model and update the power flow object.
+
+    Parameters:
+    - `type`: The type of OPF to be solved.
+    - `case`: A `Case` object containing the power system data and model.
+"""
 add_all_contingencies!(type::OPF, case::Case) = 
     add_all_contingencies!(type, case.opf, case.oplim, case.model, case.pf, case.brc_up, case.brc_down, case.Pc, case.Pcc, case.Pccx)
 
+
+"""
+    Add a contingency to the model for the base case.
+
+    Parameters:
+    - `opf`: The power system data.
+    - `pf`: DC power flow object.
+    - `oplim`: Operational limits for the case.
+    - `m`: Optimization model.
+    - `brc_up`: Upper branch constraints.
+    - `brc_down`: Lower branch constraints.
+    - `ptdf`: PTDF matrix.
+    - `c`: Contingency index.
+"""
 function add_contingency!(opf::OPFsystem, pf::DCPowerFlow, oplim::Oplimits, m::Model, 
     brc_up::Dict{<:Integer, ConstraintRef}, brc_down::Dict{<:Integer, ConstraintRef}, 
     ptdf::AbstractMatrix{<:Real}, c::Integer
@@ -242,6 +397,23 @@ function add_contingency!(opf::OPFsystem, pf::DCPowerFlow, oplim::Oplimits, m::M
     # add_branch_constraints!(m, opf, pf, p, oplim.branch_rating * oplim.long_term_multi, c)
 end
 
+""" 
+    Add a contingency to the model for short-term corrective actions.
+
+    Parameters:
+    - `Pc`: Dictionary of short-term corrective actions.
+    - `opf`: The power system data.
+    - `pf`: DC power flow object.
+    - `oplim`: Operational limits for the case.
+    - `m`: Optimization model.
+    - `brc_up`: Upper branch constraints.
+    - `brc_down`: Lower branch constraints.
+    - `obj`: Objective function.
+    - `islands`: List of islands in the power system.
+    - `island`: Index of the island to add.
+    - `ptdf`: PTDF matrix.
+    - `c`: Contingency index.
+"""
 function add_contingency!(Pc::Dict{<:Integer,ExprC}, opf::OPFsystem, pf::DCPowerFlow, oplim::Oplimits, m::Model, 
     brc_up::Dict{<:Integer, ConstraintRef}, brc_down::Dict{<:Integer, ConstraintRef}, obj::AbstractJuMPScalar, islands::Vector,
     island::Integer, ptdf::AbstractMatrix{<:Real}, c::Integer
@@ -260,6 +432,23 @@ function add_contingency!(Pc::Dict{<:Integer,ExprC}, opf::OPFsystem, pf::DCPower
     # add_branch_constraints!(m, opf, pf, pc, oplim.branch_rating * oplim.short_term_multi, c)
 end
 
+""" 
+    Add a contingency to the model for long-term corrective actions.
+
+    Parameters:
+    - `Pcc`: Dictionary of long-term corrective actions.
+    - `opf`: The power system data.
+    - `pf`: DC power flow object.
+    - `oplim`: Operational limits for the case.
+    - `m`: Optimization model.
+    - `brc_up`: Upper branch constraints.
+    - `brc_down`: Lower branch constraints.
+    - `obj`: Objective function.
+    - `islands`: List of islands in the power system.
+    - `island`: Index of the island to add.
+    - `ptdf`: PTDF matrix.
+    - `c`: Contingency index.
+"""
 function add_contingency!(Pcc::Dict{<:Integer,ExprCC}, opf::OPFsystem, pf::DCPowerFlow, oplim::Oplimits, m::Model, 
     brc_up::Dict{<:Integer, ConstraintRef}, brc_down::Dict{<:Integer, ConstraintRef}, obj::AbstractJuMPScalar, islands::Vector,
     island::Integer, ptdf::AbstractMatrix{<:Real}, c::Integer
@@ -278,6 +467,23 @@ function add_contingency!(Pcc::Dict{<:Integer,ExprCC}, opf::OPFsystem, pf::DCPow
     # add_branch_constraints!(m, opf, pf, pcc, oplim.branch_rating * oplim.long_term_multi, c)
 end
 
+""" 
+    Add a contingency to the model for long-term corrective actions after failure of actions.
+
+    Parameters:
+    - `Pccx`: Dictionary of long-term corrective actions after failure of actions.
+    - `opf`: The power system data.
+    - `pf`: DC power flow object.
+    - `oplim`: Operational limits for the case.
+    - `m`: Optimization model.
+    - `brc_up`: Upper branch constraints.
+    - `brc_down`: Lower branch constraints.
+    - `obj`: Objective function.
+    - `islands`: List of islands in the power system.
+    - `island`: Index of the island to add.
+    - `ptdf`: PTDF matrix.
+    - `c`: Contingency index.
+"""
 function add_contingency!(Pccx::Dict{<:Integer,ExprCCX}, opf::OPFsystem, pf::DCPowerFlow, oplim::Oplimits, m::Model, 
     brc_up::Dict{<:Integer, ConstraintRef}, brc_down::Dict{<:Integer, ConstraintRef}, obj::AbstractJuMPScalar, islands::Vector,
     island::Integer, ptdf::AbstractMatrix{<:Real}, c::Integer
@@ -296,7 +502,19 @@ function add_contingency!(Pccx::Dict{<:Integer,ExprCCX}, opf::OPFsystem, pf::DCP
     # add_branch_constraints!(m, opf, pf, pccx, oplim.branch_rating * oplim.long_term_multi, c)
 end
 
+""" 
+    Initialize variables for the short-term corrective state.
 
+    Parameters:
+    - `Pc`: Dictionary of short-term corrective actions.
+    - `opf`: The power system data.
+    - `oplim`: Operational limits for the case.
+    - `m`: Optimization model.
+    - `obj`: Objective function.
+    - `islands`: List of islands in the power system.
+    - `island`: Index of the island to add.
+    - `c`: Contingency index.
+"""
 function init_P!(Pc::Dict{<:Integer,ExprC}, opf::OPFsystem, oplim::Oplimits, m::Model, obj::AbstractJuMPScalar, 
     islands::Vector, island::Integer, c::Integer
 )
@@ -365,6 +583,19 @@ function init_P!(Pc::Dict{<:Integer,ExprC}, opf::OPFsystem, oplim::Oplimits, m::
     return pgu, pgd, prc, lsc
 end
 
+"""
+    Initialize variables for the long-term corrective state.
+
+    Parameters:
+    - `Pcc`: Dictionary of long-term corrective actions.
+    - `opf`: The power system data.
+    - `oplim`: Operational limits for the case.
+    - `m`: Optimization model.
+    - `obj`: Objective function.
+    - `islands`: List of islands in the power system.
+    - `island`: Index of the island to add.
+    - `c`: Contingency index.
+"""
 function init_P!(Pcc::Dict{<:Integer,ExprCC}, opf::OPFsystem, oplim::Oplimits, m::Model, obj::AbstractJuMPScalar, 
     islands::Vector, island::Integer, c::Integer
 )
@@ -447,6 +678,19 @@ function init_P!(Pcc::Dict{<:Integer,ExprCC}, opf::OPFsystem, oplim::Oplimits, m
     return pgu, pgd, pfdccc, prcc, lscc
 end
 
+"""
+    Initialize variables for the long-term corrective state with contingencies.
+
+    Parameters:
+    - `Pcc`: Dictionary of long-term corrective actions.
+    - `opf`: The power system data.
+    - `oplim`: Operational limits for the case.
+    - `m`: Optimization model.
+    - `obj`: Objective function.
+    - `islands`: List of islands in the power system.
+    - `island`: Index of the island to add.
+    - `c`: Contingency index.
+"""
 function init_P!(Pccx::Dict{<:Integer,ExprCCX}, opf::OPFsystem, oplim::Oplimits, m::Model, obj::AbstractJuMPScalar, 
     islands::Vector, island::Integer, c::Integer
 )
@@ -500,15 +744,28 @@ function init_P!(Pccx::Dict{<:Integer,ExprCCX}, opf::OPFsystem, oplim::Oplimits,
     return pgd, prcc, lscc
 end
 
-""" Force a variable to equal a value"""
+""" 
+    Force variables to equal a value 
+
+    Parameters:
+    - `var`: Variables to be fixed.
+    - `val`: Values to which the variables should be fixed.
+    - `vec`: Indices indicating which variables to fix in the vectors.
+"""
 fix!(var::AbstractVector{VariableRef}, val::AbstractVector{<:Real}, vec::AbstractVector) =
     JuMP.fix.(var[vec], val[vec]; force=true)
 
-""" Force a variable to equal zero"""
+""" 
+    Force variables to equal zero 
+
+    Parameters:
+    - `var`: Variables to be fixed.
+    - `vec`: Indices indicating which variables to fix in the vectors.
+"""
 fix!(var::AbstractVector{VariableRef}, vec::AbstractVector) =
     JuMP.fix.(var[vec], 0.0; force=true)
 
-""" Force a variable to equal its current value in the model """
+""" Force variables to equal its current value in the model """
 fix_values!(m::Model, symb::Symbol) = JuMP.fix.(m[symb], JuMP.value.(m[symb]), force=true)
 fix_values!(m::Model, var::AbstractVector{VariableRef}) = JuMP.fix.(var, JuMP.value.(m[var]), force=true)
 
@@ -520,7 +777,7 @@ function fix_base_case!(m::Model)
     fix_values!(m, :pr0)
 end
 
-""" Fix all contingency varibles to its current values in the model """
+""" Fix all contingency variables to its current values in the model """
 function fix_contingencies!(m::Model, P::Dict{<:Integer,<:ContExpr})
     for (_, c) in P
         for symb in propertynames(c)
@@ -594,6 +851,16 @@ calc_objective(m::Model, opf::OPFsystem, Pc::Dict{<:Integer,ExprC},
 ) = calc_objective(m, opf) + calc_objective(m, opf, Pc) +
     calc_objective(m, opf, Pcc) + calc_objective(m, opf, Pccx)
 
+"""
+    Print the costs of the base case and slack variable.
+
+    Parameters:
+    - `case`: A `Case` object containing the power system data and model.
+
+    Returns:
+    - `base_cost`: The cost of the base case.
+    - `slack_cost`: The cost of the slack variable.
+"""
 function print_costs(case::Case)
     base_cost = calc_objective(case.model, case.opf)
     slack_cost = sum(case.opf.prob .* calc_slack_cost(case))
@@ -603,6 +870,16 @@ function print_costs(case::Case)
     return base_cost, slack_cost
 end
 
+"""
+    Get the costs for the base and all contingencies in the case.
+
+    Parameters:
+    - `case`: A `Case` object containing the power system data and model.
+
+    Returns:
+    - `costs`: A sparse matrix containing the costs for each contingency.
+    - `labels`: A vector of labels for each column in the costs matrix.
+"""
 function get_costs(case::Case)
     costs = SparseArrays.spzeros(length(case.opf.contingencies), 5)
     costs[:,1] .= calc_objective(case.model, case.opf)

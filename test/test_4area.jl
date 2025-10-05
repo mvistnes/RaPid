@@ -31,7 +31,7 @@ long = 1.0
 
 opfm_norm = SCOPF.scopf(SCOPF.SC, system, Gurobi.Optimizer, voll=voll, contingencies=contingencies, prob=prob, short_term_limit_multi=short);
 SCOPF.solve_model!(opfm_norm.mod);
-opfm, pf, Pc, Pcc, Pccx = SCOPF.run_benders(SCOPF.PCSC, system, voll, prob, contingencies, max_shed=1.0, 
+opfm, pf, Pc, Pcc, Pccx = SCOPF.run_decomposed_optimization(SCOPF.PCSC, system, voll, prob, contingencies, max_shed=1.0, 
        ramp_minutes=0.5, branch_short_term_limit_multi=short, branch_long_term_limit_multi=long, p_failure=0.01);
 
 i0 = get_rate(contingencies[2])
@@ -41,7 +41,7 @@ cost = []
 for i in 0.5:0.05:1.0
     println("Rating ", i*i0)
     # set_rate!(contingencies[2], i*i0)
-    global opfm, pf, Pc, Pcc, Pccx = SCOPF.run_benders(SCOPF.PCSC, system, voll, prob, contingencies, max_shed=1.0, 
+    global opfm, pf, Pc, Pcc, Pccx = SCOPF.run_decomposed_optimization(SCOPF.PCSC, system, voll, prob, contingencies, max_shed=1.0, 
         ramp_minutes=0.5, branch_short_term_limit_multi=short, branch_long_term_limit_multi=long, p_failure=0.00, branch_c=contingencies[2], rate_c=i*i0);
     # SCOPF.print_power_flow(opfm)
     # global opfm_norm = SCOPF.scopf(SCOPF.SC, system, Gurobi.Optimizer, voll=voll, contingencies=contingencies, prob=prob, short_term_limit_multi=short);
@@ -66,7 +66,7 @@ set_rate!(contingencies[2], i0)
 # for i in [1, 2, 5, 10]    
 #     println("Prob ", 0.01*i)
 #     prob = fill(0.01*i, length(branches))
-#     opfm, pf, Pc, Pcc = SCOPF.run_benders(SCOPF.PCSC, system, voll, prob, contingencies, max_shed=1.0, 
+#     opfm, pf, Pc, Pcc = SCOPF.run_decomposed_optimization(SCOPF.PCSC, system, voll, prob, contingencies, max_shed=1.0, 
 #        ramp_minutes=0.5, branch_short_term_limit_multi=1.2, branch_long_term_limit_multi=1.0);
 #     push!(x, JuMP.value.(opfm.mod[:pf0]))
 # end

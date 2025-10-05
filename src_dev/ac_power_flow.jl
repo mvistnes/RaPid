@@ -20,7 +20,7 @@ function ACPowerFlow(branches::AbstractVector{<:Tuple{T2,T2}}, susceptance::Abst
     DA = calc_DA(A, susceptance)
     B = calc_B(A, DA)
     K = get_klu(B, slack)
-    ϕ = get_isf(K, DA, slack)
+    ϕ = get_ptdf(K, DA, slack)
     X = calc_X(K, slack)
     return ACPowerFlow{T1,T2}(DA, B, K, X, ϕ, zeros(T1, numnodes), zeros(T1, length(branches)), slack,
         zeros(T1, size(DA)), get_klu(B, slack), zeros(T1, size(X)), zeros(T1, numnodes), zeros(T1, length(branches)))

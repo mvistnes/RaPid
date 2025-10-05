@@ -1,3 +1,11 @@
+"""
+    Save the system data to a json file.
+
+    Arguments:
+    - `file_name::String`: The name of the json file to save the system data to
+    - `data_name::String`: The name of the matpower file to load the system data from
+    - `DATA_DIR::String`: The directory to save the json file to
+"""
 function add_system_data_to_json(;
     file_name="system_data.json",
     data_name=joinpath("matpower", "IEEE_RTS.m"),
@@ -12,6 +20,17 @@ function add_system_data_to_json(;
     to_json(system_data, joinpath(DATA_DIR, file_name), force=true)
 end
 
+""" 
+    Get a PowerSystems System from data files.
+    The default is the RTS-GMLC system.
+
+    Arguments:
+    - `data_dir::String`: The directory containing the system data files
+    - `base_power::Real`: The base power of the system
+    - `descriptors::String`: The descriptor file for the system
+    - `timeseries_metadata_file::String`: The timeseries metadata file for the system
+    - `generator_mapping_file::String`: The generator mapping file for the system
+"""
 function get_system(
     data_dir="data\\RTS_GMLC",
     base_power=100.0,
@@ -29,6 +48,14 @@ function get_system(
     return System(data)
 end
 
+"""
+    Make the system vectors needed for SCOPF.
+
+    Arguments:
+    - `system::System`: The PowerSystems system
+    - `prob_min::Real`: The minimum outage probability for the contingencies
+    - `prob_max::Real`: The maximum outage probability for the contingencies
+"""
 function setup(system::System, prob_min=0.1, prob_max=0.4)
     voll = make_voll(system)
     contingencies = sort_components!(get_branches(system))
@@ -36,6 +63,12 @@ function setup(system::System, prob_min=0.1, prob_max=0.4)
     return voll, prob, contingencies
 end
 
+""" 
+    Set the costs of hydropower to around the average generator cost.
+
+    Arguments:
+    - `system::System`: The PowerSystems system
+"""
 function fix_generation_cost!(sys::System)
     # set_operation_cost!.(get_renewables(sys), make_cost_renewables(sys))
     cost = [get_generator_cost(g)[2] for g in get_gens_t(sys)]
@@ -229,7 +262,10 @@ sort_components!(arcs::Vector{<:Arc}) = sort!(arcs, by=x -> (x.from.number, x.to
 
 filter_active!(list::AbstractVector{<:Component}) = filter(comp -> comp.available, list)
 
-""" OPF system type """
+""" 
+    OPF system type 
+    Contains `all` data needed for the SCOPF model
+"""
 mutable struct OPFsystem{TR<:Real,TI<:Integer}
     cost_ctrl_gen::Vector{NamedTuple{(:fix, :var, :ramp), Tuple{TR, TR, TR}}}
     cost_renewables::Vector{TR}
@@ -317,6 +353,12 @@ get_demands(opf::OPFsystem) = opf.demands
 get_renewables(opf::OPFsystem) = opf.renewables
 get_contingencies(opf::OPFsystem) = opf.contingencies
 
+"""
+    Get all interarea branches, aka tie-lines
+
+    Arguments:
+    - `branches::AbstractVector{T}`: A vector of branches
+"""
 function get_interarea(branches::AbstractVector{T}) where {T<:Branch}
     vals = Vector{T}()
     for br in branches
@@ -329,6 +371,13 @@ function get_interarea(branches::AbstractVector{T}) where {T<:Branch}
     return vals
 end
 
+"""
+    Get all branches in a specific area
+
+    Arguments:
+    - `branches::AbstractVector{T}`: A vector of branches
+    - `area::Area`: The area to get the branches for
+"""
 function get_area_branches(branches::AbstractVector{T}, area::Area) where {T<:Branch}
     vals = Vector{T}()
     for br in branches
@@ -341,6 +390,12 @@ function get_area_branches(branches::AbstractVector{T}, area::Area) where {T<:Br
     return vals
 end
 
+"""
+    Sort nodes by area
+
+    Arguments:
+    - `nodes::AbstractVector{T}`: A vector of nodes
+"""
 function get_area_nodes(nodes::AbstractVector{T}) where {T<:Bus}
     vals = Dict{Area, Vector{T}}()
     for n in nodes
@@ -353,6 +408,12 @@ function get_area_nodes(nodes::AbstractVector{T}) where {T<:Bus}
     return vals
 end
 
+"""
+    Sort components by type
+
+    Arguments:
+    - `list::AbstractVector{<:Component}`: A vector of components
+"""
 function typesort_components(list::AbstractVector{<:Component})
     gen = Generator[]
     demand = StaticLoad[]

@@ -1,18 +1,24 @@
-function add_system_data_to_json(;
-        file_name="system_data.json",
-        data_name=joinpath("matpower","case5_re_uc_pwl.m"),
-        time_series=joinpath("forecasts","5bus_ts","timeseries_pointers_da.json"),
-        DATA_DIR="data"
-    )
-    # if !isdir(DATA_DIR)
-    #     download(PowerSystems.UtilsData.TestData, folder = DATA_DIR)
-    # end
-    system_data = System(joinpath(DATA_DIR, data_name))
-    add_time_series!(system_data, joinpath(DATA_DIR,time_series))
-    to_json(system_data, file_name, force=true)
-end
+"""
+    AC Optimal power flow
 
-function ac_scopf(type::OPF, system::System, optimizer; 
+    Parameters:
+    - `type::OPF`: Type of OPF problem to solve. See OPF struct for details.
+    - `system::System`: Power system to model the OPF on.
+    - `optimizer`: Optimizer to use for solving the OPF problem.
+    - `voll`: Value of lost load for the system.
+    - `contingencies`: List of components to consider as contingencies in the OPF problem.
+    - `prob`: Probability of failure for each contingency.
+    - `time_limit_sec::Integer`: Time limit for the optimization in seconds.
+    - `unit_commit::Bool`: Whether to include unit commitment in the OPF problem. NOT USED
+    - `max_shed::Real`: Maximum load shedding allowed as a fraction of the total load.
+    - `max_curtail::Real`: Maximum renewable curtailment allowed as a fraction of the total renewable generation.
+    - `circuit_breakers::Bool`: Whether to include circuit breakers in the OPF problem. NOT USED
+    - `short_term_limit_multi::Real`: Multiplier for short-term branch limits. NOT USED
+    - `ramp_minutes::Real`: Ramp time in minutes for generators. NOT USED
+    - `ramp_mult::Real`: Multiplier for ramp rates of generators. NOT USED
+    - `debug::Bool`: Whether to enable debug mode for the optimization.
+"""
+function ac_opf(type::OPF, system::System, optimizer; 
         voll = nothing, 
         contingencies = nothing, 
         prob = nothing,
@@ -71,9 +77,9 @@ function ac_scopf(type::OPF, system::System, optimizer;
     register(opfm.mod, :sum, 1, sum; autodiff = true)
 
     # minimize cost of generation
-    @objective(opfm.mod, Min, # opfm.cost_ctrl_gen' * opfm.mod[:pg0] + opfm.voll' * opfm.mod[:ls0]
+    @objective(opfm.mod, Min, # opfm.cost_ctrl_gen` * opfm.mod[:pg0] + opfm.voll` * opfm.mod[:ls0]
         sum(x * opfm.mod[:pg0][i] #= x[2] * opfm.mod[:pg0][i]^2 =# for (i,x) in enumerate(opfm.cost_ctrl_gen))+ 
-        # opfm.cost_renewables' * opfm.mod[:pr0] + 
+        # opfm.cost_renewables` * opfm.mod[:pr0] + 
         sum(x * opfm.mod[:ls0][i] for (i,x) in enumerate(opfm.voll))
     )
 
@@ -158,6 +164,15 @@ function ac_scopf(type::OPF, system::System, optimizer;
     return opfm
 end
 
+"""
+    AC Security Constrained Optimal power flow with preventive security
+
+    Parameters:
+    - `system::System`: Power system to model the OPF on.
+    - `optimizer`: Optimizer to use for solving the OPF problem.
+    - `pen::Real`: Penalty for load shedding, aka. VOLL.
+    - `time_limit_sec::Integer`: Time limit for the optimization in seconds.
+"""
 function p_scopf(system::System, optimizer; pen = 10000, time_limit_sec = 120)
     opf_m = Model(optimizer)
     set_time_limit_sec(opf_m, time_limit_sec)
@@ -278,8 +293,17 @@ function p_scopf(system::System, optimizer; pen = 10000, time_limit_sec = 120)
     return opf_m
 end
 
+"""
+    AC Security Constrained Optimal power flow with preventive and corrective security
 
+    Contingency probabilities are spesified for the RTS-96 system.
 
+    Parameters:
+    - `system::System`: Power system to model the OPF on.
+    - `optimizer`: Optimizer to use for solving the OPF problem.
+    - `pen::Real`: Penalty for load shedding, aka. VOLL.
+    - `time_limit_sec::Integer`: Time limit for the optimization in seconds.
+"""
 function pc_scopf(system::System, optimizer; pen = 10000, time_limit_sec = 100)
     opf_m = Model(optimizer)
     set_time_limit_sec(opf_m, time_limit_sec)
@@ -462,58 +486,6 @@ function pc_scopf(system::System, optimizer; pen = 10000, time_limit_sec = 100)
     return opf_m
 end
 
-function e_opf(system::System, optimizer, outage, pg0, ls0; time_limit_sec = 60)
-    opf_m = Model(optimizer)
-    set_time_limit_sec(opf_m, time_limit_sec)
-
-    gen_names = get_name.(get_components(Generator, system))
-    line_names = get_name.(get_components(Branch, system))
-    bus_names = get_name.(get_components(Bus, system))
-    demand_names = get_name.(get_components(StaticLoad, system))
-
-    # power flow on lines in base case and emergency
-    @variable(opf_m, pf0[l in line_names])
-    @variable(opf_m, fe[l in line_names])
-    # voltage angle at a node in emergency
-    @variable(opf_m, anglee[b in bus_names])
-    # load curtailment variables in emergency
-    @variable(opf_m, lse[d in demand_names] >= 0)
-
-    # find value of beta, beta = 1 if from bus is the bus, beta = -1 if to bus is the bus, 0 else
-    beta(bus, line) = bus == get_arc(line).from ? 1 : bus == get_arc(line).to ? -1 : 0
-
-    # generation partition factors
-    @expression(opf_m, e[gen], pgo[gen] / sum(pg0[g] for g in gen_names))
-
-    # minimize cost of generation
-    @objective(opf_m, Min, sum(lse))
-
-    # incerted power at each bus for the base case
-    for b in get_components(Bus, system)
-        @constraint(opf_m, sum(get_bus(g) == b ? pg0[get_name(g)] - e[g] * sum(lse) : 0 for g in get_components(ThermalStandard, system)) - 
-                           sum(beta[b,l] * pf0[get_name(l)] for l in get_components(Branch, system)) ==
-                           sum(get_active_power(l) - ls0[get_name(l)] - lse[get_name(l)] for l in get_components(StaticLoad, system))
-        )
-    end
-
-    # power flow on line and line limits for the base case
-    for l in get_components(Branch, system)
-        l_name = get_name(l)
-        @constraint(opf_m, fe[l_name] - outage[l_name] * sum(beta[b,l] * anglee[get_name(b)] for b in get_components(Bus, system)) / get_x(l) == 0)
-        @constraint(opf_m, -get_rate(l) <= fe[l_name] <= get_rate(l))
-    end
-
-    optimize!(opf_m)
-    for d in demand_names
-        value(lse[d]) > 0.00001 ? @printf("%s = %.4f \n", d,value(lse[d])) : print()
-    end
-    for l in get_components(Branch, system)
-        @printf("%s = %.4f <= %.2f \n", get_name(l), value(pf0[get_name(l)]), get_rate(l))
-    end
-
-    return opf_m
-end
-
 # # corrective control failure probability
 # phi(p, n) = sum((-1)^k * p^k * binomial(n,k) for k in 1:n)
 
@@ -540,7 +512,10 @@ end
 # results = opf_model(system_data, Ipopt.Optimizer)
 # value.(results[:pl])
 
-function hot_start(model)
+"""
+    Hot start an optimization model with the previous solution.
+"""
+function optimize_w_hot_start!(model)
     x = all_variables(model)
     x_solution = value.(x)
     set_start_value.(x, x_solution)

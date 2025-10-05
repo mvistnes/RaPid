@@ -18,6 +18,23 @@ function calc_change(X::AbstractMatrix{<:Real}, A::AbstractMatrix{<:Integer}, br
     return mx
 end
 
+
+"""
+    Calculate the PTDF vector for a branch outage using IMML.
+
+    Parameters:
+    - `vec`: Output vector for the PTDF values.
+    - `Xf`: Vector of the reactance matrix for the from bus contingency branch.
+    - `Xt`: Vector of the reactance matrix for the to bus contingency branch.
+    - `Xk`: Vector of the reactance matrix for the from bus constraint branch.
+    - `Xl`: Vector of the reactance matrix for the l bus constraint branch.
+    - `x_c`: Reactance of the contingency branch.
+    - `x_l`: Reactance of the constraint branch.
+    - `fbus`: From bus contingency branch index.
+    - `tbus`: To bus contingency branch index.
+    - `kbus`: From bus constraint branch index.
+    - `lbus`: To bus constraint branch index.
+"""
 function calc_ptdf_vec!(vec::AbstractVector{<:Real}, Xf::AbstractVector{<:Real}, Xt::AbstractVector{<:Real}, Xk::AbstractVector{<:Real}, Xl::AbstractVector{<:Real}, 
     x_c::Real, x_l::Real, fbus::Integer, tbus::Integer, kbus::Integer, lbus::Integer#; atol::Real=1e-10
 )
@@ -31,6 +48,23 @@ function calc_ptdf_vec!(vec::AbstractVector{<:Real}, Xf::AbstractVector{<:Real},
     return vec
 end
 
+"""
+    Calculate the PTDF vector for a branch outage using IMML.
+
+    Parameters:
+    - `B`: The susceptance matrix.
+    - `DA`: The diagonal susceptance matrix times the connectivity matrix.
+    - `Xf`: Vector of the reactance matrix for the from bus contingency branch.
+    - `Xt`: Vector of the reactance matrix for the to bus contingency branch.
+    - `Xk`: Vector of the reactance matrix for the from bus constraint branch.
+    - `Xl`: Vector of the reactance matrix for the l bus constraint branch.
+    - `cbranch`: Contingency branch index.
+    - `fbus`: From bus contingency branch index.
+    - `tbus`: To bus contingency branch index.
+    - `sbranch`: Constraint branch index.
+    - `kbus`: To bus constraint branch index.
+    - `lbus`: To bus constraint branch index.
+"""
 function calc_ptdf_vec(B::AbstractMatrix{T}, DA::AbstractMatrix{<:Real}, Xf::AbstractVector{T}, Xt::AbstractVector{T}, Xk::AbstractVector{T}, Xl::AbstractVector{T}, 
     cbranch::Integer, fbus::Integer, tbus::Integer, sbranch::Integer, kbus::Integer, lbus::Integer#; atol::Real=1e-10
 ) where {T<:Real}
@@ -40,6 +74,19 @@ function calc_ptdf_vec(B::AbstractMatrix{T}, DA::AbstractMatrix{<:Real}, Xf::Abs
     return calc_ptdf_vec!(Vector{T}(undef, n), Xf, Xt, Xk, Xl, c_b, s_b, fbus, tbus, kbus, lbus)
 end
 
+"""
+    Calculate the PTDF vector for a branch outage using IMML.
+
+    Parameters:
+    - `vec`: Output vector for the PTDF values.
+    - `pf`: Power flow object.
+    - `cbranch`: Contingency branch index.
+    - `fbus`: From bus contingency branch index.
+    - `tbus`: To bus contingency branch index.
+    - `sbranch`: Constraint branch index.
+    - `kbus`: From bus constraint branch index.
+    - `lbus`: To bus constraint branch index.
+"""
 @views function calc_ptdf_vec!(ϕ::AbstractVector{T}, pf::DCPowerFlow{<:Integer,T}, cbranch::Integer, fbus::Integer, tbus::Integer, sbranch::Integer, kbus::Integer, lbus::Integer#; atol::Real=1e-10
 ) where {T<:Real}
     c_b = -pf.B[fbus, tbus] * pf.DA[cbranch, tbus] / pf.B[fbus, tbus]
@@ -69,7 +116,7 @@ end
 Calculation of voltage angles in a contingency case using IMML
 
 Input:
-    - X: The inverse admittance matrix
+    - X: The reactance matrix
     - B: Suseptance matrix
     - DA: Diagonal suseptance matrix times the connectivity matrix
     - θ₀: Inital voltage angles
@@ -212,11 +259,11 @@ function calc_Pline!(
 end
 
 """
-Calculation of the inverse admittance matrix in a contingency case using IMML
+Calculation of the reactance matrix in a contingency case using IMML
 
 Input:
     - X: Container for the output matrix
-    - X0: The inverse admittance matrix
+    - X0: The reactance matrix
     - B: Suseptance matrix
     - DA: Diagonal suseptance matrix times the connectivity matrix
     - from_bus: From bus index
@@ -261,10 +308,10 @@ Input:
     LinearAlgebra.mul!(X, x, x', -change * inv(c⁻¹), true) # mul!(C, A, B, α, β) -> C == $A B α + C β$
 end
 
-""" Get the isf-matrix after a line outage using IMML. 
-    isf and X are containers for output and calculation and will be overwritten """
-function calc_isf!(
-    isf::AbstractMatrix{<:Real},
+""" Get the ptdf-matrix after a line outage using IMML. 
+    ptdf and X are containers for output and calculation and will be overwritten """
+function calc_ptdf!(
+    ptdf::AbstractMatrix{<:Real},
     X::AbstractMatrix{<:Real},
     X₀::AbstractMatrix{<:Real},
     B::AbstractMatrix{<:Real},
@@ -273,23 +320,23 @@ function calc_isf!(
     branch::Integer
 )
     calc_changed_X!(X, X₀, B, DA, cont[1], cont[2], branch)
-    calc_isf!(isf, DA, X)
-    isf[branch, :] .= 0.0
-    set_tol_zero!(isf)
-    return isf
+    calc_ptdf!(ptdf, DA, X)
+    ptdf[branch, :] .= 0.0
+    set_tol_zero!(ptdf)
+    return ptdf
 end
 
-""" Get the isf-matrix after a line outage using IMML. 
+""" Get the ptdf-matrix after a line outage using IMML. 
      """
-function calc_isf(
+function calc_ptdf(
     pf::DCPowerFlow,
     cont::Tuple{Integer,Integer},
     branch::Integer
 )
-    return calc_isf!(similar(pf.ϕ), similar(pf.X), pf.X, pf.B, pf.DA, cont, branch)
+    return calc_ptdf!(similar(pf.ϕ), similar(pf.X), pf.X, pf.B, pf.DA, cont, branch)
 end
 
-function calc_isf(pf::DCPowerFlow, cont::Real, c::Integer)
+function calc_ptdf(pf::DCPowerFlow, cont::Real, c::Integer)
     return pf.ϕ
 end
 
@@ -303,7 +350,7 @@ Input:
     - ptdf: Power Transfer Distribution Factor matrix
     - B: Suseptance matrix
     - DA: Diagonal suseptance matrix times the connectivity matrix
-    - X: The inverse admittance matrix
+    - X: The reactance matrix
     - θ: Voltage angles
     - from_bus: From bus index
     - to_bus: To bus index
