@@ -1,5 +1,3 @@
-# CC BY 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2023
-
 using BenchmarkTools
 using Printf
 using PowerSystems

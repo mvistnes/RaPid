@@ -1,6 +1,3 @@
-# CC BY 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2022
-
-
 extract_results(model::Model, Pc::Dict{Int64,ExprC}) = Dict(i => Dict(
         :pgu => get_value(model, x.pgu), 
         :pgd => get_value(model, x.pgd), 
