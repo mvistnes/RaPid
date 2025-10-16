@@ -18,7 +18,7 @@
     - `dc_lim_max`: Maximum active power limits for DC branches.
     - `pd_lim`: Active power limits for demands.
     - `max_shed`: Maximum load shedding limits.
-    """
+"""
 struct Oplimits{TR<:Real}
     ramp_mult::TR
     ramp_minutes::TR
@@ -71,15 +71,13 @@ function oplimits(
     if any(pg_lim_min .< 0.0)
         @error "Negative pg_lim_min, enable min limits on generators!"
     end
-    replace!(branch_rating, NaN=>0.0)
-    replace!(pg_lim_min, NaN=>0.0)
-    replace!(pg_lim_max, NaN=>0.0)
-    replace!(rampup, NaN=>0.0)
-    replace!(rampdown, NaN=>0.0)
-    replace!(pr_lim, NaN=>0.0)
-    replace!(dc_lim_min, NaN=>0.0)
-    replace!(dc_lim_max, NaN=>0.0)
-    replace!(pd_lim, NaN=>0.0)
+    for v in (branch_rating, pg_lim_min, pg_lim_max, rampup, rampdown, pr_lim, dc_lim_min, dc_lim_max, pd_lim)
+        for i in eachindex(v)
+            if isnan(v[i])
+                v[i] = zero(eltype(v))
+            end
+        end
+    end
     return Oplimits{TR}(ramp_mult, ramp_minutes, p_failure, branch_rating, short_term_multi, long_term_multi, 
         zeros(length(pg_lim_max)), pg_lim_max, rampup, rampdown, pr_lim, max_curtail, dc_lim_min, dc_lim_max, pd_lim, max_shed)
 end
