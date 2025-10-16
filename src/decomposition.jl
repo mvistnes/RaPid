@@ -17,7 +17,7 @@ mutable struct ModelState{TR<:Real}
 end
 
 """ Constructor for ModelState type """
-function model_state(opf::OPFsystem, m::Model)
+function ModelState(opf::OPFsystem, m::Model)
     obj = objective_function(m)
     # Pᵢ = get_net_Pᵢ(opf)
     Pᵢ = get_value(m, :p0)
@@ -138,7 +138,7 @@ function run_decomposed_optimization!(
     @debug "lower_bound = $(objective_value(m))"
 
     # Set variables
-    state = model_state(opf, m)
+    state = ModelState(opf, m)
 
     brst = oplim.branch_rating * oplim.short_term_multi
     brlt = oplim.branch_rating * oplim.long_term_multi

@@ -39,11 +39,19 @@ include("semi_dense_matrix.jl")
 export SemiDenseX, SemiDensePTDF
 
 #=
+    System container and basic functions.
+=#
+include("system.jl")
+export OPFmodel, opfmodel, get_branches, get_nodes, get_ctrl_generation, get_demands, get_renewables,
+    get_cost_ctrl_gen, get_cost_renewables, get_voll, get_prob,
+    typesort_component, make_named_array, make_list, CTypes, make_opf_list
+
+#=
     Utilities for running and analyzing the SCOPFs.
 =#
 include("utils.jl")
-export add_system_data_to_json, get_system, OPFmodel, opfmodel, beta, solve_model!, set_warm_start!,
-    calc_severity, calc_line_severity, get_branches, get_nodes, sort_components!,
+export add_system_data_to_json, get_system, beta, solve_model!, set_warm_start!,
+    calc_severity, calc_line_severity, sort_components!,
     get_nodes_idx, get_bus_idx, find_slack, get_net_Pᵢ, get_Pᵢ
 
 #=
