@@ -44,9 +44,9 @@ for (n, fname) in [
     name = Printf.@sprintf "%s_prev%d_ls%d_ramp%d_r%d" n prev_lim*100 max_shed*100 renew_ramp reserve*100
     println("\n\n"*name*"\n")
     try
-        case, tot_t = SCOPF.run_benders(SCOPF.PC2_SCOPF, system, Gurobi.Optimizer(GRB_ENV), voll, scenarioes_n1[2][2], scenarioes_n1[2][1], max_shed=max_shed, reserve=reserve, ramp_mult=ramp_mult, renew_cost=renew_cost, renew_ramp=renew_ramp, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=0.00, max_itr=10);
+        case, tot_t = SCOPF.run_decomposition(SCOPF.PC2_SCOPF, system, Gurobi.Optimizer(GRB_ENV), voll, scenarioes_n1[2][2], scenarioes_n1[2][1], max_shed=max_shed, reserve=reserve, ramp_mult=ramp_mult, renew_cost=renew_cost, renew_ramp=renew_ramp, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=0.00, max_itr=10);
         write_to_file(name*"_h2", SCOPF.extract_results(case))
-        case, tot_t = SCOPF.run_benders(SCOPF.PC2_SCOPF, system, Gurobi.Optimizer(GRB_ENV), voll, scenarioes_n1[5][2], scenarioes_n1[5][1], max_shed=max_shed, reserve=reserve, ramp_mult=ramp_mult, renew_cost=renew_cost, renew_ramp=renew_ramp, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=0.00, max_itr=10);
+        case, tot_t = SCOPF.run_decomposition(SCOPF.PC2_SCOPF, system, Gurobi.Optimizer(GRB_ENV), voll, scenarioes_n1[5][2], scenarioes_n1[5][1], max_shed=max_shed, reserve=reserve, ramp_mult=ramp_mult, renew_cost=renew_cost, renew_ramp=renew_ramp, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=0.00, max_itr=10);
         write_to_file(name*"_h5", SCOPF.extract_results(case))
         results = run_plotsave_weather(name, system, labels, scenarioes_n1, voll, prob, contingencies, max_shed, reserve, ramp_mult, renew_cost, renew_ramp, ramp_minutes, short, long, prev_lim);
     catch e

@@ -28,17 +28,17 @@ function run_timed_contingency_select_types(types, optimizer, sys, voll, prob, c
     return run_time
 end
 
-function run_timed_benders_types(types, optimizer, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long; p_failure=0.00, time_limit_sec=600)
+function run_timed_decomposition_types(types, optimizer, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long; p_failure=0.00, time_limit_sec=600)
     run_time = []
     for type in types
-        t = @timed case, tot_t = SCOPF.run_benders(type, sys, optimizer, voll, prob, cont, max_shed=max_shed,
+        t = @timed case, tot_t = SCOPF.run_decomposition(type, sys, optimizer, voll, prob, cont, max_shed=max_shed,
             ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=p_failure, time_limit_sec=time_limit_sec)
         push!(run_time, (t.time, tot_t))
     end
     return run_time
 end
 
-" func= run_types! or run_contingency_select_types! or run_benders_types!"
+" func= run_types! or run_contingency_select_types! or run_decomposition_types!"
 function run_all(systems, optimizer, types, func)
     result = SCOPF.SystemRunData(4, length(systems))
     Logging.disable_logging(Logging.Info)
@@ -92,7 +92,7 @@ function setup_system(fname::String)
     return system, voll, contingencies, prob, short, long, ramp_minutes, ramp_mult, max_shed, time_limit_sec
 end
 
-function run_test_benders()
+function run_test_decomposition()
     optimizer = JuMP.optimizer_with_attributes(Gurobi.Optimizer, "Threads" => Threads.nthreads())
     # optimizer = JuMP.optimizer_with_attributes(GLPK.Optimizer, "msg_lev" => GLPK.GLP_MSG_ON)
     systems = []
@@ -104,10 +104,10 @@ function run_test_benders()
     # push!(systems, setup_system(joinpath("data","matpower","case_ACTIVSg10k.m")))
 
     types = [SCOPF.Base_SCOPF, SCOPF.P_SCOPF, SCOPF.OPF(true, false, true, false, false), SCOPF.PC2_SCOPF]
-    results1 = run_all(systems, optimizer, types, SCOPF.run_benders_types!)
+    results1 = run_all(systems, optimizer, types, SCOPF.run_decomposition_types!)
     # results2 = run_all_contingency_select(systems, optimizer, types);
     results3 = run_all(systems, optimizer, types)
-    println("Benders")
+    println("decomposition")
     SCOPF.print_data(results1)
     # println("Cont")
     # SCOPF.print_data(results2)
@@ -121,7 +121,7 @@ function run_test_benders()
         push!(rt, "ptdf" => t)
         # t = run_timed_contingency_select_types(types, optimizer, system, voll, prob, contingencies, max_shed, ramp_mult, ramp_minutes, short, long, time_limit_sec=time_limit_sec)
         # push!(rt, "cont"=>t)
-        t = run_timed_benders_types(types, optimizer, system, voll, prob, contingencies, max_shed, ramp_mult, ramp_minutes, short, long, time_limit_sec=time_limit_sec)
+        t = run_timed_decomposition_types(types, optimizer, system, voll, prob, contingencies, max_shed, ramp_mult, ramp_minutes, short, long, time_limit_sec=time_limit_sec)
         push!(rt, "bend" => t)
     end
     return rt

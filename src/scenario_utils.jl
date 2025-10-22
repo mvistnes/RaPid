@@ -14,7 +14,7 @@ function run_corrective_with_base(case::SCOPF.Case, vals)
     JuMP.fix.(case.model[:pfdc0], vals[:pfdc0], force=true)
     JuMP.fix.(case.model[:ls0], vals[:ls0], force=true)
     SCOPF.solve_model!(case.model)
-    @time SCOPF.run_benders!(SCOPF.PC2_SCOPF - SCOPF.Base_SCOPF, case)
+    @time SCOPF.run_decomposition!(SCOPF.PC2_SCOPF - SCOPF.Base_SCOPF, case)
     
     if JuMP.is_solved_and_feasible(case.model)
         new_vals = SCOPF.extract_results(case)
@@ -37,7 +37,7 @@ function run_corrective_with_base(vals, system, scenarioes, voll, max_shed, rese
     res = []
     for (i,s) in enumerate(scenarioes)
         println("\n", i)
-        case_i, _ = SCOPF.run_benders(SCOPF.Base_SCOPF, system, Gurobi.Optimizer(GRB_ENV), voll, s[2], s[1], max_shed=max_shed, reserve=reserve, ramp_mult=ramp_mult, renew_cost=renew_cost, renew_ramp=renew_ramp, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=0.00, max_itr=10);
+        case_i, _ = SCOPF.run_decomposition(SCOPF.Base_SCOPF, system, Gurobi.Optimizer(GRB_ENV), voll, s[2], s[1], max_shed=max_shed, reserve=reserve, ramp_mult=ramp_mult, renew_cost=renew_cost, renew_ramp=renew_ramp, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=0.00, max_itr=10);
         push!(res, run_corrective_with_base(case_i, vals))
     end
     return res
@@ -48,17 +48,17 @@ function run_cases(system, scenarioes, voll, prob, contingencies, max_shed, rese
     res = []
     for (i,s) in enumerate(scenarioes)
         println("\nScenario prob ", i)
-        @time case, tot_t = SCOPF.run_benders(SCOPF.PC2_SCOPF, system, Gurobi.Optimizer(GRB_ENV), voll, s[2], s[1], max_shed=max_shed, reserve=reserve, ramp_mult=ramp_mult, renew_cost=renew_cost, renew_ramp=renew_ramp, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=0.00, max_itr=10) 
+        @time case, tot_t = SCOPF.run_decomposition(SCOPF.PC2_SCOPF, system, Gurobi.Optimizer(GRB_ENV), voll, s[2], s[1], max_shed=max_shed, reserve=reserve, ramp_mult=ramp_mult, renew_cost=renew_cost, renew_ramp=renew_ramp, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=0.00, max_itr=10) 
         push!(res, SCOPF.extract_results(case))
     end
 
     res_zc = []
     for (i,s) in enumerate(scenarioes)
         println("\nScenario prob zc ", i)
-        @time case, tot_t = SCOPF.run_benders(SCOPF.PC2_SCOPF, system, Gurobi.Optimizer(GRB_ENV), voll, s[2], s[1], max_shed=max_shed, reserve=reserve, 
+        @time case, tot_t = SCOPF.run_decomposition(SCOPF.PC2_SCOPF, system, Gurobi.Optimizer(GRB_ENV), voll, s[2], s[1], max_shed=max_shed, reserve=reserve, 
             ramp_mult=0.0, renew_cost=renew_cost, renew_ramp=renew_ramp, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=0.00, max_itr=10) 
         vals = SCOPF.extract_results(case)
-        @time case, tot_t = SCOPF.run_benders(SCOPF.Base_SCOPF, system, Gurobi.Optimizer(GRB_ENV), voll, s[2], s[1], max_shed=max_shed, reserve=reserve, 
+        @time case, tot_t = SCOPF.run_decomposition(SCOPF.Base_SCOPF, system, Gurobi.Optimizer(GRB_ENV), voll, s[2], s[1], max_shed=max_shed, reserve=reserve, 
             ramp_mult=ramp_mult, renew_cost=renew_cost, renew_ramp=renew_ramp, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=0.00, max_itr=10) 
         push!(res_zc, run_corrective_with_base(case, vals))
     end
@@ -66,29 +66,29 @@ function run_cases(system, scenarioes, voll, prob, contingencies, max_shed, rese
     res_zvoll = []
     for (i,s) in enumerate(scenarioes)
         println("\nScenario prob zvoll ", i)
-        @time case, tot_t = SCOPF.run_benders(SCOPF.PC2_SCOPF, system, Gurobi.Optimizer(GRB_ENV), voll, s[2], s[1], max_shed=max_shed, reserve=reserve, 
+        @time case, tot_t = SCOPF.run_decomposition(SCOPF.PC2_SCOPF, system, Gurobi.Optimizer(GRB_ENV), voll, s[2], s[1], max_shed=max_shed, reserve=reserve, 
             ramp_mult=0.0, renew_cost=renew_cost, renew_ramp=renew_ramp, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=0.00, zero_c_cost=true, max_itr=10) 
         vals = SCOPF.extract_results(case)
-        @time case, tot_t = SCOPF.run_benders(SCOPF.Base_SCOPF, system, Gurobi.Optimizer(GRB_ENV), voll, s[2], s[1], max_shed=max_shed, reserve=reserve, 
+        @time case, tot_t = SCOPF.run_decomposition(SCOPF.Base_SCOPF, system, Gurobi.Optimizer(GRB_ENV), voll, s[2], s[1], max_shed=max_shed, reserve=reserve, 
             ramp_mult=ramp_mult, renew_cost=renew_cost, renew_ramp=renew_ramp, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=0.00, max_itr=10) 
         push!(res_zvoll, run_corrective_with_base(case, vals))
     end
 
     println("\nN-1 prob")
-    @time case, tot_t = SCOPF.run_benders(SCOPF.PC2_SCOPF, system, Gurobi.Optimizer(GRB_ENV), voll, prob/8760, contingencies, max_shed=max_shed, reserve=reserve, ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=0.00, max_itr=10)
+    @time case, tot_t = SCOPF.run_decomposition(SCOPF.PC2_SCOPF, system, Gurobi.Optimizer(GRB_ENV), voll, prob/8760, contingencies, max_shed=max_shed, reserve=reserve, ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=0.00, max_itr=10)
     vals = SCOPF.extract_results(case)
     res_n1 = run_corrective_with_base(vals, system, scenarioes, voll, max_shed, reserve, ramp_mult, renew_cost, renew_ramp, ramp_minutes, short, long)
 
     res_prev = []
     for (i,s) in enumerate(scenarioes)
         println("\nScenario preventive ", i)
-        @time case, tot_t = SCOPF.run_benders(SCOPF.P_SCOPF, system, Gurobi.Optimizer(GRB_ENV), voll, s[2], s[1], max_shed=max_shed, reserve=reserve, ramp_mult=ramp_mult, renew_cost=renew_cost, renew_ramp=renew_ramp, ramp_minutes=ramp_minutes, short_term_multi=prev_lim, long_term_multi=long, p_failure=0.00, max_itr=10) 
+        @time case, tot_t = SCOPF.run_decomposition(SCOPF.P_SCOPF, system, Gurobi.Optimizer(GRB_ENV), voll, s[2], s[1], max_shed=max_shed, reserve=reserve, ramp_mult=ramp_mult, renew_cost=renew_cost, renew_ramp=renew_ramp, ramp_minutes=ramp_minutes, short_term_multi=prev_lim, long_term_multi=long, p_failure=0.00, max_itr=10) 
         vals = SCOPF.extract_results(case)
         push!(res_prev, run_corrective_with_base(case, vals))
     end
 
     println("\nN-1 preventive")
-    @time case, tot_t = SCOPF.run_benders(SCOPF.P_SCOPF, system, Gurobi.Optimizer(GRB_ENV), voll, prob/8760, contingencies, max_shed=max_shed, reserve=reserve, ramp_mult=ramp_mult, renew_cost=renew_cost, renew_ramp=renew_ramp, ramp_minutes=ramp_minutes, short_term_multi=prev_lim, long_term_multi=long, p_failure=0.00, max_itr=10)
+    @time case, tot_t = SCOPF.run_decomposition(SCOPF.P_SCOPF, system, Gurobi.Optimizer(GRB_ENV), voll, prob/8760, contingencies, max_shed=max_shed, reserve=reserve, ramp_mult=ramp_mult, renew_cost=renew_cost, renew_ramp=renew_ramp, ramp_minutes=ramp_minutes, short_term_multi=prev_lim, long_term_multi=long, p_failure=0.00, max_itr=10)
     vals = SCOPF.extract_results(case)
     res_prev_n1 = run_corrective_with_base(vals, system, scenarioes, voll, max_shed, reserve, ramp_mult, renew_cost, renew_ramp, ramp_minutes, short, long)
     
@@ -109,7 +109,7 @@ function run_zc_case(system, scenarioes, voll, prob, contingencies, max_shed, re
     res = []
     for (i,s) in enumerate(scenarioes)
         println("\nScenario prob ", i)
-        @time case, tot_t = SCOPF.run_benders(SCOPF.PC2_SCOPF, system, Gurobi.Optimizer(GRB_ENV), voll, s[2], s[1], max_shed=max_shed, reserve=reserve, 
+        @time case, tot_t = SCOPF.run_decomposition(SCOPF.PC2_SCOPF, system, Gurobi.Optimizer(GRB_ENV), voll, s[2], s[1], max_shed=max_shed, reserve=reserve, 
             ramp_mult=ramp_mult, renew_cost=renew_cost, renew_ramp=renew_ramp, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=0.00, max_itr=10) 
         push!(res, SCOPF.extract_results(case))
     end
@@ -117,10 +117,10 @@ function run_zc_case(system, scenarioes, voll, prob, contingencies, max_shed, re
     res_zc = []
     for (i,s) in enumerate(scenarioes)
         println("\nScenario prob zc ", i)
-        @time case, tot_t = SCOPF.run_benders(SCOPF.PC2_SCOPF, system, Gurobi.Optimizer(GRB_ENV), voll, s[2], s[1], max_shed=max_shed, reserve=reserve, 
+        @time case, tot_t = SCOPF.run_decomposition(SCOPF.PC2_SCOPF, system, Gurobi.Optimizer(GRB_ENV), voll, s[2], s[1], max_shed=max_shed, reserve=reserve, 
             ramp_mult=0.0, renew_cost=renew_cost, renew_ramp=renew_ramp, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=0.00, max_itr=10) 
         vals = SCOPF.extract_results(case)
-        @time case, tot_t = SCOPF.run_benders(SCOPF.Base_SCOPF, system, Gurobi.Optimizer(GRB_ENV), voll, s[2], s[1], max_shed=max_shed, reserve=reserve, 
+        @time case, tot_t = SCOPF.run_decomposition(SCOPF.Base_SCOPF, system, Gurobi.Optimizer(GRB_ENV), voll, s[2], s[1], max_shed=max_shed, reserve=reserve, 
             ramp_mult=ramp_mult, renew_cost=renew_cost, renew_ramp=renew_ramp, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=0.00, max_itr=10) 
         push!(res_zc, run_corrective_with_base(case, vals))
     end
@@ -128,10 +128,10 @@ function run_zc_case(system, scenarioes, voll, prob, contingencies, max_shed, re
     res_zvoll = []
     for (i,s) in enumerate(scenarioes)
         println("\nScenario prob zvoll ", i)
-        @time case, tot_t = SCOPF.run_benders(SCOPF.PC2_SCOPF, system, Gurobi.Optimizer(GRB_ENV), voll, s[2], s[1], max_shed=max_shed, reserve=reserve, 
+        @time case, tot_t = SCOPF.run_decomposition(SCOPF.PC2_SCOPF, system, Gurobi.Optimizer(GRB_ENV), voll, s[2], s[1], max_shed=max_shed, reserve=reserve, 
             ramp_mult=0.0, renew_cost=renew_cost, renew_ramp=renew_ramp, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=0.00, zero_c_cost=true, max_itr=10) 
         vals = SCOPF.extract_results(case)
-        @time case, tot_t = SCOPF.run_benders(SCOPF.Base_SCOPF, system, Gurobi.Optimizer(GRB_ENV), voll, s[2], s[1], max_shed=max_shed, reserve=reserve, 
+        @time case, tot_t = SCOPF.run_decomposition(SCOPF.Base_SCOPF, system, Gurobi.Optimizer(GRB_ENV), voll, s[2], s[1], max_shed=max_shed, reserve=reserve, 
             ramp_mult=ramp_mult, renew_cost=renew_cost, renew_ramp=renew_ramp, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=0.00, max_itr=10) 
         push!(res_zvoll, run_corrective_with_base(case, vals))
     end
@@ -156,7 +156,7 @@ function run_cases_weather2(results, scenarioes2, system, voll, prob, contingenc
     res = results[findfirst(x->x[1]=="NkC",results)][2]
     for (i,(r, s)) in enumerate(zip(res, scenarioes2))
         println("\nScen.2 ", i, " prob")
-        case, _ = SCOPF.run_benders(SCOPF.Base_SCOPF, system, Gurobi.Optimizer(GRB_ENV), voll, s[2], s[1], max_shed=max_shed, reserve=reserve, ramp_mult=ramp_mult, renew_cost=renew_cost, renew_ramp=renew_ramp, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=0.00, max_itr=10)
+        case, _ = SCOPF.run_decomposition(SCOPF.Base_SCOPF, system, Gurobi.Optimizer(GRB_ENV), voll, s[2], s[1], max_shed=max_shed, reserve=reserve, ramp_mult=ramp_mult, renew_cost=renew_cost, renew_ramp=renew_ramp, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=0.00, max_itr=10)
         push!(res2, run_corrective_with_base(case, r))
     end
     
@@ -164,7 +164,7 @@ function run_cases_weather2(results, scenarioes2, system, voll, prob, contingenc
     res = results[findfirst(x->x[1]=="NkCz",results)][2]
     for (i,(r, s)) in enumerate(zip(res, scenarioes2))
         println("\nScenario prob zc ", i)
-        @time case, tot_t = SCOPF.run_benders(SCOPF.Base_SCOPF, system, Gurobi.Optimizer(GRB_ENV), voll, s[2], s[1], max_shed=max_shed, reserve=reserve, 
+        @time case, tot_t = SCOPF.run_decomposition(SCOPF.Base_SCOPF, system, Gurobi.Optimizer(GRB_ENV), voll, s[2], s[1], max_shed=max_shed, reserve=reserve, 
             ramp_mult=ramp_mult, renew_cost=renew_cost, renew_ramp=renew_ramp, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=0.00, max_itr=10) 
         push!(res2_zc, run_corrective_with_base(case, r))
     end
@@ -173,13 +173,13 @@ function run_cases_weather2(results, scenarioes2, system, voll, prob, contingenc
     res = results[findfirst(x->x[1]=="NkCz2",results)][2]
     for (i,(r, s)) in enumerate(zip(res, scenarioes2))
         println("\nScenario prob zvoll ", i)
-        @time case, tot_t = SCOPF.run_benders(SCOPF.Base_SCOPF, system, Gurobi.Optimizer(GRB_ENV), voll, s[2], s[1], max_shed=max_shed, reserve=reserve, 
+        @time case, tot_t = SCOPF.run_decomposition(SCOPF.Base_SCOPF, system, Gurobi.Optimizer(GRB_ENV), voll, s[2], s[1], max_shed=max_shed, reserve=reserve, 
             ramp_mult=ramp_mult, renew_cost=renew_cost, renew_ramp=renew_ramp, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=0.00, max_itr=10) 
         push!(res2_zvoll, run_corrective_with_base(case, r))
     end
 
     println("\nN-1 prob")
-    @time case, tot_t = SCOPF.run_benders(SCOPF.PC2_SCOPF, system, Gurobi.Optimizer(GRB_ENV), voll, prob/8760, contingencies, max_shed=max_shed, reserve=reserve, ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=0.00, max_itr=10)
+    @time case, tot_t = SCOPF.run_decomposition(SCOPF.PC2_SCOPF, system, Gurobi.Optimizer(GRB_ENV), voll, prob/8760, contingencies, max_shed=max_shed, reserve=reserve, ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=0.00, max_itr=10)
     vals = SCOPF.extract_results(case)
     res2_n1 = run_corrective_with_base(vals, system, scenarioes2, voll, max_shed, reserve, ramp_mult, renew_cost, renew_ramp, ramp_minutes, short, long)
 
@@ -187,14 +187,14 @@ function run_cases_weather2(results, scenarioes2, system, voll, prob, contingenc
     res = results[findfirst(x->x[1]=="NkP",results)][2]
     for (i,(r, s)) in enumerate(zip(res, scenarioes2))
         println("\nScen.2 ", i, " preventive")
-        case, _ = SCOPF.run_benders(SCOPF.Base_SCOPF, system, Gurobi.Optimizer(GRB_ENV), voll, s[2], s[1], max_shed=max_shed, reserve=reserve, ramp_mult=ramp_mult, renew_cost=renew_cost, renew_ramp=renew_ramp, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=0.00, max_itr=10)
+        case, _ = SCOPF.run_decomposition(SCOPF.Base_SCOPF, system, Gurobi.Optimizer(GRB_ENV), voll, s[2], s[1], max_shed=max_shed, reserve=reserve, ramp_mult=ramp_mult, renew_cost=renew_cost, renew_ramp=renew_ramp, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=0.00, max_itr=10)
         push!(res2_prev, run_corrective_with_base(case, r))
     end
     
     res2_prev_n1 = []
     for (i,s) in enumerate(scenarioes2)
         println("\nScenario preventive ", i)
-        @time case, tot_t = SCOPF.run_benders(SCOPF.P_SCOPF, system, Gurobi.Optimizer(GRB_ENV), voll, s[2], s[1], max_shed=max_shed, reserve=reserve, ramp_mult=ramp_mult, renew_cost=renew_cost, renew_ramp=renew_ramp, ramp_minutes=ramp_minutes, short_term_multi=prev_lim, long_term_multi=long, p_failure=0.00, max_itr=10) 
+        @time case, tot_t = SCOPF.run_decomposition(SCOPF.P_SCOPF, system, Gurobi.Optimizer(GRB_ENV), voll, s[2], s[1], max_shed=max_shed, reserve=reserve, ramp_mult=ramp_mult, renew_cost=renew_cost, renew_ramp=renew_ramp, ramp_minutes=ramp_minutes, short_term_multi=prev_lim, long_term_multi=long, p_failure=0.00, max_itr=10) 
         vals = SCOPF.extract_results(case)
         push!(res2_prev_n1, run_corrective_with_base(case, vals))
     end

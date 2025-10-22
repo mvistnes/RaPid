@@ -274,7 +274,7 @@ Plots.plot!(Plots.twinx(), c=:red, [sum(s[2][i]*x for (i,x) in l) for (s,l) in z
 res_new = []
 for (i,(r, s)) in enumerate(zip(res, scenarioes_n1))
     println("\n",i)
-    case, tot_t = SCOPF.run_benders(SCOPF.Base_SCOPF, system, Gurobi.Optimizer(GRB_ENV), voll, s[2], s[1], max_shed=max_shed, ramp_mult=ramp_mult, renew_cost=renew_cost, renew_ramp=renew_ramp, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=0.00, max_itr=10)
+    case, tot_t = SCOPF.run_decomposition(SCOPF.Base_SCOPF, system, Gurobi.Optimizer(GRB_ENV), voll, s[2], s[1], max_shed=max_shed, ramp_mult=ramp_mult, renew_cost=renew_cost, renew_ramp=renew_ramp, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=0.00, max_itr=10)
     push!(res_new, run_corrective_with_base(case, r))
 end
 base_costs_new = [isnan(x[:obj_val]) ? NaN : x[:costs][1,:Base] for x in res_new]
@@ -320,7 +320,7 @@ for i in 0:23
     set_active_power!.(demands, get_active_power.(demands)*1.5)
     set_time_series_value!(renewables, t)
     set_active_power!.(renewables, get_active_power.(renewables)*2.0)
-    @time case, tot_t = SCOPF.run_benders(SCOPF.PC2_SCOPF, system, Gurobi.Optimizer(GRB_ENV), voll, prob/8760, contingencies, max_shed=max_shed, ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=0.00, max_itr=10, debug=true);
+    @time case, tot_t = SCOPF.run_decomposition(SCOPF.PC2_SCOPF, system, Gurobi.Optimizer(GRB_ENV), voll, prob/8760, contingencies, max_shed=max_shed, ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=0.00, max_itr=10, debug=true);
     max_demand = sum(get_active_power(g) for g in demands)
     max_renewable = sum(get_active_power(g) for g in gen if typeof(g) <: RenewableGen)
     prod = SCOPF.get_type_prod(system, JuMP.value.(case.model[:pg0]))

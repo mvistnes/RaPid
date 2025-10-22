@@ -38,7 +38,7 @@ tests = @testset "RaPidSCOPF" verbose=true begin
 
     include("test_imml.jl")
 
-    include("test_ieee_rts_benders.jl")
+    include("test_ieee_rts_decomposition.jl")
 end
 
 Logging.disable_logging(Logging.Debug)

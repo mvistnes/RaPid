@@ -104,7 +104,7 @@ function run_contingency_select_types!(result, i, types, optimizer, sys, voll, p
     return
 end
 
-function run_benders_type!(result, i, c, type, goal, optimizer, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long; p_failure=0.00, time_limit_sec=600)
+function run_decomposition_type!(result, i, c, type, goal, optimizer, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long; p_failure=0.00, time_limit_sec=600)
     case = Case(opf_base(type, sys, optimizer, voll=voll, contingencies=cont, prob=prob, max_shed=max_shed,
         ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, time_limit_sec=time_limit_sec)...);
     tot_t = constrain_branches!(case, 0.0)
@@ -114,20 +114,20 @@ function run_benders_type!(result, i, c, type, goal, optimizer, sys, voll, prob,
         type.C1 && fix_contingencies!(case.model, case.Pc)
         type.C2 && fix_contingencies!(case.model, case.Pcc)
         solve_model!(case.model);
-        case, tot_t = run_benders!(goal - type, case)
+        case, tot_t = run_decomposition!(goal - type, case)
     end
     gather_run_data!(result, c, i, case)
     return
 end
 
-function run_benders_types!(result, i, types, optimizer, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long; p_failure=0.00, time_limit_sec=600)
+function run_decomposition_types!(result, i, types, optimizer, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long; p_failure=0.00, time_limit_sec=600)
     for (c, type) in enumerate(types)
-        run_benders_type!(result, i, c, type, types[end], optimizer, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long, p_failure=p_failure, time_limit_sec=time_limit_sec)
+        run_decomposition_type!(result, i, c, type, types[end], optimizer, sys, voll, prob, cont, max_shed, ramp_mult, ramp_minutes, short, long, p_failure=p_failure, time_limit_sec=time_limit_sec)
     end
     return
 end
 
-function run_reliability_calculation_benders(types, optimizer, system, voll, prob, contingencies, max_shed, ramp_mult, ramp_minutes, short, long; p_failure=0.00, time_limit_sec=600)
+function run_reliability_calculation_decomposition(types, optimizer, system, voll, prob, contingencies, max_shed, ramp_mult, ramp_minutes, short, long; p_failure=0.00, time_limit_sec=600)
     # demands = sort_components!(get_demands(system))
     # pd = demands .|> get_active_power
     # hours = read_x_data("data\\ieee_std_load_profile.txt")
@@ -144,7 +144,7 @@ function run_reliability_calculation_benders(types, optimizer, system, voll, pro
         set_active_power!.(get_components(StaticLoad, system), (get_components(StaticLoad, system) .|> get_max_active_power) * h)
         # cont = sort_components!(get_branches(sys))
 
-        run_benders_types!(result, i, types, optimizer, system, voll, prob, contingencies, max_shed, ramp_mult, ramp_minutes, short, long, p_failure=p_failure, time_limit_sec=time_limit_sec)
+        run_decomposition_types!(result, i, types, optimizer, system, voll, prob, contingencies, max_shed, ramp_mult, ramp_minutes, short, long, p_failure=p_failure, time_limit_sec=time_limit_sec)
 
         print(i, " ")
     end

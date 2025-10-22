@@ -1,6 +1,3 @@
-# CC BY 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2022
-
-
 """ Run a SCOPF of a power system """
 function scopf(type::OPF, system::System, optimizer;
     voll=Vector{Float64}(),

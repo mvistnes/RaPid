@@ -61,7 +61,7 @@ function run_contingency_select!(
 
     # Set variables
     !isempty(oplim.dist_slack) && set_dist_slack!(pf.ϕ, opf.mgx, oplim.dist_slack)
-    bd = benders(opf, m)
+    state = ModelState(opf, m)
     
     overloads = zeros(length(opf.contingencies))
     pre = 0
@@ -81,24 +81,24 @@ function run_contingency_select!(
                 pre += 1
             end
             if type.C1 
-                add_contingency!(Pc, opf, pf, oplim, m, brc_up, brc_down, bd.obj, islands, island, ptdf, i)
+                add_contingency!(Pc, opf, pf, oplim, m, brc_up, brc_down, state.obj, islands, island, ptdf, i)
                 corr1 += 1
             end
             if type.C2  
-                add_contingency!(Pcc, opf, pf, oplim, m, brc_up, brc_down, bd.obj, islands, island, ptdf, i)
+                add_contingency!(Pcc, opf, pf, oplim, m, brc_up, brc_down, state.obj, islands, island, ptdf, i)
                 corr2 += 1
             end
             if type.C2F 
-                add_contingency!(Pccx, opf, pf, oplim, m, brc_up, brc_down, bd.obj, islands, island, ptdf, i)
+                add_contingency!(Pccx, opf, pf, oplim, m, brc_up, brc_down, state.obj, islands, island, ptdf, i)
                 corr2f += 1
             end
             @debug "Island: Contingency $(string(typeof(c_obj))) $(get_name(c_obj))"
             overloads[i] = -1.0
         else
             if typeof(c_obj) <: ACBranch
-                flow = calculate_contingency_line_flows(m, pf, bd.Pᵢ, cont, i, c_obj, Int[], Int[])
+                flow = calculate_contingency_line_flows(m, pf, state.Pᵢ, cont, i, c_obj, Int[], Int[])
             else
-                flow = calculate_contingency_line_flows(m, pf, bd.Pᵢ, cont, i, c_obj, Int[], Int[], pg[cont[1]])
+                flow = calculate_contingency_line_flows(m, pf, state.Pᵢ, cont, i, c_obj, Int[], Int[], pg[cont[1]])
             end
             # Calculate the power flow with the new outage and find if there are any overloads
             overload = filter_overload(flow, oplim.branch_rating * oplim.short_term_multi)
@@ -108,12 +108,12 @@ function run_contingency_select!(
         end
     end
     
-    total_solve_time = update_model!(m, pf, oplim, brc_up, brc_down, bd, total_solve_time)
+    total_solve_time = update_model!(m, pf, oplim, brc_up, brc_down, state, total_solve_time)
     termination_status(m) != MOI.OPTIMAL && return Case(m, opf, pf, oplim, brc_up, brc_down, Pc, Pcc, Pccx), total_solve_time
 
-    ΔPc = zeros(length(bd.Pg))
-    ΔPcc = zeros(length(bd.Pg))
-    ΔPccx = zeros(length(bd.Pg))
+    ΔPc = zeros(length(state.Pg))
+    ΔPcc = zeros(length(state.Pg))
+    ΔPccx = zeros(length(state.Pg))
 
     olc = Vector{Tuple{Int,Float64}}()
     olcc = Vector{Tuple{Int,Float64}}()
@@ -151,16 +151,16 @@ function run_contingency_select!(
         end
 
         if type.P
-            olc = calculate_contingency_overload(brst, m, pf, bd, cont, i_c, c_obj, inodes, island_b)
+            olc = calculate_contingency_overload(brst, m, pf, state, cont, i_c, c_obj, inodes, island_b)
         end
         if type.C1
-            olc = calculate_contingency_overload!(ΔPc, brst, Pc, opf, m, pf, bd, cont, i_c, c_obj, inodes, island_b)
+            olc = calculate_contingency_overload!(ΔPc, brst, Pc, opf, m, pf, state, cont, i_c, c_obj, inodes, island_b)
         end
         if type.C2
-            olcc = calculate_contingency_overload!(ΔPcc, brlt, Pcc, opf, m, pf, bd, cont, i_c, c_obj, inodes, island_b)
+            olcc = calculate_contingency_overload!(ΔPcc, brlt, Pcc, opf, m, pf, state, cont, i_c, c_obj, inodes, island_b)
         end
         if type.C2F
-            olccx = calculate_contingency_overload!(ΔPccx, brlt, Pccx, opf, m, pf, bd, cont, i_c, c_obj, inodes, island_b)
+            olccx = calculate_contingency_overload!(ΔPccx, brlt, Pccx, opf, m, pf, state, cont, i_c, c_obj, inodes, island_b)
         end
         if !isempty(olc) || !isempty(olcc) || !isempty(olccx) # ptdf calculation is more computational expensive than line flow
             if is_islanded(pf, cont[2], cont[1])
@@ -178,26 +178,26 @@ function run_contingency_select!(
                 pre += 1
                 @info @sprintf "Pre %d: Contingency %s %s" pre string(typeof(c_obj)) PowerSystems.get_name(c_obj)
             else
-                add_contingency!(Pc, opf, pf, oplim, m, brc_up, brc_down, bd.obj, islands, island, ptdf, i_c)
+                add_contingency!(Pc, opf, pf, oplim, m, brc_up, brc_down, state.obj, islands, island, ptdf, i_c)
                 corr1 += 1
                 @info @sprintf "Corr1 %d: Contingency %s %s" corr1 string(typeof(c_obj)) PowerSystems.get_name(c_obj)
             end
             cut_added = 2
         end
         if !isempty(olcc)
-            add_contingency!(Pcc, opf, pf, oplim, m, brc_up, brc_down, bd.obj, islands, island, ptdf, i_c)
+            add_contingency!(Pcc, opf, pf, oplim, m, brc_up, brc_down, state.obj, islands, island, ptdf, i_c)
             corr2 += 1
             @info @sprintf "Corr2 %d: Contingency %s %s" corr2 string(typeof(c_obj)) PowerSystems.get_name(c_obj)
             cut_added = 2
         end
         if !isempty(olccx)
-            add_contingency!(Pccx, opf, pf, oplim, m, brc_up, brc_down, bd.obj, islands, island, ptdf, i_c)
+            add_contingency!(Pccx, opf, pf, oplim, m, brc_up, brc_down, state.obj, islands, island, ptdf, i_c)
             corr2f += 1
             @info @sprintf "Corr2 %d: Contingency %s %s" corr2f string(typeof(c_obj)) PowerSystems.get_name(c_obj)
             cut_added = 2
         end
         if cut_added > 1
-            total_solve_time = update_model!(m, pf, oplim, brc_up, brc_down, bd, total_solve_time)
+            total_solve_time = update_model!(m, pf, oplim, brc_up, brc_down, state, total_solve_time)
             deleteat!(permutation, i)
             cut_added = 1
         else

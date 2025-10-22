@@ -1,5 +1,3 @@
-# CC BY 4.0 Matias Vistnes, Norwegian University of Science and Technology, 2023
-
 module RaPidSCOPF
 
 using PowerSystems
@@ -52,11 +50,11 @@ export DCPowerFlow, calc_Pᵢ, build_adjacency, connectivitymatrix, calc_A, calc
 include("cont_dc_power_flow.jl")
 export get_isf, get_ptdf, calculate_line_flows, calculate_line_flows!
     
-#=
-    AC power flow functions.
-=#
-include("ac_power_flow.jl")
-export calc_Ybus, calc_B_mark, calc_B_doublemark
+# #=
+#     AC power flow functions.
+# =#
+# include("ac_power_flow.jl")
+# export calc_Ybus, calc_B_mark, calc_B_doublemark
 
 #=
     Functions using the Inverse Matrix Modification Lemma.
@@ -65,7 +63,7 @@ include("imml.jl")
 export IMML, get_changed_angles, calc_Pline, get_changed_X, get_isf, calculate_line_flows,
     calculate_line_flows!, get_overload, get_lodf
 
-include("FDLF.jl")
+# include("FDLF.jl")
 
 #=
     Functions for handling islands in the system.
@@ -97,10 +95,10 @@ export opf
 # export sl_scopf, c_scopf
 
 #=
-    A formulation of a PC_SCOPF using Benders' decomposition.
+    A formulation of a PC_SCOPF using decomposition.
 =#
-include("benders.jl")
-export run_benders, find_system_state!, update_model!, find_overloads, print_benders_results
+include("decomposition.jl")
+export run_decomposition, find_system_state!, update_model!, find_overloads, print_decomposition_results
 
 include("contingency_select.jl")
 export run_contingency_select

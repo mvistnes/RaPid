@@ -1,4 +1,4 @@
-@testset "Test Benders" begin
+@testset "Test decomposition" begin
     
 # open("output.txt", "w") do out
 #     redirect_stdout(out) do
@@ -36,7 +36,7 @@ ramp_minutes = 10.
 max_shed = 0.1
 ramp_mult = 2.
 
-function test_benders(system, optimizer, voll, contingencies, prob, max_shed,ramp_mult, ramp_minutes, short, long)
+function test_decomposition(system, optimizer, voll, contingencies, prob, max_shed,ramp_mult, ramp_minutes, short, long)
     for type in [SCOPF.Base_SCOPF, SCOPF.P_SCOPF, SCOPF.OPF(true, false, true, false, false), SCOPF.PC_SCOPF, SCOPF.PCF_SCOPF, SCOPF.PC2_SCOPF, SCOPF.PC2F_SCOPF]
         p_failure = ifelse(type.C2F, 0.10, 0.00)
         println(type)
@@ -50,8 +50,8 @@ function test_benders(system, optimizer, voll, contingencies, prob, max_shed,ram
         # case_cont, tot_t = SCOPF.run_contingency_select(type, system, HiGHS.Optimizer(), voll, prob, contingencies, 
         #     max_shed=max_shed, ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=p_failure);
 
-        println("Start Benders")
-        case, tot_t = SCOPF.run_benders(type, system, HiGHS.Optimizer(), voll, prob, contingencies, max_shed=max_shed,
+        println("Start decomposition")
+        case, tot_t = SCOPF.run_decomposition(type, system, HiGHS.Optimizer(), voll, prob, contingencies, max_shed=max_shed,
             ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=p_failure);
 
         # @test JuMP.objective_value(mod) ≈ JuMP.objective_value(case_cont.model)
@@ -60,9 +60,9 @@ function test_benders(system, optimizer, voll, contingencies, prob, max_shed,ram
     return
 end
 
-test_benders(system, HiGHS.Optimizer(), voll, contingencies, prob, max_shed,ramp_mult, ramp_minutes, short, long)
+test_decomposition(system, HiGHS.Optimizer(), voll, contingencies, prob, max_shed,ramp_mult, ramp_minutes, short, long)
 
-function benders_pc_scopf()
+function decomposition_pc_scopf()
     println("\nPreventive-Corrective SCOPF")
     println("Start PTDF")
     @time case_ptdf = Case(SCOPF.opf_base(SCOPF.PC2_SCOPF, system, Gurobi.Optimizer(GUROBI_ENV), voll=voll, contingencies=contingencies, prob=prob, max_shed=max_shed,
@@ -78,10 +78,10 @@ function benders_pc_scopf()
     # println("Solver time: ", tot_t, " Objective value Contingency select: ", JuMP.objective_value(case_cont.model))
     # SCOPF.print_contingency_results(case_cont)
 
-    println("Start Benders")
-    @time case, tot_t = SCOPF.run_benders(SCOPF.PC2_SCOPF, system, Gurobi.Optimizer(GUROBI_ENV), voll, prob, contingencies, max_shed=max_shed,
+    println("Start decomposition")
+    @time case, tot_t = SCOPF.run_decomposition(SCOPF.PC2_SCOPF, system, Gurobi.Optimizer(GUROBI_ENV), voll, prob, contingencies, max_shed=max_shed,
         ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=0.00);
-    println("Solver time: ", tot_t, " Objective value Benders: ", JuMP.objective_value(case.model))
+    println("Solver time: ", tot_t, " Objective value decomposition: ", JuMP.objective_value(case.model))
     SCOPF.print_contingency_results(case)
 
     # @test JuMP.objective_value(case_ptdf.model) ≈ JuMP.objective_value(case_cont.model)
