@@ -1,4 +1,6 @@
 # RaPid-SCOPF
+![Under development](https://img.shields.io/badge/Under%20development-8A2BE2)
+
 Resilient and Probabilistic reliability management of the transmission grid using Security Constrained Optimal Power Flow
 
 Setup, solution and post-prosessing of SCOPF formulations based on Power Transfer DIstribution Factors. It can take input on the Matpower-format, a csv-file or an xlsx-file. Constraints can be set manually and automatically.
