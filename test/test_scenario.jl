@@ -1,3 +1,5 @@
+# Used in paper 4 - Weather scenario analysis with RTS-GMLC
+
 import Dates, DataFrames, CSV, Plots, StatsPlots, Measures, Gurobi, Printf, FileIO, JLD2, Random, Logging, JuMP
 using LaTeXStrings
 import RaPidSCOPF as SCOPF
