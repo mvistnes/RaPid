@@ -71,17 +71,27 @@ end
 """
 function fix_generation_cost!(sys::System)
     # set_operation_cost!.(get_renewables(sys), make_cost_renewables(sys))
-    cost = [get_generator_cost(g)[2] for g in get_gens_t(sys)]
+    cost = [get_generator_cost(g) for g in get_gens_t(sys)]
     c_mean = mean(cost)
     set_operation_cost!.(get_ctrl_generation(sys),
         [[iszero(c) ? c_mean * (rand() + 0.5) : c for c in cost]
             [c_mean * (rand() + 0.1) for _ in get_gens_h(sys)]])
 end
 
-set_operation_cost!(gen::Generator, val::Real) =
-    PowerSystems.set_operation_cost!(gen, ThreePartCost(VariableCost((0.0, val)), 0.0, 0.0, 0.0))
+set_operation_cost!(gen::ThermalGen, val::Real) =
+    PowerSystems.set_operation_cost!(gen, ThermalGenerationCost(; variable = CostCurve(; 
+        value_curve = LinearCurve(val)), 
+        fixed = 0, 
+        start_up = 0.0,
+        shut_down = 0.0,
+    ))
+set_operation_cost!(gen::HydroGen, val::Real) =
+    PowerSystems.set_operation_cost!(gen, HydroGenerationCost(; variable = CostCurve(; 
+        value_curve = LinearCurve(val)), 
+        fixed = 0
+    ))
 set_operation_cost!(gen::RenewableGen, val::Real) =
-    PowerSystems.set_operation_cost!(gen, TwoPartCost(VariableCost((0.0, val)), 0.0))
+    PowerSystems.set_operation_cost!(gen, RenewableGenerationCost(; variable = CostCurve(; value_curve = LinearCurve(val))))
 
 """ Set the renewable production to a ratio of maximum active power """
 function set_renewable_prod!(system::System, ratio::Real=0.5)
@@ -122,15 +132,13 @@ function set_ramp_limit!(gen::HydroDispatch, ramp_mult::Real=0.2)
     PowerSystems.set_ramp_limits!(gen, (up=(p_lim.max * ramp_mult), down=(p_lim.max * ramp_mult)))
 end
 
-get_generator_cost(gen::Generator) = get_operation_cost(gen) |> get_variable |> get_cost |> _get_g_value
-_get_g_value(x::AbstractVector{<:Tuple{Real,Real}}) = x[1]
-_get_g_value(x::Tuple{<:Real,<:Real}) = x
+get_generator_cost(gen::Generator) = gen.operation_cost.variable.value_curve.function_data.proportional_term
 
 function get_generator_cost(ctrl_generation::AbstractVector{<:Generator}, ramp_cost::Float64)
     cost = Vector{NamedTuple{(:fix, :var, :ramp)}}(undef, length(ctrl_generation))
     for (i,g) in enumerate(ctrl_generation)
         c = get_generator_cost(g)
-        cost[i] = (fix=c[1], var=c[2], ramp=c[2]*ramp_cost)
+        cost[i] = (fix=0.0, var=c, ramp=c*ramp_cost)
     end
     return cost
 end
@@ -205,7 +213,7 @@ end
 function check_values(val::ACBranch)
     check_values(get_r(val), val, "r")
     check_values(get_x(val), val, "x")
-    check_values(get_rate(val), val, "rate")
+    check_values(get_rating(val), val, "rate")
 end
 
 function check_values(val::TwoTerminalHVDCLine)

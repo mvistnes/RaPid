@@ -34,18 +34,18 @@ SCOPF.solve_model!(opfm_norm.mod);
 opfm, pf, Pc, Pcc, Pccx = SCOPF.run_decomposed_optimization(SCOPF.PCSC, system, voll, prob, contingencies, max_shed=1.0, 
        ramp_minutes=0.5, branch_short_term_limit_multi=short, branch_long_term_limit_multi=long, p_failure=0.01);
 
-i0 = get_rate(contingencies[2])
+i0 = get_rating(contingencies[2])
 x = []
 y = []
 cost = []
 for i in 0.5:0.05:1.0
     println("Rating ", i*i0)
-    # set_rate!(contingencies[2], i*i0)
+    # set_rating!(contingencies[2], i*i0)
     global opfm, pf, Pc, Pcc, Pccx = SCOPF.run_decomposed_optimization(SCOPF.PCSC, system, voll, prob, contingencies, max_shed=1.0, 
         ramp_minutes=0.5, branch_short_term_limit_multi=short, branch_long_term_limit_multi=long, p_failure=0.00, branch_c=contingencies[2], rate_c=i*i0);
     # SCOPF.print_power_flow(opfm)
     # global opfm_norm = SCOPF.scopf(SCOPF.SC, system, Gurobi.Optimizer, voll=voll, contingencies=contingencies, prob=prob, short_term_limit_multi=short);
-    # set_rate!(contingencies[2], i0)
+    # set_rating!(contingencies[2], i0)
     # SCOPF.solve_model!(opfm_norm.mod);
     if JuMP.termination_status(opfm.mod) == JuMP.MOI.OPTIMAL
         mod = corrective_shedding(opfm, Gurobi.Optimizer, long_term_limit_multi=long)
@@ -60,7 +60,7 @@ println(y)
 Plots.plot([(0.5:0.05:1.0) * i0],y, title="Rate vs objective value")
 Plots.plot([(0.5:0.05:1.0) * i0], 1 .* cost .+ y, title="Rate vs objective value + corrective_shedding")
 Plots.plot(x,y, title="Flow vs objective value")
-set_rate!(contingencies[2], i0)
+set_rating!(contingencies[2], i0)
 
 # x = []
 # for i in [1, 2, 5, 10]    
@@ -113,7 +113,7 @@ function corrective_shedding(opfm::SCOPF.OPFmodel, optimizer;
         end
     end
     JuMP.@constraint(mod, ref_vacc, vacc[slack[1],:] .== 0) # Set voltage angle at reference bus
-    branch_rating = PowerSystems.get_rate.(opfm.branches) * long_term_limit_multi
+    branch_rating = PowerSystems.get_rating.(opfm.branches) * long_term_limit_multi
     JuMP.@constraint(mod, pfcc_lim[l = 1:length(opfm.branches), c = 1:length(opfm.contingencies)], 
         -branch_rating[l] * !isequal(opfm.branches[l],opfm.contingencies[c]) <= pfcc[l,c] <= branch_rating[l] * !isequal(opfm.branches[l],opfm.contingencies[c])
     )

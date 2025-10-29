@@ -105,7 +105,7 @@ function ac_opf(type::OPF, system::System, optimizer;
     
     # power flow on line and line limits
     for (l, branch) in enumerate(opfm.branches)
-        branch_rating = get_rate(branch)
+        branch_rating = get_rating(branch)
         g, b, B, tap, tr, ti = get_specs(branch)
 
         pf = opfm.mod[:pf0_fr][l]
@@ -241,7 +241,7 @@ function p_scopf(system::System, optimizer; pen = 10000, time_limit_sec = 120)
     for l in get_components(Branch, system)
         y = 1/(get_r(l) + get_x(l)*im)
         (g,b) = (real(y), imag(y))
-        l_rate = get_rate(l)
+        l_rate = get_rating(l)
         l_name = get_name(l)
         @NLconstraint(opf_m, pf0[l_name] - sum(beta[k,l_name] * vm0[k] * 
             sum(vm0[m] * (g * cos(va0[k] - va0[m]) + b * sin(va0[k] - va0[m])) for m in bus_names) 
@@ -414,7 +414,7 @@ function pc_scopf(system::System, optimizer; pen = 10000, time_limit_sec = 100)
     for l in get_components(Branch, system)
         y = 1/(get_r(l) + get_x(l)*im)
         (g,b) = (real(y), imag(y))
-        l_rate = get_rate(l)
+        l_rate = get_rating(l)
         l_name = get_name(l)
         @NLconstraint(opf_m, pf0[l_name] - sum(beta[k,l_name] * vm0[k] * 
             sum(vm0[m] * (g * cos(va0[k] - va0[m]) + b * sin(va0[k] - va0[m])) for m in bus_names) 

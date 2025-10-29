@@ -269,7 +269,7 @@ end
 function add_c_branch!(
     opfm::OPFmodel, idx,
     x::AbstractVector{<:Real}=get_x.(opfm.branches),
-    branch_rating::AbstractVector{<:Real}=get_rate.(opfm.branches)
+    branch_rating::AbstractVector{<:Real}=get_rating.(opfm.branches)
 )
     @constraint(opfm.mod, pf0_lim_n, -branch_rating .<= opfm.mod[:pf0])
     @constraint(opfm.mod, pf0_lim_p, opfm.mod[:pf0] .<= branch_rating)
@@ -283,7 +283,7 @@ end
 function add_c_branch_cont!(
     opfm::OPFmodel, idx,
     x::AbstractVector{<:Real}=get_x.(opfm.branches),
-    branch_rating::AbstractVector{<:Real}=get_rate.(opfm.branches);
+    branch_rating::AbstractVector{<:Real}=get_rating.(opfm.branches);
     short_term_limit_multi::Real=1.0
 )
     @constraint(opfm.mod, pfc_lim_n[l=1:length(opfm.branches), c=1:length(opfm.contingencies)],
@@ -303,7 +303,7 @@ end
 function add_c_branch_ccont!(
     opfm::OPFmodel, idx,
     x::AbstractVector{<:Real}=get_x.(opfm.branches),
-    branch_rating::AbstractVector=get_rate.(opfm.branches);
+    branch_rating::AbstractVector=get_rating.(opfm.branches);
     short_term_limit_multi::Real=1.0
 )
     @constraint(opfm.mod, pfcc_lim_n[l=1:length(opfm.branches), c=1:length(opfm.contingencies)],

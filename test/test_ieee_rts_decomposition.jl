@@ -8,7 +8,7 @@ system = System(joinpath("cases","IEEE_RTS.m"))
 # nodes = SCOPF.sort_components!(SCOPF.get_nodes(system))
 # idx = SCOPF.get_nodes_idx(nodes)
 # SCOPF.set_ramp_limits!(system, 0.01)
-SCOPF.set_rate!.(SCOPF.get_branches(system), SCOPF.get_rate.(SCOPF.get_branches(system)) * 0.8);
+SCOPF.set_rating!.(SCOPF.get_branches(system), SCOPF.get_rating.(SCOPF.get_branches(system)) * 0.8);
 SCOPF.set_operation_cost!.(SCOPF.get_gens_h(system), [15.0, 16.0, 17.0, 18.0, 19.0, 20.0])
 
 # voll, prob, contingencies = SCOPF.setup(system, 10, 40);

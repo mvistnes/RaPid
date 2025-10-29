@@ -197,7 +197,7 @@ end
 function get_power_flow(opf::OPFsystem, m::Model; subset::AbstractVector{<:Integer}=Int64[])
     br_names = PowerSystems.get_name.(opf.branches)
     flow = calculate_line_flows(calc_ptdf(opf.branches, opf.nodes), get_net_Pᵢ(m))
-    rate = get_rate.(opf.branches)
+    rate = get_rating.(opf.branches)
     if !isempty(subset)
         br_names = br_names[subset]
         flow = flow[subset]

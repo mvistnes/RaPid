@@ -62,7 +62,7 @@ function oplimits(
     short_term_multi::Union{TR,Vector{TR}},
     long_term_multi::Union{TR,Vector{TR}}
 ) where {TR<:Real}
-    branch_rating::Vector{TR} = get_rate.(opf.branches)
+    branch_rating::Vector{TR} = get_rating.(opf.branches)
     (pg_lim_min::Vector{TR}, pg_lim_max::Vector{TR}) = split_pair(get_active_power_limits.(opf.ctrl_generation))
     (rampup::Vector{TR}, rampdown::Vector{TR}) = split_pair(get_ramp_limits.(opf.ctrl_generation))
     pr_lim::Vector{TR} = get_active_power.(opf.renewables)

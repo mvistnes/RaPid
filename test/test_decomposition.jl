@@ -64,7 +64,7 @@ function setup_ieee_rts(fname::String)
     base_voll = [6.20 4.89 5.30 5.62 6.11 5.50 5.41 5.40 2.30 4.14 5.39 3.41 3.01 3.54 3.75 2.29 3.64] * 100
     if length(SCOPF.get_demands(system)) == length(base_voll)
         voll = vec(base_voll)
-        SCOPF.set_rate!.(SCOPF.get_branches(system), SCOPF.get_rate.(SCOPF.get_branches(system)) * 0.8)
+        SCOPF.set_rating!.(SCOPF.get_branches(system), SCOPF.get_rating.(SCOPF.get_branches(system)) * 0.8)
     else
         voll = vec([base_voll... base_voll... base_voll...])
         SCOPF.set_renewable_prod!(system, 0.2)

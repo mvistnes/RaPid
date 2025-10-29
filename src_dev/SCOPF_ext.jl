@@ -79,9 +79,9 @@ function add_circuit_breakers_ccont!(
     return opfm
 end
 add_circuit_breakers_cont!(opfm::OPFmodel, short_term_limit_multi::Float64 = 1.0) = 
-    add_circuit_breakers_cont!(opfm, make_named_array(get_x, get_branches(opfm.sys)), make_named_array(get_rate, get_branches(opfm.sys)), short_term_limit_multi)
+    add_circuit_breakers_cont!(opfm, make_named_array(get_x, get_branches(opfm.sys)), make_named_array(get_rating, get_branches(opfm.sys)), short_term_limit_multi)
 add_circuit_breakers_ccont!(opfm::OPFmodel, short_term_limit_multi::Float64 = 1.0) = 
-    add_circuit_breakers_ccont!(opfm, make_named_array(get_x, get_branches(opfm.sys)), make_named_array(get_rate, get_branches(opfm.sys)), short_term_limit_multi)
+    add_circuit_breakers_ccont!(opfm, make_named_array(get_x, get_branches(opfm.sys)), make_named_array(get_rating, get_branches(opfm.sys)), short_term_limit_multi)
 
 function add_line_risk_constraints(opfm::OPFmodel; 
             short_term_limit_multi::Float64 = 1.5, 
@@ -90,7 +90,7 @@ function add_line_risk_constraints(opfm::OPFmodel;
             lim = 0.9
         )
     mult = 1/(1-lim)
-    rate = make_named_array(get_rate, get_branches(opfm.sys))
+    rate = make_named_array(get_rating, get_branches(opfm.sys))
     @variable(opfm.mod, 0 <= Sev[l in get_name.(get_branches(opfm.sys)), c in opfm.contingencies])
     @constraint(opfm.mod, sev_plim[l = get_name.(get_branches(opfm.sys)), c = opfm.contingencies], 
             Sev[l,c] >= mult * (opfm.mod[:pfc][l,c]/(rate[l] * short_term_limit_multi) - lim)
