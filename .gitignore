@@ -5,3 +5,5 @@
 *.mps
 *.gz
 *.txt
+
+Manifest.toml
