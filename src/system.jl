@@ -188,7 +188,7 @@ end
 
 " Calculate the severity index for the system based on line loading "
 function calc_severity(opf::OPFsystem, m::Model, lim::Real=0.9)
-    rate = make_named_array(get_rate, get_branches(opf.sys))
+    rate = make_named_array(get_rating, get_branches(opf.sys))
     sev = 0
     for c in 1:length(opf.contingencies)
         for l in PowerSystems.get_name.(get_branches(opf.sys))

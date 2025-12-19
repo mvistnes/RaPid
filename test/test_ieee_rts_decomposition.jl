@@ -62,34 +62,4 @@ end
 
 test_decomposition(system, HiGHS.Optimizer(), voll, contingencies, prob, max_shed,ramp_mult, ramp_minutes, short, long)
 
-function decomposition_pc_scopf()
-    println("\nPreventive-Corrective SCOPF")
-    println("Start PTDF")
-    @time case_ptdf = Case(SCOPF.opf_base(SCOPF.PC2_SCOPF, system, Gurobi.Optimizer(GUROBI_ENV), voll=voll, contingencies=contingencies, prob=prob, max_shed=max_shed,
-        ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long)...)
-    SCOPF.add_branch_constraints!(case_ptdf.model, case_ptdf.pf.ϕ, case_ptdf.model[:p0], case_ptdf.brc_up, case_ptdf.brc_down, case_ptdf.oplim.branch_rating)
-    @time SCOPF.solve_model!(case_ptdf.model);
-    println("Objective value PTDF: ", JuMP.objective_value(case_ptdf.model))
-    SCOPF.print_contingency_results(case_ptdf)
-
-    println("Start Contingency select")
-    @time case_cont, tot_t = SCOPF.run_contingency_select(SCOPF.PC2_SCOPF, system, Gurobi.Optimizer(GUROBI_ENV), voll, prob, contingencies, 
-        max_shed=max_shed, ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=0.00);
-    println("Solver time: ", tot_t, " Objective value Contingency select: ", JuMP.objective_value(case_cont.model))
-    SCOPF.print_contingency_results(case_cont)
-
-    println("Start SCOPF decomposition")
-    @time case, tot_t = SCOPF.run_decomposed_optimization(SCOPF.PC2_SCOPF, system, Gurobi.Optimizer(GUROBI_ENV), voll, prob, contingencies, max_shed=max_shed,
-        ramp_mult=ramp_mult, ramp_minutes=ramp_minutes, short_term_multi=short, long_term_multi=long, p_failure=0.00);
-    println("Solver time: ", tot_t, " Objective value SCOPF decomposition: ", JuMP.objective_value(case.model))
-    SCOPF.print_contingency_results(case)
-
-    @test JuMP.objective_value(case_ptdf.model) ≈ JuMP.objective_value(case_cont.model)
-    @test JuMP.objective_value(case_ptdf.model) ≈ JuMP.objective_value(case.model)
-
-    SCOPF.print_power_flow(case.opf, case.model)
-    bx = SCOPF.typesort_component.(SCOPF.get_interarea(case.opf.branches), [case.opf])
-    SCOPF.print_contingency_power_flow(case; subset=first.(bx))
-end
-
 end

@@ -222,7 +222,7 @@ calc_D(branches::AbstractVector{<:Branch}) = calc_D(PowerSystems.get_series_susc
 """ Make the product of the diagonal suseptance matrix and the connectivity matrix """
 calc_DA(A::AbstractMatrix{<:Real}, susceptance::AbstractVector{<:Real}) = calc_D(susceptance) * A
 calc_DA(branches::AbstractVector{<:Branch}, numnodes::Integer, idx::Dict{<:Int,<:Integer}) = 
-    calc_DA(calc_A(branches, idx), numnodes, PowerSystems.get_series_susceptance.(branches))
+    calc_DA(calc_A(branches, numnodes, idx), PowerSystems.get_series_susceptance.(branches))
 
 """ Make the admittance matrix from the connectivity matrix and the diagonal suseptance matrix. """
 calc_B(A::AbstractMatrix{<:Real}, DA::AbstractMatrix{<:Real}) = A' * DA
@@ -372,7 +372,7 @@ end
 function calc_ptdf(branches::AbstractVector{<:Branch}, nodes::AbstractVector{<:Bus},
     idx::Dict{<:Int,<:Integer}=get_nodes_idx(nodes), slack::Integer=find_slack(nodes)[1])
     A = calc_A(branches, length(nodes), idx)
-    DA = calc_DA(A, PowerSystems.get_series_susceptance.(branches))
+    DA = calc_DA(A, branches)
     B = calc_B(A, DA)
     return calc_ptdf!(B, DA, slack)
 end
